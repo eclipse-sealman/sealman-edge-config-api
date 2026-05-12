@@ -1,0 +1,107 @@
+{
+    "id": "$deployment_name",
+    "targetCondition": "$target_condition",
+    "priority": $priority,
+    "content": {
+        "modulesContent": {
+            "$$edgeAgent": {
+                "properties.desired": {
+                    "schemaVersion": "1.1",
+                    "runtime": {
+                        "type": "docker",
+                        "settings": {
+                            "registryCredentials": {
+                                "seal-acr": {
+                                    "address": "$container_registry_address",
+                                    "username": "$container_registry_username",
+                                    "password": "$container_registry_password"
+                                }
+                            }
+                        }
+                    },
+                    "systemModules": {
+                        "edgeAgent": {
+                            "env": {
+                                "SendRuntimeQualityTelemetry": { "value": false }
+                            },
+                            "settings": {
+                                "image": "$edge_agent_image"
+                            },
+                            "type": "docker"
+                        },
+                        "edgeHub": {
+                            "env": {
+                                "MaxUpstreamBatchSize": {
+                                    "value": "100"
+                                },
+                                "RuntimeLogLevel": {
+                                    "value": "warning"
+                                },
+                                "UpstreamProtocol": {
+                                    "value": "AmqpWs"
+                                }
+                            },
+                            "restartPolicy": "always",
+                            "settings": {
+                                "image": "$edge_hub_image",
+                                "createOptions": "{\"HostConfig\":{\"PortBindings\":{}}}"
+                            },
+                            "startupOrder": 200,
+                            "status": "running",
+                            "type": "docker"
+                        }
+                    },
+                    "modules": {
+                        "seal-mqtt": {
+                            "restartPolicy": "always",
+                            "settings": {
+                                "image": "$container_registry_address/seal-app-mqtt:1.2.0",
+                                "createOptions": "{\"HostConfig\":{\"PortBindings\":{\"1883/tcp\":[{\"HostPort\":\"1883\"}]}}}"
+                            },
+                            "status": "running",
+                            "type": "docker"
+                        },
+                        "seal-net-discover": {
+                            "restartPolicy": "always",
+                            "settings": {
+                                "image": "$container_registry_address/seal-app-net-discover:1.0.1"
+                            },
+                            "status": "running",
+                            "type": "docker"
+                        },
+                        "seal-cmd-proxy": {
+                            "restartPolicy": "always",
+                            "settings": {
+                                "image": "$container_registry_address/seal-app-cmd-proxy:1.3.2",
+                                "createOptions": "{\"HostConfig\":{\"Binds\":[\"/run/mgmtd:/run/mgmtd\"]},\"Tty\":true,\"OpenStdin\":true}"
+                            },
+                            "status": "running",
+                            "type": "docker"
+                        },
+                        "seal-opcua-client": {
+                            "restartPolicy": "always",
+                            "settings": {
+                                "image": "$container_registry_address/seal-app-opcua-client:1.3.3"
+                            },
+                            "status": "running",
+                            "type": "docker"
+                        }
+                    }
+                }
+            },
+            "$$edgeHub": {
+                "properties.desired": {
+                    "schemaVersion": "1.1",
+                    "storeAndForwardConfiguration": { "timeToLiveSecs": 7200 },
+                    "routes": {
+                        "upstream": {
+                            "route": "FROM /messages/* INTO $$upstream"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "metrics": { "queries": {} },
+    "labels": {}
+}

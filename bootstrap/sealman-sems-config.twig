@@ -1,0 +1,564 @@
+​{
+    "azure": {
+        "config": {
+            "hostname": "eg-{{serialNumber}}",
+            "provisioning": {
+                "source":"manual",
+                "connection_string":"{{device_connection_string}}"
+            },
+            "agent": {
+                "name": "edgeAgent",
+                "type": "docker",
+                "config": {
+                    "image": "{{edge_agent_image}}",
+                    "auth": {
+                        "serveraddress": "{{container_registry_address}}",
+                        "username": "{{container_registry_username}}",
+                        "password": "{{container_registry_password}}"
+                    }
+                }
+            }
+        },
+        "validated": "1"
+    },
+    "config_format_version": "1.0",
+    "serial": {
+        "serial0": {
+            "console_output": {
+                "at_startup": false,
+                "currently": false
+            }
+        }
+    },
+    "logrotate": {
+        "rotate": 14,
+        "period": "daily",
+        "maxsize": 50
+    },
+    "user_password_hashes": {
+        {% if adminCryptSha512 is defined %}
+        "admin": "{{adminCryptSha512}}"
+        {% else %}
+        "admin": "$6$vqNLBUNp3syly3p2$xxR7Njt/1kKAym.6/dQN5OxB/D9QpHYNJlsP14k8eqN6eaIVPTAjL7faP7Y/TNlPxxnRZOdS75d93DQJBsPYe/"
+        {% endif %}
+    },
+    "sshconfig": {
+        "password_auth": "on",
+        "key_auth": "on",
+        "publickeys": {
+            "admin": []
+         },
+        "unreadable_users": {}
+    },
+    "proxy_servers": {},
+    "motd": "",
+    "date_time": {
+        "ntp_server": "",
+        "fallback_servers": "0.de.pool.ntp.org 1.de.pool.ntp.org 2.de.pool.ntp.org 3.de.pool.ntp.org",
+        "interval_minimum": 32,
+        "interval_maximum": 2048,
+        "ntp_enabled": true,
+        "timezone": "Universal"
+    },
+    "webgui": {
+        "is_enabled": true
+    },
+    "network": {
+        {% if cellular is defined %}
+        "cellular1": {
+            "apn": {% if cellular_apn is defined %}"{{ cellular_apn }}"{% else %}"m2m.tele2.com"{% endif %},
+            "pin": {% if cellular_pin is defined %}"{{ cellular_pin }}"{% else %}""{% endif %},
+            "access_number": {% if cellular_access_number is defined %}"{{ cellular_access_number }}"{% else %}"*99***1#"{% endif %},
+            "auth_method": {% if cellular_auth_method is defined %}"{{ cellular_auth_method }}"{% else %}"" {% endif %},
+            "username": {% if cellular_user is defined %}"{{ cellular_user }}"{% else %}""{% endif %},
+            "password": {% if cellular_pw is defined %}"{{ cellular_pw }}"{% else %}""{% endif %},
+            "state": {% if cellular_state is defined %}"{{ cellular_state }}"{% else %}"on"{% endif %}
+        },
+        {% else %}{% endif %}
+        "lan1": {
+            "dhcp": false,
+            "ip": [
+                "192.168.2.1"
+            ],
+            "subnet": [
+                "24"
+            ],
+            "gateway": null,
+            "dns": null,
+            "current_ip": "192.168.2.1",
+            "current_subnet": "24",
+            "current_gateway": null,
+            "current_dns": null
+        },
+        "lan3": {
+            "dhcp": {% if ip_lan_3 is defined %}false{% else %}true{% endif %},
+            "ip": [
+                "{% if ip_lan_3 is defined %}{{ ip_lan_3 }}{% else %}{% endif %}"
+            ],
+            "subnet": [
+                "{% if subnet_lan_3 is defined %}{{ subnet_lan_3 }}{% else %}{% endif %}"
+            ],
+            "gateway": {% if gw_lan_3 is defined %}"{{ gw_lan_3 }}"{% else %}null{% endif %},
+            "dns": {% if dns_lan_3 is defined %}"{{ dns_lan_3 }}"{% else %}null{% endif %}
+            },
+        "lan2": {
+            "dhcp": {% if ip_lan_2 is defined %}false{% else %}true{% endif %},
+            "ip": [
+                "{% if ip_lan_2 is defined %}{{ ip_lan_2 }}{% else %}{% endif %}"
+            ],
+            "subnet": [
+                "{% if subnet_lan_2 is defined %}{{ subnet_lan_2 }}{% else %}{% endif %}"
+            ],
+            "gateway": {% if gw_lan_2 is defined %}"{{ gw_lan_2 }}"{% else %}null{% endif %},
+            "dns": {% if dns_lan_2 is defined %}"{{ dns_lan_2 }}"{% else %}null{% endif %}
+            }
+    },
+    "vlans": {
+        "lan2": {
+            {% if nat_enabled is defined %}
+            {% if nat_machine_1_lan2 is defined and nat_machine_1 is defined %}
+            "lan2_1": {
+                "ip": "{{ nat_machine_1_lan2 }}",
+                "subnet": 32,
+                "gateway": ""
+            }
+            {% else %}{% endif %}
+            {% if nat_machine_2_lan2 is defined and nat_machine_2 is defined  %}
+            ,
+            "lan2_2": {
+                "ip": "{{ nat_machine_2_lan2 }}",
+                "subnet": 32,
+                "gateway": ""
+            }
+            {% else %}{% endif %}
+            {% if nat_machine_3_lan2 is defined and nat_machine_3 is defined %}
+            ,
+            "lan2_3": {
+                "ip": "{{ nat_machine_3_lan2 }}",
+                "subnet": 32,
+                "gateway": ""
+            }
+            {% else %}{% endif %}
+{% if nat_machine_4_lan2 is defined and nat_machine_4 is defined %}
+            ,
+            "lan2_4": {
+                "ip": "{{ nat_machine_4_lan2 }}",
+                "subnet": 32,
+                "gateway": ""
+            }
+            {% else %}{% endif %}
+{% if nat_machine_5_lan2 is defined and nat_machine_5 is defined %}
+            ,
+            "lan2_5": {
+                "ip": "{{ nat_machine_5_lan2 }}",
+                "subnet": 32,
+                "gateway": ""
+            }
+            {% else %}{% endif %}
+{% if nat_machine_6_lan2 is defined and nat_machine_6 is defined %}
+            ,
+            "lan2_6": {
+                "ip": "{{ nat_machine_6_lan2 }}",
+                "subnet": 32,
+                "gateway": ""
+            }
+            {% else %}{% endif %}
+{% if nat_machine_7_lan2 is defined and nat_machine_7 is defined %}
+            ,
+            "lan2_7": {
+                "ip": "{{ nat_machine_7_lan2 }}",
+                "subnet": 32,
+                "gateway": ""
+            }
+            {% else %}{% endif %}
+{% if nat_machine_8_lan2 is defined and nat_machine_8 is defined %}
+            ,
+            "lan2_8": {
+                "ip": "{{ nat_machine_8_lan2 }}",
+                "subnet": 32,
+                "gateway": ""
+            }
+            {% else %}{% endif %}
+{% if nat_machine_9_lan2 is defined and nat_machine_9 is defined %}
+            ,
+            "lan2_9": {
+                "ip": "{{ nat_machine_9_lan2 }}",
+                "subnet": 32,
+                "gateway": ""
+            }
+            {% else %}{% endif %}
+{% if nat_machine_10_lan2 is defined and nat_machine_10 is defined %}
+            ,
+            "lan2_10": {
+                "ip": "{{ nat_machine_10_lan2 }}",
+                "subnet": 32,
+                "gateway": ""
+            }
+            {% else %}{% endif %}
+            {% else %}{% endif %}
+        },
+        "lan3": {},
+        "lan1": {}
+    },
+    "static_routing": {
+        "enabled": false,
+        "selected": "disabled",
+        "saved": {
+            "disabled": {}
+        },
+        "edited": {}
+    },
+    "firewall": {
+        "enabled": true,
+        "selected": "gea_fht_fw_preset",
+        "edited": {},
+        "saved": {
+            "gea_fht_fw_preset": {
+                "notes": "default FHT preset",
+                "ip": {
+                    "nat": {
+                        "prerouting": {
+                            {#- -----Setting 1:1 NAT and Port Forwarding----- -#}
+
+                            "mgmtd": {
+                              
+                                {% if pfwd_name_1 is defined %}
+                                "110_{{pfwd_name_1}}": {
+                                    "contents": "{{pfwd_value_1}}"
+                                }
+                                {% endif %}
+                                {% if pfwd_name_2 is defined %}
+                                ,
+                                "111_{{pfwd_name_2}}": {
+                                    "contents": "{{pfwd_value_2}}"
+                                }
+                                {% endif %}
+
+                                {% if pfwd_name_3 is defined %}
+                                ,
+                                "112_{{pfwd_name_3}}": {
+                                    "contents": "{{pfwd_value_3}}"
+                                }
+                                {% endif %}
+
+                                {% if pfwd_name_4 is defined %}
+                                ,
+                                "113_{{pfwd_name_4}}": {
+                                    "contents": "{{pfwd_value_4}}"
+                                }
+                                {% endif %}
+
+                                {% if pfwd_name_5 is defined %}
+                                ,
+                                "114_{{pfwd_name_5}}": {
+                                    "contents": "{{pfwd_value_5}}"
+                                }
+                                {% endif %}
+
+                                {% if pfwd_name_6 is defined %}
+                                ,
+                                "115_{{pfwd_name_6}}": {
+                                    "contents": "{{pfwd_value_6}}"
+                                }
+                                {% endif %}
+
+                                {% if pfwd_name_7 is defined %}
+                                ,
+                                "116_{{pfwd_name_7}}": {
+                                    "contents": "{{pfwd_value_7}}"
+                                }
+                                {% endif %}
+
+                                {% if pfwd_name_8 is defined %}
+                                ,
+                                "117_{{pfwd_name_8}}": {
+                                    "contents": "{{pfwd_value_8}}"
+                                }
+                                {% endif %}
+
+                                {% if pfwd_name_9 is defined %}
+                                ,
+                                "118_{{pfwd_name_9}}": {
+                                    "contents": "{{pfwd_value_9}}"
+                                }
+                                {% endif %}
+
+                                {% if pfwd_name_10 is defined %}
+                                ,
+                                "119_{{pfwd_name_10}}": {
+                                    "contents": "{{pfwd_value_10}}"
+                                }
+                                {% endif %}
+
+                                {% if pfwd_name_1 is defined and nat_machine_1 is defined and nat_enabled is defined %}
+                                ,
+                                {% endif %}
+
+{% if nat_enabled is defined %}
+
+                                {% if nat_machine_1 is defined %}
+                                "1100_{{nat_machine_1}}": {
+                                    "contents": "ip daddr {{nat_machine_1_lan2}} dnat to {{nat_machine_1_lan3}}"
+                                }
+                                {% endif %}
+                                {% if nat_machine_2 is defined %}
+                                ,
+                                "1200_{{nat_machine_2}}": {
+                                    "contents": "ip daddr {{nat_machine_2_lan2}} dnat to {{nat_machine_2_lan3}}"
+                                }
+                                {% endif %}
+{% if nat_machine_3 is defined %}
+,
+"1300_{{nat_machine_3}}": {
+                                    "contents": "ip daddr {{nat_machine_3_lan2}} dnat to {{nat_machine_3_lan3}}"
+                                }
+{% endif %}
+{% if nat_machine_4 is defined %}
+,
+"1400_{{nat_machine_4}}": {
+                                    "contents": "ip daddr {{nat_machine_4_lan2}} dnat to {{nat_machine_4_lan3}}"
+                                }
+{% endif %}
+{% if nat_machine_5 is defined %}
+,
+"1500_{{nat_machine_5}}": {
+                                    "contents": "ip daddr {{nat_machine_5_lan2}} dnat to {{nat_machine_5_lan3}}"
+                                }
+{% endif %}
+{% if nat_machine_6 is defined %}
+,
+"1600_{{nat_machine_6}}": {
+                                    "contents": "ip daddr {{nat_machine_6_lan2}} dnat to {{nat_machine_6_lan3}}"
+                                }
+{% endif %}
+{% if nat_machine_7 is defined %}
+,
+"1700_{{nat_machine_7}}": {
+                                    "contents": "ip daddr {{nat_machine_7_lan2}} dnat to {{nat_machine_7_lan3}}"
+                                }
+{% endif %}
+{% if nat_machine_8 is defined %}
+,
+"1800_{{nat_machine_8}}": {
+                                    "contents": "ip daddr {{nat_machine_8_lan2}} dnat to {{nat_machine_8_lan3}}"
+                                }
+{% endif %}
+{% if nat_machine_9 is defined %}
+,
+"1900_{{nat_machine_9}}": {
+                                    "contents": "ip daddr {{nat_machine_9_lan2}} dnat to {{nat_machine_9_lan3}}"
+                                }
+{% endif %}
+{% if nat_machine_10 is defined %}
+,
+"2000_{{nat_machine_10}}": {
+                                    "contents": "ip daddr {{nat_machine_10_lan2}} dnat to {{nat_machine_10_lan3}}"
+                                }
+{% endif %}
+{% endif %}
+                            },
+
+                           
+                            "policy": "accept"
+                        },
+                        "postrouting": {
+                            "mgmtd": {
+                                "1000_masquerade_cellular1": {
+                                    "contents": "oifname cellular1 masquerade",
+                                    "notes": "We treat lan2 (which by default receives address from DHCP) and cellular1 as WAN\ninterfaces, hence be default we masqurade other networks (lan1 and internal\ndocker networks) behind our address visible on lan2 and cellular1.\n\nNote that if you have both lan2 and cellular interfaces active you may want to\nremove one of the masquerade rules, or add a rule preventing routing between\nlan2 and cellular1 which you can do with commands:\nfw modify forward add block_wan_to_wan_1 -i lan2 -o cellular1 -v drop\nfw modify forward add block_wan_to_wan_2 -i cellular1 -o lan2 -v drop\n(assuming you have exactly one preset in being edited state)"
+                                },
+                                "1100_masquerade_lan2": {
+                                    "contents": "oifname lan2 masquerade"
+                                },
+                                "1200_masquerade_lan3": {
+                                    "contents": "oifname lan3 masquerade"
+                                }
+                                {#- -----Setting 1:1 NAT----- -#}
+                                {% if nat_enabled is defined %}
+
+                                {% if nat_machine_1 is defined %}
+                                ,
+                                "2100_{{nat_machine_1}}": {
+                                    "contents": "ip saddr {{nat_machine_1_lan3}} snat to {{nat_machine_1_lan2}}"
+                                }
+                                {% endif %}
+
+                                {% if nat_machine_2 is defined %}
+                                ,
+                                "2200_{{nat_machine_2}}": {
+                                    "contents": "ip saddr {{nat_machine_2_lan3}} snat to {{nat_machine_2_lan2}}"
+                                }
+                                {% endif %}
+
+                                {% if nat_machine_3 is defined %}
+,
+"2300_{{nat_machine_3}}": {
+                                    "contents": "ip saddr {{nat_machine_3_lan3}} snat to {{nat_machine_3_lan2}}"
+                                }
+{% endif %}
+
+                                {% if nat_machine_4 is defined %}
+,
+"2400_{{nat_machine_4}}": {
+                                    "contents": "ip saddr {{nat_machine_4_lan3}} snat to {{nat_machine_4_lan2}}"
+                                }
+{% endif %}
+
+                                {% if nat_machine_5 is defined %}
+,
+"2500_{{nat_machine_5}}": {
+                                    "contents": "ip saddr {{nat_machine_5_lan3}} snat to {{nat_machine_5_lan2}}"
+                                }
+{% endif %}
+
+                                {% if nat_machine_6 is defined %}
+,
+"2600_{{nat_machine_6}}": {
+                                    "contents": "ip saddr {{nat_machine_6_lan3}} snat to {{nat_machine_6_lan2}}"
+                                }
+{% endif %}
+
+                                {% if nat_machine_7 is defined %}
+,
+"2700_{{nat_machine_7}}": {
+                                    "contents": "ip saddr {{nat_machine_7_lan3}} snat to {{nat_machine_7_lan2}}"
+                                }
+{% endif %}
+
+                                {% if nat_machine_8 is defined %}
+,
+"2800_{{nat_machine_8}}": {
+                                    "contents": "ip saddr {{nat_machine_8_lan3}} snat to {{nat_machine_8_lan2}}"
+                                }
+{% endif %}
+
+                                {% if nat_machine_9 is defined %}
+,
+"2900_{{nat_machine_9}}": {
+                                    "contents": "ip saddr {{nat_machine_9_lan3}} snat to {{nat_machine_9_lan2}}"
+                                }
+{% endif %}
+
+                                {% if nat_machine_10 is defined %}
+,
+"3000_{{nat_machine_10}}": {
+                                    "contents": "ip saddr {{nat_machine_10_lan3}} snat to {{nat_machine_10_lan2}}"
+                                }
+{% endif %}
+
+                                {% endif %}
+
+
+                            },
+                            "policy": "accept"
+                        }
+                    }
+                },
+                "inet": {
+                    "filter": {
+                        "common": {
+                            "mgmtd": {
+                                "1200_allow_icmp": {
+                                    "contents": "meta l4proto {icmp, icmpv6} accept",
+                                    "notes": "Allow ICMP everywhere"
+                                }
+                            }
+                        },
+                        "input": {
+                            "mgmtd": {
+                                "1000_allow_local": {
+                                    "contents": "iiftype loopback accept",
+                                    "notes": "Do not remove this rule unless you want to break device.\n\nThis rule allows any internal traffic (e.g. 127.0.0.1 for IPv4 and ::1 for\nIPv6). Because input policy is 'drop' in this preset, without this rule internal\nservices of EG will stop working."
+                                },
+                                "1100_allow_ssh": {
+                                    "contents": "tcp dport ssh accept"
+                                },
+                                "1200_allow_https": {
+                                    "contents": "tcp dport https accept"
+                                },
+                                "1300_allow_swupdate": {
+                                    "contents": "tcp dport 8080 accept"
+                                },
+                                "1400_allow_webui": {
+                                    "contents": "tcp dport 48366 accept"
+                                },
+                                "1500_allow_conn_check": {
+                                    "contents": "tcp dport 9090 accept"
+                                },
+                                "1600_allow_all_tun0": {
+                                    "contents": "iifname tun0 accept"
+                                },
+                                "9000_allow_responses": {
+                                    "contents": "ct state {related, established} accept",
+                                    "notes": "Allow incoming traffic created in response to connections originated by EG itself."
+                                }
+                            },
+                            "policy": "drop"
+                        },
+                        "output": {
+                            "mgmtd": {
+                                "9000_allow_responses": {
+                                    "notes": "Allow outgoing traffic created in response to connections accepted by input\nchain. This rule is not needed as long as policy of this chain is accept --- it\nis present here for convenience because continuation of already established\nconnection is almost always something we want, and it is easy to forget adding\nsuch rule after changing policy of the chain to `drop`. The name starts with\n9000_ as it is meant to be executed late in the chain (so earlier explicit drops\nwill prevent triggering this rule)",
+                                    "contents": "ct state {related, established} accept"
+                                }
+                            },
+                            "policy": "accept"
+                        },
+                        "forward": {
+                            "mgmtd": {
+                                "1000_allow_responses": {
+                                    "notes": "Allow forwarding traffic created in response to connections accepted by other\nrules. This rule is not needed as long as policy of this chain is accept --- it\nis present here for convenience because continuation of already established\nconnection is almost always something we want, and it is easy to forget adding\nsuch rule after changing policy of the chain to `drop`. The name starts with\n9000_ as it is meant to be executed late in the chain (so earlier explicit drops\nwill prevent triggering this rule)",
+                                    "contents": "ct state {related, established} accept"
+                                }
+                                 {% if custom_fw_allow_http is defined %}
+                                ,
+                                "1100_allow_http": {"contents": "tcp dport 443 accept"}
+                                {% endif %}
+ {% if custom_fw_allow_ftp is defined %}
+                                ,
+                                "1200_allow_ftp": {"contents": "tcp dport 21 accept"}
+                                {% endif %}
+ {% if custom_fw_allow_sftp is defined %}
+                                ,
+                                "1300_allow_sftp": {"contents": "tcp dport 22 accept"}
+                                {% endif %}
+ {% if custom_fw_allow_opc is defined %}
+                                ,
+                                "1400_fw_allow_opcua_4840": {"contents": "tcp dport 4840 accept"}
+                                {% endif %}
+                                ,
+                                "1500_drop_lan3_to_lan2": {
+                                    "contents": "iifname lan3 oifname lan2  drop"
+                                }
+                            },
+                            "policy": "accept"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "ovpn": {},
+    "docker": {
+        "dockerdns": [],
+        "params": {},        
+        "compose_files": {
+            "seal-app-connection-check": "version: \"3.8\"\n\nservices:\n  backend:\n    image: {{container_registry_address}}/seal-app-connection-check-backend:1.0.1\n    container_name: seal-app-conn-check-api\n    restart: unless-stopped\n    ports:\n      - \"9091:9091\"\n    networks:\n      - \"local-network\"\n    environment:\n      - FLASK_APP=main.py\n      - FLASK_RUN_HOST=0.0.0.0\n      - FLASK_RUN_PORT=9091\n    volumes:\n      - /run/mgmtd:/run/mgmtd\n    tty: true\n    stdin_open: true\n\n  frontend:\n    image: {{container_registry_address}}/seal-app-connection-check-frontend:1.0.1\n    container_name: seal-app-conn-check-ui\n    ports:\n      - \"9090:9090\"\n    networks:\n      - \"local-network\"\n    restart: unless-stopped\n\nnetworks:\n  local-network:\n    driver: \"bridge\""
+			},
+        "compose_docker_config": {
+            "auths": {
+                "{{container_registry_address}}": {
+                    "auth": "{{container_registry_credentials_encoded}}"
+                }
+            }
+        }
+    },
+    "smartems": {
+        "username": "{{sems_device_user | default('edgeGateway')}}",
+        "password": "{{sems_device_password | default('123456')}}",
+        "url": "{{sems_device_url}}",
+        "pollingInterval": {{ sems_polling_interval | default('600') }},
+        "edgegatewayvcc": {{ sems_edgegatewayvcc | default('false') }},
+        "certificate": "{{ sems_certificate | default('') }}"
+    }
+}
