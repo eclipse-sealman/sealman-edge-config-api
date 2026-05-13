@@ -6,13 +6,14 @@ from typing import List
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import PasswordRenewalTask, PasswordRenewalTaskStatus
+from db.models.password_renewal import PasswordRenewalTask, PasswordRenewalTaskStatus
+from db.registry import register_repository
 from db.repos.password_renewal_task import PasswordRenewalTaskRepository
 
 
 logger = logging.getLogger("EdgeConfigAPI")
 
-
+@register_repository(PasswordRenewalTaskRepository)
 class SqlAlchemyPasswordRenewalTaskRepository(PasswordRenewalTaskRepository):
 
     def __init__(self, session: AsyncSession):

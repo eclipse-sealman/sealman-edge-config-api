@@ -186,3 +186,25 @@ def get_iothub_auth_headers() -> dict:
     except Exception as exc:
         logger.error("No valid authentication method for IoT Hub. WorkloadIdentityCredential error: %s", exc)
         raise IoTBackendAPIError("No valid authentication method for IoT Hub.", status_code=500)
+    
+def normalize_database_url(url: str) -> str:
+    url = url.strip()
+
+    # --- PostgreSQL ---
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+psycopg://")
+
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+psycopg://")
+
+    if url.startswith("postgresql+psycopg://"):
+        return url
+
+    # --- SQLite ---
+    if url.startswith("sqlite:///"):
+        return url.replace("sqlite:///", "sqlite+aiosqlite:///")
+
+    if url.startswith("sqlite+aiosqlite://"):
+        return url
+
+    raise ValueError(f"Unsupported DATABASE_URL: {url}")

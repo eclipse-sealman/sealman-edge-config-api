@@ -1,7 +1,8 @@
 from datetime import datetime, timezone, timedelta
 import logging
 from constants import DEVICE_AUTHENTICATION_SECRET_KEY
-from db.postgres import AsyncSessionLocal, create_password_renewal_task_repository
+from db.repos.password_renewal_task import PasswordRenewalTaskRepository
+from db.session import AsyncSessionLocal, get_repository
 from exceptions import UnmatchedDependency
 from smart_ems import SmartEMS
 
@@ -12,8 +13,9 @@ logger = logging.getLogger("EdgeConfigAPI")
 async def process_password_renewal_tasks():
     current_time = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as session:
-        renew_task_repo = create_password_renewal_task_repository(session)
-        tasks = await renew_task_repo.get_pending_tasks(current_time)
+        renew_task_repo_factory = get_repository(PasswordRenewalTaskRepository)
+        repository = renew_task_repo_factory(session)
+        tasks = await repository.get_pending_tasks(current_time)
 
         if len(tasks) > 0:
             logger.info(
@@ -31,12 +33,12 @@ async def process_password_renewal_tasks():
                         status_code=400,
                     )
                 await SmartEMS.force_renew_device_secret(secret.get("id"))
-                await renew_task_repo.complete_task(task)
+                await repository.complete_task(task)
             except Exception as e:
                 logger.error(
                     f"Error processing task {task.task_id} for device {task.device_id}: {e}"
                 )
-                await renew_task_repo.update_task_error(task, str(e))
+                await repository.update_task_error(task, str(e))
 
     # Purge old completed tasks after processing
     await purge_completed_tasks()
@@ -49,8 +51,9 @@ async def purge_completed_tasks():
 
     try:
         async with AsyncSessionLocal() as session:
-            renew_task_repo = create_password_renewal_task_repository(session)
-            deleted_count = await renew_task_repo.purge_completed_tasks(one_year_ago)
+            renew_task_repo_factory = get_repository(PasswordRenewalTaskRepository)
+            repository = renew_task_repo_factory(session)
+            deleted_count = await repository.purge_completed_tasks(one_year_ago)
             if deleted_count > 0:
                 logger.info(f"Successfully deleted {deleted_count} old password renewal tasks")
             return deleted_count

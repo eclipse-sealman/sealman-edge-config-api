@@ -3,8 +3,8 @@ from authorization.permission_check import PathParamPermissionCheck
 from authorization.permission_types import Device
 from fastapi import Depends
 
-from db.postgres import get_password_renewal_task_repository
 from db.repos.password_renewal_task import PasswordRenewalTaskRepository
+from db.session import get_repository
 from routers.base_api_router import BaseAPIRouter
 
 from .routes.get_smart_ems_device_info import get_smart_ems_device_info as _get_smart_ems_device_info
@@ -95,7 +95,7 @@ async def get_smart_ems_secret_info(device: str,
 
 @smart_ems.post("/{device}/smartems/secret/renew", tags=["Smart-EMS"])
 async def post_smart_ems_secret_renew(device: str, 
-                                renew_task_repo: PasswordRenewalTaskRepository = Depends(get_password_renewal_task_repository),
+                                renew_task_repo: PasswordRenewalTaskRepository = Depends(get_repository(PasswordRenewalTaskRepository)),
                                 _ = Depends(PathParamPermissionCheck(Device.EDIT_PASSWORD, Resource.DEVICE, "device"))):
     
     return await _post_smart_ems_device_secret_renew(device, renew_task_repo)
@@ -103,7 +103,7 @@ async def post_smart_ems_secret_renew(device: str,
 
 @smart_ems.post("/{device}/smartems/secret/request", response_model=DeviceSecretValue, tags=["Smart-EMS"])
 async def post_smart_ems_secret_request(device: str, 
-                                renew_task_repo: PasswordRenewalTaskRepository = Depends(get_password_renewal_task_repository),
+                                renew_task_repo: PasswordRenewalTaskRepository = Depends(get_repository(PasswordRenewalTaskRepository)),
                                 _ = Depends(PathParamPermissionCheck(Device.READ_PASSWORD, Resource.DEVICE, "device"))):
     
     return await _post_smart_ems_device_secret_request(device, renew_task_repo)

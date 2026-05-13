@@ -14,3 +14,4 @@ env-var-local.json
 .DS_Store
 /doc/testserver
 run_docker.bat
+uv.lock

@@ -1,16 +1,17 @@
 import logging
 from typing import Any, Dict
 from fastapi import Depends
-from authorization.permission_check import PathParamPermissionCheck, PermissionCheck
+from authorization.permission_check import EntityLookup, PathParamPermissionCheck, PermissionCheck
 from authorization import resource_types as Resource
 from authorization.permission_types import Device, Platform
 from constants import AUTHORIZATION_API_PLATFORM_NAME
 from db.repos.device import DeviceRepository
-from db.postgres import get_device_repository
+from db.session import get_repository
 from routers.base_api_router import BaseAPIRouter
 from routers.general.schemas import (
     DeploymentTag,
     DeviceMetadataResponse,
+    DeviceStatusWithConnectionList,
     ResponseDeploymentList,
     DeviceModuleList,
     DeviceConnectionStatus,
@@ -38,7 +39,7 @@ logger = logging.getLogger("EdgeConfigAPI")
 
 @general.patch("/{device}/metadata", response_model=DeviceMetadataResponse, tags=["General"])
 async def patch_device_metadata(device: str, metadata: Dict[str, Any],
-                                repo: DeviceRepository = Depends(get_device_repository),
+                                repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
                                 _ = Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
     device = await _patch_device_metadata(device, metadata=metadata, repo=repo)
     return device
@@ -63,7 +64,7 @@ async def post_module_method(device: str, module: str, method_data: DeviceModule
 # ============================================================
 
 @general.get("/{device}/metadata", response_model=DeviceMetadataResponse, tags=["General"])
-async def get_device_metadata(device: str, repo: DeviceRepository = Depends(get_device_repository),
+async def get_device_metadata(device: str, repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
                               _=Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
     device = await _get_device_metadata(device, repo=repo)
     return device
@@ -76,9 +77,6 @@ async def get_deployment_tag(device: str,
 @general.get("/deployments", response_model=ResponseDeploymentList, tags=["General"])
 async def get_deployment_list(_ = Depends(PermissionCheck(Platform.READ_DEPLOYMENT_LIST, Resource.PLATFORM, AUTHORIZATION_API_PLATFORM_NAME))):
     return await _get_deployment_list()
-
-
-
 
 @general.get("/{device}/modules", response_model=DeviceModuleList, tags=["General"])
 async def get_device_modules(device,

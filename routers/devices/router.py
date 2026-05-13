@@ -1,9 +1,9 @@
 from fastapi import Depends, Request
+from db.session import get_repository
 from routers.base_api_router import BaseAPIRouter
 from authorization import resource_types as Resource
 from authorization.permission_check import EntityLookup
 from authorization.permission_types import Device
-from db.postgres import get_device_repository
 from db.repos.device import DeviceRepository
 from routers.general.schemas import DeviceStatusWithConnectionList
 from .routes.create_device import create_device as _create_device
@@ -44,7 +44,7 @@ devices = BaseAPIRouter(prefix="/devices", tags=["Devices"])
 )
 async def get_devices(request: Request,
                       readable_devices = Depends(EntityLookup(Device.READ, Resource.DEVICE)),
-                      repo: DeviceRepository = Depends(get_device_repository)):
+                      repo: DeviceRepository = Depends(get_repository(DeviceRepository))):
     readable_device_map = {device: True for device in readable_devices}
     return await _get_devices(
         repo=repo,
@@ -56,7 +56,7 @@ async def get_devices(request: Request,
 async def create_device(
     device_id: str,
     body: dict,
-    repo=Depends(get_device_repository)
+    repo=Depends(get_repository(DeviceRepository))
 ):
     return await _create_device(
         device_id=device_id,
@@ -68,7 +68,7 @@ async def create_device(
 @devices.delete("/{device_id}", status_code=204)
 async def delete_device(
     device_id: str,
-    repo=Depends(get_device_repository)
+    repo=Depends(get_repository(DeviceRepository))
 ):
     return await _delete_device(
         device_id=device_id,

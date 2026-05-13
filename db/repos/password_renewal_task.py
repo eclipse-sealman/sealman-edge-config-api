@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List
 
-from db.models import PasswordRenewalTask
+from db.models.password_renewal import PasswordRenewalTask
 
 
 class PasswordRenewalTaskRepository(ABC):

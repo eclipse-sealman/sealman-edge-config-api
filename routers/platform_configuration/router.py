@@ -1,7 +1,7 @@
 from fastapi import Depends
 from routers.base_api_router import BaseAPIRouter
 from db.repos.device import DeviceRepository
-from db.postgres import get_device_repository
+from db.session import get_repository
 
 from .schemas import (
     TemplateListResponse,
@@ -131,7 +131,7 @@ async def update_services(
 
 @platform_config.get("/metadata/keys", response_model=MetadataKeysResponse)
 async def get_metadata_keys(
-    repo: DeviceRepository = Depends(get_device_repository),
+    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
 ):
     meta = await repo.get_platform_meta_keys()
     return MetadataKeysResponse(keys=list(meta.keys()))
@@ -140,7 +140,7 @@ async def get_metadata_keys(
 @platform_config.post("/metadata/keys", response_model=MetadataKeysResponse, status_code=201)
 async def add_metadata_key(
     request: AddMetadataKeyRequest,
-    repo: DeviceRepository = Depends(get_device_repository),
+    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
 ):
     meta = await repo.add_platform_meta_key(request.key)
     return MetadataKeysResponse(keys=list(meta.keys()))
@@ -149,7 +149,7 @@ async def add_metadata_key(
 @platform_config.delete("/metadata/keys/{key}", response_model=MetadataKeysResponse)
 async def delete_metadata_key(
     key: str,
-    repo: DeviceRepository = Depends(get_device_repository),
+    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
 ):
     meta = await repo.delete_platform_meta_key(key)
     return MetadataKeysResponse(keys=list(meta.keys()))

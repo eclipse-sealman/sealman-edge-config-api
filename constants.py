@@ -75,14 +75,12 @@ BLOB_SAS_TOKEN_TEMPLATES = os.getenv("BLOB_SAS_TOKEN_TEMPLATES")
 
 AUTHORIZATION_API_PLATFORM_NAME = "edge_config_app"
 
-# DATABASE
-POSTGRES_URL=os.getenv("POSTGRES_URL")
-
-SQLITE_URL=os.getenv("SQLITE_URL")
-
 # Regex Patterns
 DEVICE_SERIAL_NUMBER_PATTERN = r"(?i)^(?:eg-)?(?:fht-)?(?:e)?(\d+)$"
 FIRMWARE_VERSION_PATTERN = r"^(\d+)\.(\d+)\.?(\d+)?"
+
+# DATABASE
+POSTGRES_URL = os.getenv("POSTGRES_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/postgres")
 
 # SEMS Bootstrap — idempotent first-time provisioning run at API startup
 # Set BOOTSTRAP_ENABLED=true to opt in; disabled by default.

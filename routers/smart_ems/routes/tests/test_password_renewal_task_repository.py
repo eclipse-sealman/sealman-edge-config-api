@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from db.models import PasswordRenewalTask, PasswordRenewalTaskStatus
+from db.models.password_renewal import PasswordRenewalTask, PasswordRenewalTaskStatus
 from db.sqlalchemy.password_renewal_task import SqlAlchemyPasswordRenewalTaskRepository
 
 

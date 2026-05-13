@@ -799,6 +799,55 @@ class SmartEMS:
         if not results:
             raise SEMSError(f"Label '{label_name}' not found in SEMS", status_code=404)
         return results[0]
+    
+    @classmethod
+    async def set_variable_for_all_devices(
+        cls,
+        name: str,
+        value: str,
+    ):
+        """
+        Set a variable for ALL devices using SEMS batch endpoint.
+        This overwrites the variable for every device.
+        """
+
+        devices = await cls.get_device_list()
+        device_ids = [d["id"] for d in devices if d.get("id")]
+
+        if not device_ids:
+            cls._log.warning("No devices found for batch variable assignment")
+            return False
+
+        uri = f"{SEMS_URL}/web/api/device/batch/variable/add"
+
+        body = {
+            "sorting": [{"field": "id", "direction": "asc"}],
+            "ids": device_ids,
+            "name": name,
+            "variableValue": value,
+        }
+
+        resp = {}
+        await asyncio.gather(
+            post_async(
+                uri,
+                resp,
+                _json=body,
+                headers={"Authorization": f"Bearer {cls._token}"},
+                timeout=30,
+            )
+        )
+        
+        if resp[uri].status_code in [200, 204]:
+            cls._log.info(
+                f"Successfully set variable '{name}' for {len(device_ids)} devices"
+            )
+            return True
+        else:
+            raise SEMSError(
+                f"{SEMS_ERROR_MESSAGE}: batch variable set failed",
+                status_code=resp[uri].status_code,
+            )
 
 
 def generate_resp_from_device_info(device_info):

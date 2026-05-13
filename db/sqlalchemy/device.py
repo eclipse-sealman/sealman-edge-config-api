@@ -5,14 +5,16 @@ from sqlalchemy import select, update, func, delete, text, and_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Device, DeviceSnapshotCache, PlatformSettings
+from db.models.device import Device, DeviceSnapshotCache
+from db.models.platform import PlatformSettings
+from db.registry import register_repository
 from db.repos.device import DeviceRepository
 from exceptions import APIError
 
 
 DEVICE_SNAPSHOT_CACHE_KEY = "current"
 
-
+@register_repository(DeviceRepository)
 class SqlAlchemyDeviceRepository(DeviceRepository):
 
     def __init__(self, session: AsyncSession):

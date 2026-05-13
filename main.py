@@ -19,9 +19,10 @@ from constants import (
     BOOTSTRAP_ENABLED,
 )
 
+from db.repos.device import DeviceRepository
 from exceptions import APIError
+from db.session import AsyncSessionLocal, get_repository
 from db.migration import run_migrations
-from db.postgres import AsyncSessionLocal, create_device_repository
 from periodic_task import create_periodic_task
 from routers.devices.routes.get_devices import populate_cache_from_iot_hub_query
 from routers.smart_ems.password_renewal_task_processor import process_password_renewal_tasks
@@ -37,6 +38,7 @@ from routers.network_discovery.router import network_discovery
 from routers.auth.router import auth
 from routers.lines.router import lines
 from routers.platform_configuration.router import platform_config
+from routers.compose_deployments.router import compose_deployment, active_deployment
 from routers.devices.router import devices
 
 # logger config
@@ -52,7 +54,8 @@ background_tasks: Set[asyncio.Task] = set()
 
 async def populate_cache_from_iot_hub_query_wrapper():
     async with AsyncSessionLocal() as session:
-        repo = create_device_repository(session)
+        repo_factory = get_repository(DeviceRepository)
+        repo = repo_factory(session)
         await populate_cache_from_iot_hub_query(repo)
 
 
@@ -155,6 +158,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # attach default routers
 app.include_router(auth)
 app.include_router(general)
+app.include_router(compose_deployment)
+app.include_router(active_deployment)
 app.include_router(module_config)
 app.include_router(smart_ems)
 app.include_router(cmd_proxy)
