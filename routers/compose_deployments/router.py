@@ -20,18 +20,12 @@ from .schemas import (
 )
 from .lp_compose_builder import LPComposeBuilder
 
-
-# ─── Permission shorthand ────────────────────────────────────────────────────
-
 def _platform_read():
     return Depends(PermissionCheck(
         Platform.READ_DEPLOYMENT_LIST,
         Resource.PLATFORM,
         AUTHORIZATION_API_PLATFORM_NAME,
     ))
-
-
-# ─── /compose-deployments ────────────────────────────────────────────────────
 
 compose_deployment = BaseAPIRouter(
     prefix="/compose-deployments",
@@ -110,9 +104,6 @@ async def delete_deployment(
         )
 
     return {"message": f"{name} deleted successfully"}
-
-
-# ─── /active-deployment ──────────────────────────────────────────────────────
 
 active_deployment = BaseAPIRouter(
     prefix="/active-deployment",
