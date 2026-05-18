@@ -14,6 +14,14 @@ All content is the property of the respective authors or their employers. For
 more information regarding authorship of content, please consult the listed
 source code repository logs.
 
+Copyright © psycopg contributors
+- License: GNU Lesser General Public License v3.0 (LGPL 3.0)
+- Project homepage: https://www.psycopg.org/
+- Source code: https://github.com/psycopg/psycopg
+- This project uses psycopg as an unmodified external dependency.
+psycopg is distributed separately and is not statically linked or combined in a way that would prevent end users from replacing or modifying the library.
+
+
 ## Declared Project Licenses
 
 This program and the accompanying materials are made available under the

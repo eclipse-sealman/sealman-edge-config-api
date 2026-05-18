@@ -1,0 +1,80 @@
+trigger:
+  branches:
+    include:
+      - seal-main
+  paths:
+    include:
+      - VERSION
+
+parameters:
+  - name: publishToDockerHub
+    displayName: Publish to Docker Hub
+    type: boolean
+    default: false
+
+resources:
+  - repo: self
+
+variables:
+  PORT: "5000"
+  dockerHubRepository: eclipsesealman/sealman-api
+  dockerHubServiceConnection: sealman-docker-hub
+
+stages:
+  - stage: Build
+    displayName: Build and publish image
+    jobs:
+      - job: Build
+        displayName: Build and Push
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - script: |
+              VERSION=$(cat VERSION)
+              echo "##vso[task.setvariable variable=tag]$VERSION"
+              echo "Building version: $VERSION"
+            displayName: Read version from VERSION file
+          
+          - task: Docker@2
+            displayName: Login to Docker Hub
+            condition: eq('${{ lower(parameters.publishToDockerHub) }}', 'true')
+            inputs:
+              containerRegistry: $(dockerHubServiceConnection)
+              command: login
+
+          - script: |
+              docker buildx create --name multiplatform --use
+              docker buildx inspect --bootstrap
+            displayName: Set up Docker Buildx
+
+          - script: |
+              OCI_CREATED=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+              BUILD_CMD="docker buildx build \
+                --platform linux/amd64,linux/arm64 \
+                --build-arg PORT=$(PORT) \
+                --build-arg VERSION=$(tag) \
+                --label org.opencontainers.image.created=${OCI_CREATED} \
+                --label org.opencontainers.image.title=\"Sealman Edge Config Api\" \
+                --label org.opencontainers.image.licenses=\"Apache-2.0\" \
+                --label org.opencontainers.image.version=$(tag) \
+                --label org.opencontainers.image.revision=$(Build.SourceVersion) \
+                -f $(Build.SourcesDirectory)/Dockerfile"
+
+              if [ "${{ lower(parameters.publishToDockerHub) }}" = "true" ]; then
+                  BUILD_CMD="${BUILD_CMD} \
+                  -t docker.io/$(dockerHubRepository):$(tag) \
+                  -t docker.io/$(dockerHubRepository):latest"
+              fi
+
+              BUILD_CMD="${BUILD_CMD} --push $(Build.SourcesDirectory)"
+
+              eval "${BUILD_CMD}"
+            displayName: Build and push multi-platform image
+
+          - task: Docker@2
+            displayName: Logout from Docker Hub
+            condition: eq('${{ lower(parameters.publishToDockerHub) }}', 'true')
+            inputs:
+              containerRegistry: $(dockerHubServiceConnection)
+              command: logout
+  

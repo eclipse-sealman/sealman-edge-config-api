@@ -1,0 +1,2 @@
+PLATFORM="platform"
+DEVICE="device"

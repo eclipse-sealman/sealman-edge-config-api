@@ -1,0 +1,17 @@
+.idea
+del.json
+*.pyc
+venv*/
+.venv*/
+env-var-local.json
+*.iml
+*.xml
+.vscode
+/logs
+.env*
+.vs
+.coverage
+.DS_Store
+/doc/testserver
+run_docker.bat
+uv.lock
