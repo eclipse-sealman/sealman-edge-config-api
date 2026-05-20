@@ -1,31 +1,18 @@
-import re
-from helper import DeviceInfo, TemplateVariables
+import json
+from helper import DeviceInfo, TemplateVariableType
 from smart_ems import SmartEMS, generate_resp_from_device_info
 from exceptions import SEMSError
 from routers.smart_ems.schemas import PortForwardingConfig
 
 
-
-async def post_smart_ems_config_portforwarding(device: str, config: PortForwardingConfig):
+async def post_smart_ems_config_port_forwarding(device: str, config: PortForwardingConfig):
     rules = config.get_rules()
-
-    if len(rules) > 10:
-        raise SEMSError("maximum of 10 port forwarding rules allowed", status_code=400)
 
     device_by_serial = await SmartEMS.get_device_by_serial(device)
     device_info = DeviceInfo(device_by_serial)
 
     device_info.check_eligibility()
     device_id = device_info.get()["id"]
-
-    device_variables_dict = device_info.get_device_variables_dict()
-
-    keys_to_remove = [
-        key for key in device_variables_dict
-        if re.match(r"^pfwd_(name|value)_\d+$", key)
-    ]
-    for key in keys_to_remove:
-        del device_variables_dict[key]
 
     seen_names = set()
     seen_interface_ports = set()
@@ -43,25 +30,26 @@ async def post_smart_ems_config_portforwarding(device: str, config: PortForwardi
             )
         seen_interface_ports.add(key)
 
-    for i, rule in enumerate(rules, start=1):
-        name_key = f"pfwd_name_{i}"
-        value_key = f"pfwd_value_{i}"
+    port_forwarding_settings = {
+        "rules": [
+            {
+                "name": rule.name,
+                "interface": rule.interface,
+                "srcPort": rule.srcPort,
+                "destAddr": str(rule.destAddr),
+                "destPort": rule.destPort
+            }
+            for rule in rules
+        ]
+    }
 
-        value = (
-            f"iifname {rule.interface} tcp dport {rule.srcPort} "
-            f"dnat to {rule.destAddr}:{rule.destPort}"
-        )
-
-        device_variables_dict.update({
-            name_key: rule.name,
-            value_key: value
-        })
-
-    device_variables = TemplateVariables()
-    device_variables.add_from_dict(device_variables_dict)
+    device_info.upsert_variable(
+        "port_forwarding_settings",
+        json.dumps(port_forwarding_settings, separators=(",", ":")),
+        TemplateVariableType.JSON_OBJECT,
+    )
 
     body = generate_resp_from_device_info(device_info.get())
-    body["variables"] = device_variables.get()
     body["reinstallConfig1"] = True
 
     if await SmartEMS.edit_device(device_id, body):

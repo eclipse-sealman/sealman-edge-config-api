@@ -64,17 +64,9 @@
         "is_enabled": true
     },
     "network": {
-        {% if cellular is defined %}
-        "cellular1": {
-            "apn": {% if cellular_apn is defined %}"{{ cellular_apn }}"{% else %}"m2m.tele2.com"{% endif %},
-            "pin": {% if cellular_pin is defined %}"{{ cellular_pin }}"{% else %}""{% endif %},
-            "access_number": {% if cellular_access_number is defined %}"{{ cellular_access_number }}"{% else %}"*99***1#"{% endif %},
-            "auth_method": {% if cellular_auth_method is defined %}"{{ cellular_auth_method }}"{% else %}"" {% endif %},
-            "username": {% if cellular_user is defined %}"{{ cellular_user }}"{% else %}""{% endif %},
-            "password": {% if cellular_pw is defined %}"{{ cellular_pw }}"{% else %}""{% endif %},
-            "state": {% if cellular_state is defined %}"{{ cellular_state }}"{% else %}"on"{% endif %}
-        },
-        {% else %}{% endif %}
+		{% if cellular is defined and cellular_settings is defined %}
+		"cellular1": {{ cellular_settings | json_encode | raw }},
+		{% endif %}
         "lan1": {
             "dhcp": false,
             "ip": [
@@ -90,113 +82,41 @@
             "current_gateway": null,
             "current_dns": null
         },
-        "lan3": {
-            "dhcp": {% if ip_lan_3 is defined %}false{% else %}true{% endif %},
-            "ip": [
-                "{% if ip_lan_3 is defined %}{{ ip_lan_3 }}{% else %}{% endif %}"
-            ],
-            "subnet": [
-                "{% if subnet_lan_3 is defined %}{{ subnet_lan_3 }}{% else %}{% endif %}"
-            ],
-            "gateway": {% if gw_lan_3 is defined %}"{{ gw_lan_3 }}"{% else %}null{% endif %},
-            "dns": {% if dns_lan_3 is defined %}"{{ dns_lan_3 }}"{% else %}null{% endif %}
-            },
-        "lan2": {
-            "dhcp": {% if ip_lan_2 is defined %}false{% else %}true{% endif %},
-            "ip": [
-                "{% if ip_lan_2 is defined %}{{ ip_lan_2 }}{% else %}{% endif %}"
-            ],
-            "subnet": [
-                "{% if subnet_lan_2 is defined %}{{ subnet_lan_2 }}{% else %}{% endif %}"
-            ],
-            "gateway": {% if gw_lan_2 is defined %}"{{ gw_lan_2 }}"{% else %}null{% endif %},
-            "dns": {% if dns_lan_2 is defined %}"{{ dns_lan_2 }}"{% else %}null{% endif %}
-            }
+		{% if lan_settings is defined and lan_settings.lan2 is defined %}
+		"lan2": {{ lan_settings.lan2 | json_encode | raw }},
+		{% else %}
+		"lan2": {
+            "dhcp": true,
+            "ip": [],
+            "subnet": [],
+            "gateway": null,
+            "dns": null
+		},
+		{% endif %}
+		{% if lan_settings is defined and lan_settings.lan3 is defined %}
+		"lan3": {{ lan_settings.lan3 | json_encode | raw }}
+		{% else %}
+		"lan3": {
+            "dhcp": true,
+            "ip": [],
+            "subnet": [],
+            "gateway": null,
+            "dns": null
+		}
+		{% endif %}
     },
     "vlans": {
         "lan2": {
-            {% if nat_enabled is defined %}
-            {% if nat_machine_1_lan2 is defined and nat_machine_1 is defined %}
-            "lan2_1": {
-                "ip": "{{ nat_machine_1_lan2 }}",
+            {% if nat_settings is defined and nat_settings.enabled %}
+            {% for m in nat_settings.mappings %}
+            "lan2_{{ loop.index }}": {
+                "ip": "{{ m.externalIp }}",
                 "subnet": 32,
                 "gateway": ""
-            }
-            {% else %}{% endif %}
-            {% if nat_machine_2_lan2 is defined and nat_machine_2 is defined  %}
-            ,
-            "lan2_2": {
-                "ip": "{{ nat_machine_2_lan2 }}",
-                "subnet": 32,
-                "gateway": ""
-            }
-            {% else %}{% endif %}
-            {% if nat_machine_3_lan2 is defined and nat_machine_3 is defined %}
-            ,
-            "lan2_3": {
-                "ip": "{{ nat_machine_3_lan2 }}",
-                "subnet": 32,
-                "gateway": ""
-            }
-            {% else %}{% endif %}
-{% if nat_machine_4_lan2 is defined and nat_machine_4 is defined %}
-            ,
-            "lan2_4": {
-                "ip": "{{ nat_machine_4_lan2 }}",
-                "subnet": 32,
-                "gateway": ""
-            }
-            {% else %}{% endif %}
-{% if nat_machine_5_lan2 is defined and nat_machine_5 is defined %}
-            ,
-            "lan2_5": {
-                "ip": "{{ nat_machine_5_lan2 }}",
-                "subnet": 32,
-                "gateway": ""
-            }
-            {% else %}{% endif %}
-{% if nat_machine_6_lan2 is defined and nat_machine_6 is defined %}
-            ,
-            "lan2_6": {
-                "ip": "{{ nat_machine_6_lan2 }}",
-                "subnet": 32,
-                "gateway": ""
-            }
-            {% else %}{% endif %}
-{% if nat_machine_7_lan2 is defined and nat_machine_7 is defined %}
-            ,
-            "lan2_7": {
-                "ip": "{{ nat_machine_7_lan2 }}",
-                "subnet": 32,
-                "gateway": ""
-            }
-            {% else %}{% endif %}
-{% if nat_machine_8_lan2 is defined and nat_machine_8 is defined %}
-            ,
-            "lan2_8": {
-                "ip": "{{ nat_machine_8_lan2 }}",
-                "subnet": 32,
-                "gateway": ""
-            }
-            {% else %}{% endif %}
-{% if nat_machine_9_lan2 is defined and nat_machine_9 is defined %}
-            ,
-            "lan2_9": {
-                "ip": "{{ nat_machine_9_lan2 }}",
-                "subnet": 32,
-                "gateway": ""
-            }
-            {% else %}{% endif %}
-{% if nat_machine_10_lan2 is defined and nat_machine_10 is defined %}
-            ,
-            "lan2_10": {
-                "ip": "{{ nat_machine_10_lan2 }}",
-                "subnet": 32,
-                "gateway": ""
-            }
-            {% else %}{% endif %}
-            {% else %}{% endif %}
-        },
+            }{% if not loop.last %},{% endif %}
+            {% endfor %}
+            {% endif %}
+	    },
         "lan3": {},
         "lan1": {}
     },
@@ -210,155 +130,32 @@
     },
     "firewall": {
         "enabled": true,
-        "selected": "gea_fht_fw_preset",
+        "selected": "fw_preset",
         "edited": {},
         "saved": {
-            "gea_fht_fw_preset": {
-                "notes": "default FHT preset",
+            "fw_preset": {
+                "notes": "default preset",
                 "ip": {
                     "nat": {
                         "prerouting": {
-                            {#- -----Setting 1:1 NAT and Port Forwarding----- -#}
-
                             "mgmtd": {
-                              
-                                {% if pfwd_name_1 is defined %}
-                                "110_{{pfwd_name_1}}": {
-                                    "contents": "{{pfwd_value_1}}"
-                                }
-                                {% endif %}
-                                {% if pfwd_name_2 is defined %}
-                                ,
-                                "111_{{pfwd_name_2}}": {
-                                    "contents": "{{pfwd_value_2}}"
-                                }
-                                {% endif %}
-
-                                {% if pfwd_name_3 is defined %}
-                                ,
-                                "112_{{pfwd_name_3}}": {
-                                    "contents": "{{pfwd_value_3}}"
-                                }
-                                {% endif %}
-
-                                {% if pfwd_name_4 is defined %}
-                                ,
-                                "113_{{pfwd_name_4}}": {
-                                    "contents": "{{pfwd_value_4}}"
-                                }
-                                {% endif %}
-
-                                {% if pfwd_name_5 is defined %}
-                                ,
-                                "114_{{pfwd_name_5}}": {
-                                    "contents": "{{pfwd_value_5}}"
-                                }
-                                {% endif %}
-
-                                {% if pfwd_name_6 is defined %}
-                                ,
-                                "115_{{pfwd_name_6}}": {
-                                    "contents": "{{pfwd_value_6}}"
-                                }
-                                {% endif %}
-
-                                {% if pfwd_name_7 is defined %}
-                                ,
-                                "116_{{pfwd_name_7}}": {
-                                    "contents": "{{pfwd_value_7}}"
-                                }
-                                {% endif %}
-
-                                {% if pfwd_name_8 is defined %}
-                                ,
-                                "117_{{pfwd_name_8}}": {
-                                    "contents": "{{pfwd_value_8}}"
-                                }
-                                {% endif %}
-
-                                {% if pfwd_name_9 is defined %}
-                                ,
-                                "118_{{pfwd_name_9}}": {
-                                    "contents": "{{pfwd_value_9}}"
-                                }
-                                {% endif %}
-
-                                {% if pfwd_name_10 is defined %}
-                                ,
-                                "119_{{pfwd_name_10}}": {
-                                    "contents": "{{pfwd_value_10}}"
-                                }
-                                {% endif %}
-
-                                {% if pfwd_name_1 is defined and nat_machine_1 is defined and nat_enabled is defined %}
-                                ,
-                                {% endif %}
-
-{% if nat_enabled is defined %}
-
-                                {% if nat_machine_1 is defined %}
-                                "1100_{{nat_machine_1}}": {
-                                    "contents": "ip daddr {{nat_machine_1_lan2}} dnat to {{nat_machine_1_lan3}}"
-                                }
-                                {% endif %}
-                                {% if nat_machine_2 is defined %}
-                                ,
-                                "1200_{{nat_machine_2}}": {
-                                    "contents": "ip daddr {{nat_machine_2_lan2}} dnat to {{nat_machine_2_lan3}}"
-                                }
-                                {% endif %}
-{% if nat_machine_3 is defined %}
-,
-"1300_{{nat_machine_3}}": {
-                                    "contents": "ip daddr {{nat_machine_3_lan2}} dnat to {{nat_machine_3_lan3}}"
-                                }
-{% endif %}
-{% if nat_machine_4 is defined %}
-,
-"1400_{{nat_machine_4}}": {
-                                    "contents": "ip daddr {{nat_machine_4_lan2}} dnat to {{nat_machine_4_lan3}}"
-                                }
-{% endif %}
-{% if nat_machine_5 is defined %}
-,
-"1500_{{nat_machine_5}}": {
-                                    "contents": "ip daddr {{nat_machine_5_lan2}} dnat to {{nat_machine_5_lan3}}"
-                                }
-{% endif %}
-{% if nat_machine_6 is defined %}
-,
-"1600_{{nat_machine_6}}": {
-                                    "contents": "ip daddr {{nat_machine_6_lan2}} dnat to {{nat_machine_6_lan3}}"
-                                }
-{% endif %}
-{% if nat_machine_7 is defined %}
-,
-"1700_{{nat_machine_7}}": {
-                                    "contents": "ip daddr {{nat_machine_7_lan2}} dnat to {{nat_machine_7_lan3}}"
-                                }
-{% endif %}
-{% if nat_machine_8 is defined %}
-,
-"1800_{{nat_machine_8}}": {
-                                    "contents": "ip daddr {{nat_machine_8_lan2}} dnat to {{nat_machine_8_lan3}}"
-                                }
-{% endif %}
-{% if nat_machine_9 is defined %}
-,
-"1900_{{nat_machine_9}}": {
-                                    "contents": "ip daddr {{nat_machine_9_lan2}} dnat to {{nat_machine_9_lan3}}"
-                                }
-{% endif %}
-{% if nat_machine_10 is defined %}
-,
-"2000_{{nat_machine_10}}": {
-                                    "contents": "ip daddr {{nat_machine_10_lan2}} dnat to {{nat_machine_10_lan3}}"
-                                }
-{% endif %}
-{% endif %}
+                                {% if port_forwarding_settings is defined %}
+								{# --- Port forwarding rules --- #}
+								{% for r in port_forwarding_settings.rules %}
+								"{{ 100 + loop.index }}_{{ r.name }}": {
+								  "contents": "iifname {{ r.interface }} tcp dport {{ r.srcPort }} dnat to {{ r.destAddr }}:{{ r.destPort }}"
+								}{% if not loop.last or (nat_settings.enabled and nat_settings.mappings|length > 0) %},{% endif %}
+								{% endfor %}
+								{% endif %}
+								{# --- NAT rules --- #}
+								{% if nat_settings is defined and nat_settings.enabled %}
+									{% for m in nat_settings.mappings %}
+									"{{ 1100 + loop.index * 100 }}_{{ m.name }}": {
+									  "contents": "ip daddr {{ m.externalIp }} dnat to {{ m.internalIp }}"
+									}{% if not loop.last %},{% endif %}
+									{% endfor %}
+								{% endif %}
                             },
-
-                           
                             "policy": "accept"
                         },
                         "postrouting": {
@@ -373,82 +170,15 @@
                                 "1200_masquerade_lan3": {
                                     "contents": "oifname lan3 masquerade"
                                 }
-                                {#- -----Setting 1:1 NAT----- -#}
-                                {% if nat_enabled is defined %}
-
-                                {% if nat_machine_1 is defined %}
-                                ,
-                                "2100_{{nat_machine_1}}": {
-                                    "contents": "ip saddr {{nat_machine_1_lan3}} snat to {{nat_machine_1_lan2}}"
-                                }
-                                {% endif %}
-
-                                {% if nat_machine_2 is defined %}
-                                ,
-                                "2200_{{nat_machine_2}}": {
-                                    "contents": "ip saddr {{nat_machine_2_lan3}} snat to {{nat_machine_2_lan2}}"
-                                }
-                                {% endif %}
-
-                                {% if nat_machine_3 is defined %}
-,
-"2300_{{nat_machine_3}}": {
-                                    "contents": "ip saddr {{nat_machine_3_lan3}} snat to {{nat_machine_3_lan2}}"
-                                }
-{% endif %}
-
-                                {% if nat_machine_4 is defined %}
-,
-"2400_{{nat_machine_4}}": {
-                                    "contents": "ip saddr {{nat_machine_4_lan3}} snat to {{nat_machine_4_lan2}}"
-                                }
-{% endif %}
-
-                                {% if nat_machine_5 is defined %}
-,
-"2500_{{nat_machine_5}}": {
-                                    "contents": "ip saddr {{nat_machine_5_lan3}} snat to {{nat_machine_5_lan2}}"
-                                }
-{% endif %}
-
-                                {% if nat_machine_6 is defined %}
-,
-"2600_{{nat_machine_6}}": {
-                                    "contents": "ip saddr {{nat_machine_6_lan3}} snat to {{nat_machine_6_lan2}}"
-                                }
-{% endif %}
-
-                                {% if nat_machine_7 is defined %}
-,
-"2700_{{nat_machine_7}}": {
-                                    "contents": "ip saddr {{nat_machine_7_lan3}} snat to {{nat_machine_7_lan2}}"
-                                }
-{% endif %}
-
-                                {% if nat_machine_8 is defined %}
-,
-"2800_{{nat_machine_8}}": {
-                                    "contents": "ip saddr {{nat_machine_8_lan3}} snat to {{nat_machine_8_lan2}}"
-                                }
-{% endif %}
-
-                                {% if nat_machine_9 is defined %}
-,
-"2900_{{nat_machine_9}}": {
-                                    "contents": "ip saddr {{nat_machine_9_lan3}} snat to {{nat_machine_9_lan2}}"
-                                }
-{% endif %}
-
-                                {% if nat_machine_10 is defined %}
-,
-"3000_{{nat_machine_10}}": {
-                                    "contents": "ip saddr {{nat_machine_10_lan3}} snat to {{nat_machine_10_lan2}}"
-                                }
-{% endif %}
-
-                                {% endif %}
-
-
+                                {#- -----Settings 1:1 NAT----- -#}
+								{% if nat_settings is defined and nat_settings.enabled and nat_settings.mappings|length > 0 %}
+								  ,
+								  {% for m in nat_settings.mappings %}
+								  "{{ 2100 + loop.index * 100 }}_{{ m.name }}": {
+									"contents": "ip saddr {{ m.internalIp }} snat to {{ m.externalIp }}"
+								  }{% if not loop.last %},{% endif %}
+								  {% endfor %}
+								{% endif %}
                             },
                             "policy": "accept"
                         }
@@ -514,15 +244,15 @@
                                 ,
                                 "1100_allow_http": {"contents": "tcp dport 443 accept"}
                                 {% endif %}
- {% if custom_fw_allow_ftp is defined %}
+                                {% if custom_fw_allow_ftp is defined %}
                                 ,
                                 "1200_allow_ftp": {"contents": "tcp dport 21 accept"}
                                 {% endif %}
- {% if custom_fw_allow_sftp is defined %}
+                                {% if custom_fw_allow_sftp is defined %}
                                 ,
                                 "1300_allow_sftp": {"contents": "tcp dport 22 accept"}
                                 {% endif %}
- {% if custom_fw_allow_opc is defined %}
+                                {% if custom_fw_allow_opc is defined %}
                                 ,
                                 "1400_fw_allow_opcua_4840": {"contents": "tcp dport 4840 accept"}
                                 {% endif %}

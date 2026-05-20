@@ -61,9 +61,9 @@ class TemplateConfigurator:
         self.eas_init_time = eas_init_time
         self.initial_config = initial_config
         self.initial_variables = (
-            [{"name": EAS_INIT_LABEL, "variableValue": self.eas_init_time}]
+            [{"name": EAS_INIT_LABEL, "variableType": "string", "variableValue": self.eas_init_time}]
             if initial_config
-            else [{"name": EAS_UPDATE_LABEL, "variableValue": self.eas_init_time}]
+            else [{"name": EAS_UPDATE_LABEL, "variableType": "string", "variableValue": self.eas_init_time}]
         )
         self.sems_api = sems_api
         self.template_set = {}
@@ -140,7 +140,7 @@ class TemplateConfigurator:
         variables_dict = {variable["name"]: variable for variable in variables}
         # existing variables that are not overriden
         existing_variables = [
-            {"name": variable["name"], "variableValue": variable["variableValue"]}
+            {"name": variable["name"], "variableType": variable["variableType"], "variableValue": variable["variableValue"]}
             for variable in self.device_info.get("variables", [])
             if variables_dict.get(variable["name"]) is None
         ]
