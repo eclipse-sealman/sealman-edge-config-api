@@ -7,10 +7,11 @@ from authorization.permission_types import Device
 from authorization.permission_check import PathParamPermissionCheck
 
 from routers.base_api_router import BaseAPIRouter
-from routers.module_config.schemas import GetModuleTwinResponse, ModuleList, ModuleConfStatus
+from routers.module_config.schemas import GetModuleTwinIdentityResponse, GetModuleTwinResponse, ModuleList, ModuleConfStatus
 from routers.module_config.config_schemas.network_discover_config_v1 import GetNetDiscoverModuleConfigV1, NetworkDiscoverModuleConfigV1
 from routers.module_config.config_schemas.seal_module_opcua_client_config_v1 import OpcuaClientModuleConfigV1
 from routers.module_config.routes.post_module_twin_config import post_module_twin_config as _post_module_twin_config
+from routers.module_config.routes.get_module_twin_identity_reported import get_module_twin_identity_reported as _get_module_twin_identity_reported
 from routers.module_config.routes.get_module_twin_config import get_module_twin_config as _get_module_twin_config
 from routers.module_config.routes.post_module_config_status import (post_module_config_status
                                                                     as _post_module_config_status)
@@ -59,3 +60,9 @@ async def get_opcua_client_twin_config(device: str,
 async def get_module_twin_config(device: str, module: str,
                                  _ = Depends(PathParamPermissionCheck(Device.READ_MODULE_TWIN_CONFIG, Resource.DEVICE, "device"))):
     return await _get_module_twin_config(device, module)
+
+@module_config.get("/{device}/twin/identity/{module}/reported", response_model=GetModuleTwinIdentityResponse,
+                   tags=["Module Configuration"])
+async def get_module_twin_identity_reported(device: str, module: str,
+                                 _ = Depends(PathParamPermissionCheck(Device.READ_MODULE_TWIN_CONFIG, Resource.DEVICE, "device"))):
+    return await _get_module_twin_identity_reported(device, module)
