@@ -1,5 +1,6 @@
 import datetime
 import logging
+import re
 from smart_ems import SmartEMS
 from routers.smart_ems.schemas import ApplyDefaultTemplateResult
 from exceptions import SEMSFirmwareError, SEMSTemplateError
@@ -26,7 +27,15 @@ def validate_minimum_firmware(
         )
 
     def version_tuple(v):
-        return tuple(map(int, (v.split("."))))
+        # Strip non-numeric suffixes like _rc2, -beta, etc.
+        # Extract numeric version parts (e.g., "1.9.2" from "1.9.2_rc2")
+        numeric_version = re.match(r'^(\d+(?:\.\d+)*)', v)
+        if not numeric_version:
+            raise SEMSFirmwareError(
+                f"Invalid firmware version format: [{v}]",
+                400
+            )
+        return tuple(map(int, numeric_version.group(1).split(".")))
 
     if version_tuple(current_firmware) < version_tuple(minimum_firmware):
         raise SEMSFirmwareError(
