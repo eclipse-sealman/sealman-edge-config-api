@@ -184,7 +184,6 @@ class DeviceConfig(BaseModel):
 
 class DefaultSmartEMSTemplate(BaseModel):
     deviceType: str
-    hardwareVersion: str
     defaultConfig: DeviceConfig
     templateName: str
 

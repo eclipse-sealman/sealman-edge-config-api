@@ -10,14 +10,9 @@ from routers.smart_ems.template_configurator import get_configuration_name
 logger = logging.getLogger("EdgeConfigAPI")
 
 
-async def get_smart_ems_default_template(
-    device_type: str, hardware_version: str
-):
+async def get_smart_ems_default_template(device_type: str):
     if device_type is None:
         raise InvalidInputError("'device_type' parameter not provided.")
-
-    if hardware_version is None:
-        raise InvalidInputError("'hardware_version' parameter not provided.")
 
     config = await DeviceTypeConfigRepo.get_default_config()
 
@@ -31,7 +26,7 @@ async def get_smart_ems_default_template(
     if device_type_config is None:
         raise InvalidInputError(f"Missing configuration for device type: {device_type}")
 
-    template_name = get_configuration_name(device_type_config, hardware_version)
+    template_name = get_configuration_name(device_type_config)
 
     parsed_data = {}
     try:
@@ -42,7 +37,6 @@ async def get_smart_ems_default_template(
 
     return DefaultSmartEMSTemplate(
         deviceType=device_type,
-        hardwareVersion=hardware_version,
         defaultConfig=parsed_data,
         templateName=template_name,
     )

@@ -10,8 +10,8 @@ EAS_INIT_LABEL = "eas_init_at"
 EAS_UPDATE_LABEL = "eas_update_at"
 
 
-def get_configuration_name(type_config: dict, hardware_version: str) -> str:
-    return f"{type_config.get('configurationVersion')} [{hardware_version}: {type_config.get('firmwareVersion')}]"
+def get_configuration_name(type_config: dict) -> str:
+    return f"{type_config.get('configurationVersion')} [FW: {type_config.get('firmwareVersion')}]"
 
 
 def validate_minimum_firmware(
@@ -131,9 +131,7 @@ class TemplateConfigurator:
         self.type_config = type_config
 
         # Get configuration from SEMS
-        self.configuration_name = get_configuration_name(
-            type_config, self.device_info.get("hardwareVersion", "")
-        )
+        self.configuration_name = get_configuration_name(type_config)
         logging.info(f"Configuration name: {self.configuration_name}")
 
     def __set_device(self, device: dict):
