@@ -1,3 +1,5 @@
+from typing import Union
+
 from fastapi import Depends
 
 from authorization import resource_types as Resource
@@ -40,19 +42,19 @@ async def post_module_config_status(device: str, module_list: ModuleList,
 # GET Endpoints - Read Operations
 # ============================================================
 
-@module_config.get("/{device}/twin/config/seal-app-net-discover", response_model=GetNetDiscoverModuleConfigV1, response_model_exclude_none=True,
+@module_config.get("/{device}/twin/config/seal-app-net-discover", response_model=Union[GetNetDiscoverModuleConfigV1, None], response_model_exclude_none=True,
                    tags=["Module Configuration"])
 async def get_net_discover_twin_config(device: str,
                                  _ = Depends(PathParamPermissionCheck(Device.READ_MODULE_TWIN_CONFIG, Resource.DEVICE, "device"))):
     return await _get_module_twin_config(device, "seal-app-net-discover")
 
-@module_config.get("/{device}/twin/config/seal-app-opcua-client", response_model=OpcuaClientModuleConfigV1, response_model_exclude_none=True,
+@module_config.get("/{device}/twin/config/seal-app-opcua-client", response_model=Union[OpcuaClientModuleConfigV1, None], response_model_exclude_none=True,
                    tags=["Module Configuration"])
 async def get_opcua_client_twin_config(device: str,
                                  _ = Depends(PathParamPermissionCheck(Device.READ_MODULE_TWIN_CONFIG, Resource.DEVICE, "device"))):
     return await _get_module_twin_config(device, "seal-app-opcua-client")
 
-@module_config.get("/{device}/twin/config/{module}", response_model=GetModuleTwinResponse,
+@module_config.get("/{device}/twin/config/{module}", response_model=Union[GetModuleTwinResponse, None],
                    tags=["Module Configuration"])
 async def get_module_twin_config(device: str, module: str,
                                  _ = Depends(PathParamPermissionCheck(Device.READ_MODULE_TWIN_CONFIG, Resource.DEVICE, "device"))):
