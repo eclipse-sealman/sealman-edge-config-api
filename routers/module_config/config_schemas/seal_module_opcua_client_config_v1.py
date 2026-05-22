@@ -72,6 +72,7 @@ class ClientConfigurationSchema(BaseModel):
     messageSecurityMode: Literal["Invalid",
                                           "None", "Sign", "SignAndEncrypt"] = "None"
     clientCertificate: str | None = None
+    clientPrivateKey: str | None = None
     serverCertificate: str | None = None
     rootCertificates: List[str] | None = None
     rootCrls: List[str] | None = None
