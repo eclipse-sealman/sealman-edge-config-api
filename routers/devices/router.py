@@ -9,6 +9,7 @@ from routers.general.schemas import DeviceStatusWithConnectionList
 from .routes.create_device import create_device as _create_device
 from .routes.delete_device import delete_device as _delete_device
 from .routes.get_devices import get_devices as _get_devices
+from .routes.get_device_meta_values import get_device_meta_values as _get_device_meta_values
 
 devices = BaseAPIRouter(prefix="/devices", tags=["Devices"])
 
@@ -74,3 +75,10 @@ async def delete_device(
         device_id=device_id,
         repo=repo
     )
+
+
+@devices.get("/metaValues")
+async def get_device_meta_values(
+    repo: DeviceRepository = Depends(get_repository(DeviceRepository))
+):
+    return await _get_device_meta_values(repo=repo)

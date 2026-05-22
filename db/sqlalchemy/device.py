@@ -296,3 +296,15 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         stmt = delete(Device).where(Device.device_id == device_id)
         await self._session.execute(stmt)
         await self._session.commit()
+
+
+    async def get_all_devices_raw(self) -> List[Dict[str, Any]]:
+        result = await self._session.execute(select(Device))
+        devices = result.scalars().all()
+        return [
+            {
+                "device_id": device.device_id,
+                "device_meta": device.device_meta or {},
+            }
+            for device in devices
+        ]
