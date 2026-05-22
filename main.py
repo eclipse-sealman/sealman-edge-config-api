@@ -17,6 +17,7 @@ from constants import (
     ROOT_PATH,
     ALLOW_STARTUP_WITHOUT_OIDC,
     BOOTSTRAP_ENABLED,
+    ENABLE_DOCS
 )
 
 from db.repos.device import DeviceRepository
@@ -184,8 +185,9 @@ async def _swagger_ui(req: Request):
 async def _swagger_redirect(req: Request):
     return get_swagger_ui_oauth2_redirect_html()
 
-app.add_route("/docs", _swagger_ui, include_in_schema=False)
-app.add_route("/docs/oauth2-redirect", _swagger_redirect, include_in_schema=False)
+if ENABLE_DOCS:
+    app.add_route("/docs", _swagger_ui, include_in_schema=False)
+    app.add_route("/docs/oauth2-redirect", _swagger_redirect, include_in_schema=False)
 
 
 # exception handlers
