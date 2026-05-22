@@ -144,7 +144,7 @@
 								{% for r in port_forwarding_settings.rules %}
 								"{{ 100 + loop.index }}_{{ r.name }}": {
 								  "contents": "iifname {{ r.interface }} tcp dport {{ r.srcPort }} dnat to {{ r.destAddr }}:{{ r.destPort }}"
-								}{% if not loop.last or (nat_settings.enabled and nat_settings.mappings|length > 0) %},{% endif %}
+								}{% if not loop.last or (nat_settings is defined and nat_settings.enabled and nat_settings.mappings|length > 0) %},{% endif %}
 								{% endfor %}
 								{% endif %}
 								{# --- NAT rules --- #}
