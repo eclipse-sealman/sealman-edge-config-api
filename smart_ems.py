@@ -863,7 +863,11 @@ def generate_resp_from_device_info(device_info):
     variables = []
     for var_obj in device_info.get("variables", []):
         variables.append(
-            {"name": var_obj["name"], "variableValue": var_obj["variableValue"]}
+            {
+                "name": var_obj["name"],
+                "variableValue": var_obj["variableValue"],
+                "variableType": var_obj["variableType"]
+            }
         )
 
     labels = []
