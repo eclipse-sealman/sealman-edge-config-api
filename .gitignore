@@ -9,6 +9,7 @@ env-var-local.json
 .vscode
 /logs
 .env*
+!.env.example
 .vs
 .coverage
 .DS_Store

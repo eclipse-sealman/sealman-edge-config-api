@@ -1,6 +1,5 @@
 from typing import Any, Dict, List, Optional
 
-from datetime import datetime, timezone
 from sqlalchemy import select, update, func, delete, text, and_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,9 +13,9 @@ from exceptions import APIError
 
 DEVICE_SNAPSHOT_CACHE_KEY = "current"
 
+
 @register_repository(DeviceRepository)
 class SqlAlchemyDeviceRepository(DeviceRepository):
-
     def __init__(self, session: AsyncSession):
         self._session = session
 
@@ -96,9 +95,7 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
 
     async def _get_platform(self, platform_name: str):
         result = await self._session.execute(
-            select(PlatformSettings).where(
-                PlatformSettings.name == platform_name
-            )
+            select(PlatformSettings).where(PlatformSettings.name == platform_name)
         )
         platform = result.scalar_one_or_none()
 
@@ -275,6 +272,7 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         await self._session.commit()
 
         return current_meta
+
     async def device_exists(self, device_id: str) -> bool:
         device = await self._get_device(device_id)
         return device is not None
