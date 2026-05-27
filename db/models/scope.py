@@ -19,4 +19,4 @@ class Scope(Base):
     name = Column(String, unique=True, nullable=False)
     description = Column(Text)
     attr = Column(JSONB, nullable=False)
-    access_rule = Column(SQLAlchemyEnum(AccessRule), nullable=False)
+    access_rule = Column(SQLAlchemyEnum(AccessRule, create_type=False), nullable=False)

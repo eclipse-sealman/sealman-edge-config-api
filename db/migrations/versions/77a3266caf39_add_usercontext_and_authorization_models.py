@@ -1,6 +1,6 @@
 """Add UserContext and authorization models
 
-Revision ID: 745cd0070e97
+Revision ID: 77a3266caf39
 Revises: c3fd04c560ae
 Create Date: 2026-05-27
 
@@ -12,10 +12,13 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '745cd0070e97'
+revision: str = '77a3266caf39'
 down_revision: Union[str, None] = 'c3fd04c560ae'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+
+accessrule_enum = sa.Enum('ALL', 'ANY', name='accessrule')
 
 
 def upgrade() -> None:
@@ -37,16 +40,16 @@ def upgrade() -> None:
     sa.Column('name', sa.String(), nullable=False),
     sa.Column('description', sa.Text(), nullable=True),
     sa.Column('attr', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-    sa.Column('access_rule', sa.Enum('ALL', 'ANY', name='accessrule'), nullable=False),
+    sa.Column('access_rule', accessrule_enum, nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
     )
     op.create_table('user_context',
-    sa.Column('user_id', sa.Text(), nullable=False),
+    sa.Column('id', sa.Text(), nullable=False),
     sa.Column('preferred_username', sa.Text(), nullable=False),
     sa.Column('is_admin', sa.Boolean(), nullable=False),
     sa.Column('is_new_user', sa.Boolean(), nullable=False),
-    sa.PrimaryKeyConstraint('user_id')
+    sa.PrimaryKeyConstraint('id')
     )
     op.create_table('role_actions',
     sa.Column('role_id', sa.UUID(), nullable=False),
@@ -74,7 +77,7 @@ def upgrade() -> None:
     sa.Column('user_id', sa.Text(), nullable=False),
     sa.Column('team_id', sa.UUID(), nullable=False),
     sa.ForeignKeyConstraint(['team_id'], ['teams.id'], ),
-    sa.ForeignKeyConstraint(['user_id'], ['user_context.user_id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['user_context.id'], ),
     sa.PrimaryKeyConstraint('user_id', 'team_id')
     )
 
@@ -88,3 +91,4 @@ def downgrade() -> None:
     op.drop_table('scopes')
     op.drop_table('roles')
     op.drop_table('actions')
+    op.execute(sa.text('DROP TYPE IF EXISTS accessrule'))
