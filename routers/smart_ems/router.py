@@ -111,6 +111,7 @@ async def get_smart_ems_default_template(device_type: str):
     return await _get_smart_ems_default_template(device_type)
 
 
+
 @smart_ems.post("/{device}/smartems/apply-default-template", response_model=ApplyDefaultTemplateResult, tags=["Smart-EMS"])
 async def post_smart_ems_apply_default_template(device: str,
                                                 _=Depends(PathParamPermissionCheck(Device.SMARTEMS_TEMPLATE_APPLY,
