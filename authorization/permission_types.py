@@ -1,96 +1,33 @@
 class Platform:
-    READ_DEPLOYMENT_LIST = "read_deployment_list"
-
-    ReadPermissions = [
-        READ_DEPLOYMENT_LIST,
-    ]
+    ReadPermissions = []
     EditPermissions = []
 
 
 class Device:
-    READ = "read"
-    READ_DEPLOYMENT_TAG = "read_deployment_tag"
-    EDIT_DEPLOYMENT_TAG = "edit_deployment_tag"
-
-    READ_IP_CONFIG = "read_ip_config"
-
-    READ_MODULE_DEPLOYMENT_STATUS = "read_module_deployment_status"
-    READ_MODULES = "read_modules"
-    EDIT_MODULE_NAMES = "edit_module_names"
-    EXECUTE_MODULE_METHOD = "execute_module_method"
-
-    READ_CONNECTION_STATUS = "read_connection_status"
-
-    READ_SMARTEMS_DEVICE_INFO = "read_smartems_device_info"
-    READ_SMARTEMS_FIRMWARE_STATUS = "read_smartems_firmware_status"
-    EDIT_SMARTEMS_DESCRIPTION = "edit_smartems_description"
-    READ_SMARTEMS_CONFIG_LAN = "read_smartems_config_lan"
-    EDIT_SMARTEMS_CONFIG_LAN = "edit_smartems_config_lan"
-    READ_SMARTEMS_CONFIG_CELLULAR = "read_smartems_config_cellular"
-    EDIT_SMARTEMS_CONFIG_CELLULAR = "edit_smartems_config_cellular"
-    READ_SMARTEMS_CONFIG_NAT = "read_smartems_config_nat"
-    EDIT_SMARTEMS_CONFIG_NAT = "edit_smartems_config_nat"
-    EXPORT_SMARTEMS_CONFIG = "export_smartems_config"
-
-    APPLY_SMARTEMS_TEMPLATE = "apply_smartems_template"
-
-    READ_PASSWORD = "read_password"
-    EDIT_PASSWORD = "edit_password"
-
-    READ_CMD_STATUS = "read_cmd_status"
-    READ_CMD_CONFIG = "read_cmd_config"
-    READ_CMD_FW_CONFIG = "read_cmd_fw_config"
-
-    EDIT_IP_STATIC = "edit_ip_static"
-
-    EXECUTE_SMARTEMS_CHECK = "execute_smartems_check"
-
-    READ_MODULE_TWIN_CONFIG = "read_module_twin_config"
-    EDIT_MODULE_TWIN_CONFIG = "edit_module_twin_config"
-    EDIT_MODULE_CONFIG_STATUS = "edit_module_config_status"
-
-    DISCOVER_NETWORK = "discover_network"
-
-    READ_LINE = "read_line"
-    EDIT_LINE = "edit_line"
+    READ = "device.read"
+    DEPLOYMENT_WRITE = "device.deployment.write"
+    MODULE_EXECUTE_METHOD = "device.module.execute_method"
+    NETWORK_WRITE = "device.network.write"
+    SMARTEMS_TEMPLATE_APPLY = "device.sems_template.apply"
+    PASSWORD_READ = "device.password.read"
+    PASSWORD_WRITE = "device.password.write"
+    MODULE_TWIN_CONFIG_WRITE = "device.module_twin_config.write"
+    NETWORK_DISCOVER = "device.network.discover"
+    LINE_WRITE = "device.line.write"
 
     ReadPermissions = [
         READ,
-        READ_DEPLOYMENT_TAG,
-        READ_IP_CONFIG,
-        READ_MODULE_DEPLOYMENT_STATUS,
-        READ_MODULES,
-        READ_CONNECTION_STATUS,
-        READ_SMARTEMS_DEVICE_INFO,
-        READ_SMARTEMS_FIRMWARE_STATUS,
-        READ_SMARTEMS_CONFIG_LAN,
-        READ_SMARTEMS_CONFIG_CELLULAR,
-        READ_SMARTEMS_CONFIG_NAT,
-        READ_CMD_STATUS,
-        READ_CMD_CONFIG,
-        READ_CMD_FW_CONFIG,
-        READ_MODULE_TWIN_CONFIG,
-        READ_LINE,
-        READ_PASSWORD,
-        EXPORT_SMARTEMS_CONFIG,
+        PASSWORD_READ,
     ]
 
     EditPermissions = [
-        EDIT_DEPLOYMENT_TAG,
-        EDIT_MODULE_NAMES,
-        EXECUTE_MODULE_METHOD,
-        EDIT_SMARTEMS_DESCRIPTION,
-        EDIT_SMARTEMS_CONFIG_LAN,
-        EDIT_SMARTEMS_CONFIG_CELLULAR,
-        EDIT_SMARTEMS_CONFIG_NAT,
-        EDIT_IP_STATIC,
-        EXECUTE_SMARTEMS_CHECK,
-        EDIT_MODULE_TWIN_CONFIG,
-        EDIT_MODULE_CONFIG_STATUS,
-        DISCOVER_NETWORK,
-        EDIT_LINE,
-        EDIT_PASSWORD,
-        APPLY_SMARTEMS_TEMPLATE,
+        DEPLOYMENT_WRITE,
+        MODULE_EXECUTE_METHOD,
+        MODULE_TWIN_CONFIG_WRITE,
+        NETWORK_DISCOVER,
+        LINE_WRITE,
+        PASSWORD_WRITE,
+        SMARTEMS_TEMPLATE_APPLY,
     ]
 
 

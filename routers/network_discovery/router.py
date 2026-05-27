@@ -16,7 +16,7 @@ network_discovery = BaseAPIRouter()
 @network_discovery.post("/{device}/network/discover", tags=["Network Discovery"],
                         response_model=DirectMethod[NetworkScan])
 async def post_network_discover(device: str, network_discover: NetworkDiscover,
-                                 auth_context = Depends(PathParamPermissionCheck(Device.DISCOVER_NETWORK, Resource.DEVICE, "device"))):
+                                 auth_context = Depends(PathParamPermissionCheck(Device.NETWORK_DISCOVER, Resource.DEVICE, "device"))):
     return await _post_network_discover2(device, network_discover, auth_context)
 
 

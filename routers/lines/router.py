@@ -13,17 +13,17 @@ from routers.lines.schemas import Line
 lines = BaseAPIRouter()
 
 @lines.get("/{device}/line/", response_model=Line, response_model_exclude_none=True, tags=["Lines"])
-async def get_line_by_device_id(device: str, _ = Depends(PathParamPermissionCheck(Device.READ_LINE, Resource.DEVICE, "device"))):
+async def get_line_by_device_id(device: str, _ = Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
     return await _get_line_by_device_id(device)
 
 @lines.post("/{device}/line/", response_model=Line, response_model_exclude_none=True, tags=["Lines"])
-async def post_line(device: str, line: Line, _ = Depends(PathParamPermissionCheck(Device.EDIT_LINE, Resource.DEVICE, "device"))):
+async def post_line(device: str, line: Line, _ = Depends(PathParamPermissionCheck(Device.LINE_WRITE, Resource.DEVICE, "device"))):
     return await _post_line(device, line)
 
 @lines.put("/{device}/line/", response_model=Line, response_model_exclude_none=True, tags=["Lines"])
-async def update_line_by_id(device: str, line: Line, _ = Depends(PathParamPermissionCheck(Device.EDIT_LINE, Resource.DEVICE, "device"))):
+async def update_line_by_id(device: str, line: Line, _ = Depends(PathParamPermissionCheck(Device.LINE_WRITE, Resource.DEVICE, "device"))):
     return await _update_line_by_id(device, line)
 
 @lines.delete("/{device}/line/", response_model=None, status_code=204, tags=["Lines"])
-async def delete_line_by_device_id(device: str, _ = Depends(PathParamPermissionCheck(Device.EDIT_LINE, Resource.DEVICE, "device"))):
+async def delete_line_by_device_id(device: str, _ = Depends(PathParamPermissionCheck(Device.LINE_WRITE, Resource.DEVICE, "device"))):
     return await _delete_line_by_device_id(device)

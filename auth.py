@@ -30,22 +30,20 @@ class Role:
 
 PermissionMap = {
     Role.EDGE_CONFIG_ADMIN: Platform.ReadPermissions
-        + Platform.EditPermissions
-        + Device.ReadPermissions
-        + Device.EditPermissions,
+                            + Platform.EditPermissions
+                            + Device.ReadPermissions
+                            + Device.EditPermissions,
     Role.EDGE_CONFIG_VIEWER: Platform.ReadPermissions
-        + Device.ReadPermissions
-        + [
-            Device.EDIT_MODULE_CONFIG_STATUS,
-            Device.EXECUTE_MODULE_METHOD,
-            Device.DISCOVER_NETWORK,
-        ],
+                             + Device.ReadPermissions
+                             + [
+                                 Device.MODULE_EXECUTE_METHOD,
+                                 Device.NETWORK_DISCOVER,
+                             ],
     Role.EDGE_CONFIG_EDITOR: Platform.ReadPermissions
-        + Platform.EditPermissions
-        + Device.ReadPermissions
-        + Device.EditPermissions,
+                             + Platform.EditPermissions
+                             + Device.ReadPermissions
+                             + Device.EditPermissions,
 }
-
 
 # Configure authentication endpoints based on provider
 if AUTHENTICATION_PROVIDER == "entra":
@@ -188,6 +186,7 @@ def verify_token(token: str) -> dict:
         options={"verify_exp": True},
     )
 
+
 async def validate_jwt(token: str = Security(oauth2_scheme)) -> dict:
     """
     Validates JWT token from the configured authentication provider (Entra or KeyCloak).
@@ -217,7 +216,8 @@ def get_current_user(auth_context: dict) -> str:
     Extracts a user identifier from the auth context for logging/audit purposes.
     Tries multiple claims to be compatible with different providers and configurations.
     """
-    return auth_context.get("name") or auth_context.get("preferred_username") or auth_context.get("email") or auth_context.get("oid") or auth_context.get("sub")
+    return auth_context.get("name") or auth_context.get("preferred_username") or auth_context.get(
+        "email") or auth_context.get("oid") or auth_context.get("sub")
 
 
 class RBACPermissionChecker:
@@ -233,7 +233,7 @@ class RBACPermissionChecker:
             if r_perm not in assigned_permissions:
                 raise InsufficientPermissions(f"user has insufficient permissions - required permission: {r_perm}",
                                               status_code=403)
-        
+
         user_id = get_current_user(auth_context)
         org_id = auth_context.get("oid") or auth_context.get("sub")
 
