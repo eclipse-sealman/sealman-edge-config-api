@@ -8,7 +8,7 @@ class EndpointTypeCreate(BaseModel):
     type_id: str
     label: str
     description: Optional[str] = None
-    fields: Dict[str, FieldDefinition]
+    fields: Dict[str, FieldDefinition] = {}
 
 
 class EndpointTypeUpdate(BaseModel):

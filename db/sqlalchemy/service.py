@@ -6,29 +6,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models.service import Service, ServiceType
 from db.registry import register_repository
 from db.repos.service import ServiceRepository
+from db.merge import BlueprintResolver, patch_data, patch_fields
 from exceptions import APIError
 
 
 @register_repository(ServiceRepository)
-class SqlAlchemyServiceRepository(ServiceRepository):
+class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
+    _ENTITY_ID_FIELD = "service_id"
+    _PARENT_ID_FIELD = "endpoint_id"
+
     def __init__(self, session: AsyncSession):
         self._session = session
-
-    @staticmethod
-    def _resolve(
-        instance_data: Dict[str, Any],
-        type_fields: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        resolved: Dict[str, Any] = {}
-        for field_key, field_def in type_fields.items():
-            resolved[field_key] = {
-                "value": instance_data.get(field_key),
-                "field": field_def,
-            }
-        for data_key, data_value in instance_data.items():
-            if data_key not in type_fields:
-                resolved[data_key] = {"value": data_value, "field": None}
-        return resolved
 
     async def _get_service_type_or_raise(self, type_id: str) -> ServiceType:
         result = await self._session.execute(
@@ -44,35 +32,6 @@ class SqlAlchemyServiceRepository(ServiceRepository):
             select(Service).where(Service.service_id == service_id)
         )
         return result.scalar_one_or_none()
-
-    def _serialize_type(self, st: ServiceType) -> Dict[str, Any]:
-        return {
-            "type_id": st.type_id,
-            "label": st.label,
-            "description": st.description,
-            "fields": st.fields or {},
-            "created_at": st.created_at,
-            "updated_at": st.updated_at,
-        }
-
-    def _serialize_resolved(
-        self,
-        service: Service,
-        service_type: ServiceType,
-    ) -> Dict[str, Any]:
-        return {
-            "service_id": service.service_id,
-            "endpoint_id": service.endpoint_id,
-            "type_id": service.type_id,
-            "type_label": service_type.label,
-            "type_description": service_type.description,
-            "service_data": self._resolve(
-                cast(Dict[str, Any], service.service_data or {}),
-                cast(Dict[str, Any], service_type.fields or {}),
-            ),
-            "created_at": service.created_at,
-            "updated_at": service.updated_at,
-        }
 
     async def get_service_types(self) -> List[Dict[str, Any]]:
         result = await self._session.execute(select(ServiceType))
@@ -119,17 +78,7 @@ class SqlAlchemyServiceRepository(ServiceRepository):
         if description is not None:
             values["description"] = description
         if fields is not None:
-            current_fields = dict(st.fields or {})
-            for field_key, field_patch in fields.items():
-                if field_patch is None:
-                    current_fields.pop(field_key, None)
-                else:
-                    existing = dict(current_fields.get(field_key, {}))
-                    existing.update(
-                        {k: v for k, v in field_patch.items() if v is not None}
-                    )
-                    current_fields[field_key] = existing
-            values["fields"] = current_fields
+            values["fields"] = patch_fields(st.fields or {}, fields)
         if values:
             await self._session.execute(
                 update(ServiceType)
@@ -200,16 +149,10 @@ class SqlAlchemyServiceRepository(ServiceRepository):
         service = await self._get_service(service_id)
         if service is None:
             return None
-        current_data = dict(cast(Dict[str, Any], service.service_data or {}))
-        for key, value in service_data.items():
-            if value is None:
-                current_data.pop(key, None)
-            else:
-                current_data[key] = value
         await self._session.execute(
             update(Service)
             .where(Service.service_id == service_id)
-            .values(service_data=current_data)
+            .values(service_data=patch_data(service.service_data or {}, service_data))
         )
         await self._session.commit()
         return await self.get_service(service_id)
