@@ -5,6 +5,7 @@ MQTT_ENDPOINT_REGEX = r"^mqtt://.+:\d+$"
 OPCUA_ENDPOINT_REGEX = r"^opc.tcp://.+:\d+$"
 MESSAGE_FORMATS = Literal["csi:1.0"]
 
+
 class AnonymousCredentialsSchema(BaseModel):
     type: Literal["Anonymous"]
 
@@ -21,7 +22,7 @@ class CertificateCredentialsSchema(BaseModel):
     certificate: str
 
 
-class ApplicationData(RootModel[Dict[str, Union[str, 'ApplicationData']]]):
+class ApplicationData(RootModel[Dict[str, Union[str, "ApplicationData"]]]):
     pass
 
 
@@ -59,46 +60,69 @@ class SubscriptionConfigurationSchema(BaseModel):
 
 
 class SessionConfigurationSchema(BaseModel):
-    credentials: Union[AnonymousCredentialsSchema,
-                       UserNameCredentialsSchema, CertificateCredentialsSchema]
+    credentials: Union[
+        AnonymousCredentialsSchema,
+        UserNameCredentialsSchema,
+        CertificateCredentialsSchema,
+    ]
     subscriptions: Dict[str, SubscriptionConfigurationSchema]
     dynamicDeclarations: Dict[str, str] | None = None
 
 
 class ClientConfigurationSchema(BaseModel):
     endpoint: Annotated[str, StringConstraints(pattern=OPCUA_ENDPOINT_REGEX)]
-    securityPolicy: Literal["Invalid", "None", "Basic128", "Basic192", "Basic192Rsa15", "Basic256Rsa15", "Basic256Sha256",
-                                     "Aes128_Sha256_RsaOaep", "Aes256_Sha256_RsaPss", "PubSub_Aes128_CTR", "PubSub_Aes256_CTR", "Basic128Rsa15", "Basic256"] = "None"
-    messageSecurityMode: Literal["Invalid",
-                                          "None", "Sign", "SignAndEncrypt"] = "None"
+    securityPolicy: Literal[
+        "Invalid",
+        "None",
+        "Basic128",
+        "Basic192",
+        "Basic192Rsa15",
+        "Basic256Rsa15",
+        "Basic256Sha256",
+        "Aes128_Sha256_RsaOaep",
+        "Aes256_Sha256_RsaPss",
+        "PubSub_Aes128_CTR",
+        "PubSub_Aes256_CTR",
+        "Basic128Rsa15",
+        "Basic256",
+    ] = "None"
+    messageSecurityMode: Literal["Invalid", "None", "Sign", "SignAndEncrypt"] = "None"
     clientCertificate: str | None = None
     serverCertificate: str | None = None
     rootCertificates: List[str] | None = None
     rootCrls: List[str] | None = None
     sessions: Dict[str, SessionConfigurationSchema]
 
+
 class OpcuaClientModuleConfigV1(BaseModel):
     schemaVersion: Literal["1.0"]
-    mqttEndpoint: Annotated[str, StringConstraints(pattern=MQTT_ENDPOINT_REGEX)] | None = None
+    mqttEndpoint: (
+        Annotated[str, StringConstraints(pattern=MQTT_ENDPOINT_REGEX)] | None
+    ) = None
     clients: Dict[str, ClientConfigurationSchema]
+
 
 class NodeId(BaseModel):
     alias: str | None = None
     filter: str | None = None
-    
+
+
 class ApplicationProperties(BaseModel):
     routingKey: str
+
 
 class MqttOutput(BaseModel):
     topic: str
     messageFormat: Annotated[str, StringConstraints(pattern=r"^(csi:1.0|device:1.0)$")]
     qos: int
 
+
 class EdgeHubOutput(BaseModel):
     topic: str
     messageFormat: Annotated[str, StringConstraints(pattern=r"^(csi:1.0|device:1.0)$")]
     applicationProperties: ApplicationProperties
     applicationData: Dict[Any, Any]
+
 
 class Subscription(BaseModel):
     subscriptionName: str
@@ -115,5 +139,8 @@ class Subscription(BaseModel):
     edgeHubOutput: EdgeHubOutput
     nodeIds: Union[
         List[Annotated[str, StringConstraints(pattern=r"^ns=[0-9]+;[si]{1}=.+$")]],
-        Dict[Annotated[str, StringConstraints(pattern=r"^ns=[0-9]+;[si]{1}=.+$")], NodeId]
+        Dict[
+            Annotated[str, StringConstraints(pattern=r"^ns=[0-9]+;[si]{1}=.+$")], NodeId
+        ],
     ]
+

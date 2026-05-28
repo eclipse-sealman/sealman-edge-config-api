@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import relationship, Mapped, mapped_column
@@ -35,7 +36,14 @@ class Endpoint(Base):
 
     __tablename__ = "endpoints"
 
-    endpoint_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    endpoint_id: Mapped[str] = mapped_column(
+        Text, primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    device_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("devices.device_id", ondelete="CASCADE"),
+        nullable=False,
+    )
     type_id: Mapped[str] = mapped_column(
         Text, ForeignKey("endpoint_types.type_id"), nullable=False
     )
@@ -52,6 +60,4 @@ class Endpoint(Base):
         nullable=False,
     )
 
-    type: Mapped[EndpointType] = relationship(
-        "EndpointType", back_populates="endpoints", lazy="noload"
-    )
+    type: Mapped[EndpointType] = relationship("EndpointType", lazy="noload")

@@ -1,55 +1,40 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, List, Literal
+from typing import Optional, Dict, List
+
 
 class ComposeRepository(ABC):
+    @abstractmethod
+    async def create_or_update(
+        self,
+        name: str,
+        request: Dict,
+        content: Dict,
+        landing_page: Optional[bool] = False,
+        description: Optional[str] = None,
+    ) -> bool: ...
 
     @abstractmethod
-    def create_or_update(
-            self,
-            name: str,
-            request: Dict,
-            content: Dict,
-            landing_page: Optional[bool] = False,
-            description: Optional[str] = None,
-    ) -> bool:
-        ...
+    async def get(
+        self, name: str, landing_page: Optional[bool] = None
+    ) -> Optional[Dict]: ...
 
     @abstractmethod
-    def get(
-            self,
-            name: str,
-            landing_page: Optional[bool] = None
-    ) -> Optional[Dict]:
-        ...
+    async def delete(self, name: str, landing_page: Optional[bool] = None) -> bool: ...
 
     @abstractmethod
-    def delete(
-            self,
-            name: str,
-            landing_page: Optional[bool] = None
-    ) -> bool:
-        ...
+    async def list_names(self, prefix: Optional[str] = None) -> List[str]: ...
 
     @abstractmethod
-    def list_names(
-            self,
-            prefix: Optional[str] = None
-    ) -> List[str]:
-        ...
+    async def list(
+        self, prefix: Optional[str] = None, landing_page: Optional[bool] = None
+    ) -> List[Dict]: ...
 
     @abstractmethod
-    def list(
-            self,
-            prefix: Optional[str] = None,
-            landing_page: Optional[bool] = None
-    ) -> List[Dict]:
-        ...
-        
-    async def set_active_deployment(self, name: str) -> None:
-        ...
-        
-    async def get_active_deployment(self) -> Optional[str]:
-        ...
-        
-    async def delete_active_deployment(self) -> bool:
-        ...
+    async def set_active_deployment(self, name: str) -> None: ...
+
+    @abstractmethod
+    async def get_active_deployment(self) -> Optional[str]: ...
+
+    @abstractmethod
+    async def delete_active_deployment(self) -> bool: ...
+
