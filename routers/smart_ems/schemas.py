@@ -178,13 +178,13 @@ class DeviceConfig(BaseModel):
     requestConfigData: bool
     enabled: bool
     staging: bool
+    configureVpnContainer: bool = False
     note: str | None
     lastModifiedDate: datetime
 
 
 class DefaultSmartEMSTemplate(BaseModel):
     deviceType: str
-    hardwareVersion: str
     defaultConfig: DeviceConfig
     templateName: str
 
@@ -192,6 +192,8 @@ class ApplyDefaultTemplateResult(BaseModel):
     deviceId: str
     deviceTemplateName: str
     initTime: str
+    vpnContainerConfigured: bool | None = None
+    vpnContainerConfigError: str | None = None
 
 class PortForwardingRule(BaseModel):
     name: str = Field(

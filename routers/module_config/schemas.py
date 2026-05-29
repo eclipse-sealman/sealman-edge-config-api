@@ -15,6 +15,8 @@ class ModuleTwin(RootModel[Dict[Any, Any]]):
     pass
 class GetModuleTwinResponse(RootModel[Optional[ModuleTwin]]):
     pass
+class GetModuleTwinIdentityResponse(RootModel[Optional[ModuleTwin]]):
+    pass
 
 
 class GetModuleTwinBinaryResponse(BaseModel):

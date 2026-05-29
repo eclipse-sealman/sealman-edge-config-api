@@ -32,6 +32,7 @@ DEFAULT_SEMS_TEMPLATE_BLOB_FILE_NAME = "default-template.json"
 # load environment
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 ROOT_PATH = os.getenv("ROOT_PATH")
+ENABLE_DOCS = (os.getenv("ENABLE_DOCS", "false").lower() == "true")
 IOT_HUB_NAME = os.getenv("IOT_HUB_NAME")
 SAS_TOKEN = os.getenv("SAS_TOKEN")
 CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS")

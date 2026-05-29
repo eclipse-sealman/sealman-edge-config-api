@@ -272,7 +272,7 @@ class SmartEMS:
                 return results[0]
             else:
                 raise SEMSError(
-                    f"device filter for <{serial}> matches more than one device",
+                    f"device filter for <{serial}> matches {len(results)} devices",
                     status_code=400,
                 )
         else:
