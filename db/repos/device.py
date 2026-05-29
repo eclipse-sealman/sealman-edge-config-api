@@ -94,3 +94,9 @@ class DeviceRepository(ABC):
     ) -> Dict[str, Any]:
         pass
 
+
+    @abstractmethod
+    async def get_all_devices_raw(
+        self
+    ) -> List[Dict[str, Any]]:
+        pass

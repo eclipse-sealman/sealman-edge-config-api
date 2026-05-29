@@ -1,8 +1,8 @@
 from pydantic import BaseModel, RootModel, StringConstraints
-from typing import Annotated, Literal, Optional, Union, List, Dict, Any
+from typing import Annotated, Literal, Optional, Union, List, Dict
 
 MQTT_ENDPOINT_REGEX = r"^mqtt://.+:\d+$"
-OPCUA_ENDPOINT_REGEX = r"^opc.tcp://.+:\d+$"
+OPCUA_ENDPOINT_REGEX = r"^opc\.tcp://.+:\d+$"
 MESSAGE_FORMATS = Literal["csi:1.0"]
 
 
@@ -81,6 +81,8 @@ class ClientConfigurationSchema(BaseModel):
         "Basic256Sha256",
         "Aes128_Sha256_RsaOaep",
         "Aes256_Sha256_RsaPss",
+        "Aes128Sha256RsaOaep",
+        "Aes256Sha256RsaPss",
         "PubSub_Aes128_CTR",
         "PubSub_Aes256_CTR",
         "Basic128Rsa15",
@@ -88,6 +90,7 @@ class ClientConfigurationSchema(BaseModel):
     ] = "None"
     messageSecurityMode: Literal["Invalid", "None", "Sign", "SignAndEncrypt"] = "None"
     clientCertificate: str | None = None
+    clientPrivateKey: str | None = None
     serverCertificate: str | None = None
     rootCertificates: List[str] | None = None
     rootCrls: List[str] | None = None
@@ -100,47 +103,3 @@ class OpcuaClientModuleConfigV1(BaseModel):
         Annotated[str, StringConstraints(pattern=MQTT_ENDPOINT_REGEX)] | None
     ) = None
     clients: Dict[str, ClientConfigurationSchema]
-
-
-class NodeId(BaseModel):
-    alias: str | None = None
-    filter: str | None = None
-
-
-class ApplicationProperties(BaseModel):
-    routingKey: str
-
-
-class MqttOutput(BaseModel):
-    topic: str
-    messageFormat: Annotated[str, StringConstraints(pattern=r"^(csi:1.0|device:1.0)$")]
-    qos: int
-
-
-class EdgeHubOutput(BaseModel):
-    topic: str
-    messageFormat: Annotated[str, StringConstraints(pattern=r"^(csi:1.0|device:1.0)$")]
-    applicationProperties: ApplicationProperties
-    applicationData: Dict[Any, Any]
-
-
-class Subscription(BaseModel):
-    subscriptionName: str
-    requestedPublishingInterval: int
-    requestedLifetimeCount: int
-    requestedMaxKeepAliveCount: int
-    maxNotificationsPerPublish: int
-    publishingEnabled: bool
-    priority: int
-    monitoredItemSamplingInterval: int
-    monitoredItemQueueSize: int
-    monitoredItemDiscardOldest: bool
-    mqttOutput: MqttOutput
-    edgeHubOutput: EdgeHubOutput
-    nodeIds: Union[
-        List[Annotated[str, StringConstraints(pattern=r"^ns=[0-9]+;[si]{1}=.+$")]],
-        Dict[
-            Annotated[str, StringConstraints(pattern=r"^ns=[0-9]+;[si]{1}=.+$")], NodeId
-        ],
-    ]
-

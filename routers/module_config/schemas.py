@@ -15,6 +15,15 @@ class ModuleTwin(RootModel[Dict[Any, Any]]):
     pass
 class GetModuleTwinResponse(RootModel[Optional[ModuleTwin]]):
     pass
+class GetModuleTwinIdentityResponse(RootModel[Optional[ModuleTwin]]):
+    pass
+
+
+class GetModuleTwinBinaryResponse(BaseModel):
+    filename: str
+    contentType: str
+    encoding: Literal["base64"]
+    data: str
 
 class ModuleConfStatus(RootModel[Dict[str, ConfigStatus]]):
     pass
