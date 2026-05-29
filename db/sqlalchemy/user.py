@@ -17,7 +17,7 @@ class UserMapper:
             "id": cast(str, user.id),
             "preferred_username": cast(str, user.preferred_username),
             "is_admin": cast(bool, user.is_admin),
-            "is_new_user": cast(bool, user.is_new_user),
+            "is_new": cast(bool, user.is_new),
         }
         if include_teams:
             teams = sorted(user.teams, key=lambda item: item.name)
@@ -38,14 +38,14 @@ class SQLAlchemyUserRepository(UserRepository):
         )
         return result.scalar_one_or_none()
 
-    async def list(self, is_new_user: Optional[bool] = None) -> List[dict[str, Any]]:
+    async def list(self, is_new: Optional[bool] = None) -> List[dict[str, Any]]:
         query = (
             select(User)
             .options(selectinload(User.teams))
             .order_by(User.preferred_username)
         )
-        if is_new_user is not None:
-            query = query.where(User.is_new_user == is_new_user)
+        if is_new is not None:
+            query = query.where(User.is_new == is_new)
 
         result = await self._session.execute(query)
         users = result.scalars().all()
@@ -74,13 +74,13 @@ class SQLAlchemyUserRepository(UserRepository):
         user_id: str,
         preferred_username: str,
         is_admin: bool = False,
-        is_new_user: bool = True,
+        is_new: bool = True,
     ) -> dict[str, Any]:
         user = User(
             id=user_id,
             preferred_username=preferred_username,
             is_admin=is_admin,
-            is_new_user=is_new_user,
+            is_new=is_new,
         )
         self._session.add(user)
         await self._session.commit()
@@ -92,7 +92,7 @@ class SQLAlchemyUserRepository(UserRepository):
         user_id: str,
         preferred_username: str,
         is_admin: bool,
-        is_new_user: bool,
+        is_new: bool,
     ) -> Optional[dict[str, Any]]:
         user = await self._session.get(User, user_id)
         if user is None:
@@ -100,7 +100,7 @@ class SQLAlchemyUserRepository(UserRepository):
 
         setattr(user, "preferred_username", preferred_username)
         setattr(user, "is_admin", is_admin)
-        setattr(user, "is_new_user", is_new_user)
+        setattr(user, "is_new", is_new)
 
         await self._session.commit()
         await self._session.refresh(user)

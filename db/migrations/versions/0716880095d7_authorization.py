@@ -41,11 +41,11 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
     )
-    op.create_table('user',
+    op.create_table('users',
     sa.Column('id', sa.Text(), nullable=False),
     sa.Column('preferred_username', sa.Text(), nullable=False),
     sa.Column('is_admin', sa.Boolean(), nullable=False),
-    sa.Column('is_new_user', sa.Boolean(), nullable=False),
+    sa.Column('is_new', sa.Boolean(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('role_actions',
@@ -74,7 +74,7 @@ def upgrade() -> None:
     sa.Column('user_id', sa.String(), nullable=False),
     sa.Column('team_id', sa.UUID(), nullable=False),
     sa.ForeignKeyConstraint(['team_id'], ['teams.id'], ),
-    sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('user_id', 'team_id')
     )
     op.alter_column('active_deployment', 'updated_at',
@@ -96,7 +96,7 @@ def downgrade() -> None:
     op.drop_table('team_assigned_roles')
     op.drop_table('teams')
     op.drop_table('role_actions')
-    op.drop_table('user')
+    #op.drop_table('users')
     op.drop_table('scopes')
     op.drop_table('roles')
     op.drop_table('actions')

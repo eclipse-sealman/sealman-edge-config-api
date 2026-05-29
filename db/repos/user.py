@@ -5,7 +5,7 @@ from typing import Any, List, Optional
 class UserRepository(ABC):
 
     @abstractmethod
-    async def list(self, is_new_user: Optional[bool] = None) -> List[dict[str, Any]]:
+    async def list(self, is_new: Optional[bool] = None) -> List[dict[str, Any]]:
         pass
 
     @abstractmethod
@@ -22,7 +22,7 @@ class UserRepository(ABC):
         user_id: str,
         preferred_username: str,
         is_admin: bool = False,
-        is_new_user: bool = True,
+        is_new: bool = True,
     ) -> dict[str, Any]:
         pass
 
@@ -32,7 +32,7 @@ class UserRepository(ABC):
         user_id: str,
         preferred_username: str,
         is_admin: bool,
-        is_new_user: bool,
+        is_new: bool,
     ) -> Optional[dict[str, Any]]:
         pass
 

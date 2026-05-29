@@ -220,10 +220,10 @@ async def delete_team(
 
 @auth.get("/users", response_model=UserListResponse)
 async def get_users(
-    is_new_user: bool | None = Query(default=None),
+    is_new: bool | None = Query(default=None),
     user_repo: UserRepository = Depends(get_repository(UserRepository)),
 ):
-    return await user_repo.list(is_new_user=is_new_user)
+    return await user_repo.list(is_new=is_new)
 
 
 @auth.get("/scopes", response_model=ScopeListResponse)

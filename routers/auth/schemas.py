@@ -57,7 +57,7 @@ class UserSummaryResponse(BaseModel):
   id: str
   preferred_username: str
   is_admin: bool
-  is_new_user: bool
+  is_new: bool
 
 
 class TeamDetailsResponse(TeamSummaryResponse):

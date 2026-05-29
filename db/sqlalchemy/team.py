@@ -29,7 +29,7 @@ class TeamMapper:
             "id": cast(str, user.id),
             "preferred_username": cast(str, user.preferred_username),
             "is_admin": cast(bool, user.is_admin),
-            "is_new_user": cast(bool, user.is_new_user),
+            "is_new": cast(bool, user.is_new),
         }
 
     @staticmethod
