@@ -1,6 +1,7 @@
-from typing import List
+from typing import Any, Dict, List, Literal
 from uuid import UUID
-from pydantic import BaseModel
+
+from pydantic import BaseModel, RootModel
 
 
 class UserPermissions(BaseModel):
@@ -36,3 +37,78 @@ class ActionResponse(BaseModel):
     description: str | None = None
     is_global: bool | None = None
 
+
+
+class ScopeResponse(BaseModel):
+  id: UUID
+  name: str
+  description: str | None = None
+  attr: Dict[str, Any]
+  access_rule: Literal["ALL", "ANY"]
+
+
+class TeamSummaryResponse(BaseModel):
+  id: UUID
+  name: str
+  scope_id: UUID | None = None
+
+
+class UserSummaryResponse(BaseModel):
+  id: str
+  preferred_username: str
+  is_admin: bool
+  is_new_user: bool
+
+
+class TeamDetailsResponse(TeamSummaryResponse):
+  scope: ScopeResponse | None = None
+  roles: List[RoleResponse] = []
+  users: List[UserSummaryResponse] = []
+
+
+class UserWithTeamsResponse(UserSummaryResponse):
+  teams: List[TeamSummaryResponse] = []
+
+
+class TeamCreateRequest(BaseModel):
+  name: str
+  scope_id: UUID | None = None
+
+
+class TeamUpdateRequest(BaseModel):
+  name: str
+  scope_id: UUID | None = None
+
+
+class TeamAddUserRequest(BaseModel):
+  user_id: str
+
+
+class TeamAddRoleRequest(BaseModel):
+  role_id: UUID
+
+
+class ScopeCreateRequest(BaseModel):
+  name: str
+  description: str | None = None
+  attr: Dict[str, Any]
+  access_rule: Literal["ALL", "ANY"]
+
+
+class ScopeUpdateRequest(BaseModel):
+  name: str
+  description: str | None = None
+  attr: Dict[str, Any]
+  access_rule: Literal["ALL", "ANY"]
+
+
+class TeamListResponse(RootModel[List[TeamSummaryResponse]]):
+  pass
+
+
+class UserListResponse(RootModel[List[UserWithTeamsResponse]]):
+  pass
+
+
+class ScopeListResponse(RootModel[List[ScopeResponse]]):
+  pass

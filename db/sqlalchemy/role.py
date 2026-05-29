@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional, cast
 from uuid import UUID
 
 from sqlalchemy import delete, select
@@ -12,19 +12,32 @@ from db.repos.role import RoleRepository
 from exceptions import APIError
 
 
-@register_repository(RoleRepository)
-class SqlAlchemyRoleRepository(RoleRepository):
-    def __init__(self, session: AsyncSession):
-        self._session = session
-
+class RoleMapper:
     @staticmethod
-    def _to_role_dict(role: Role) -> dict[str, Any]:
+    def to_dict(role: Role) -> dict[str, Any]:
         return {
             "id": role.id,
             "name": role.name,
             "description": role.description,
             "actions": sorted([action.name for action in role.allowed_actions]),
         }
+
+
+@register_repository(RoleRepository)
+class SqlAlchemyRoleRepository(RoleRepository):
+    def __init__(self, session: AsyncSession):
+        self._session = session
+
+    async def get(self, role_id: UUID) -> Optional[dict[str, Any]]:
+        result = await self._session.execute(
+            select(Role)
+            .options(selectinload(Role.allowed_actions))
+            .where(Role.id == role_id)
+        )
+        role = result.scalar_one_or_none()
+        if role is None:
+            return None
+        return RoleMapper.to_dict(role)
 
     async def _get_role_or_raise(self, role_id: UUID) -> Role:
         result = await self._session.execute(
@@ -62,7 +75,8 @@ class SqlAlchemyRoleRepository(RoleRepository):
         )
         actions = result.scalars().all()
 
-        missing = sorted(set(action_names) - {a.name for a in actions})
+        resolved_action_names: set[str] = {cast(str, a.name) for a in actions}
+        missing = sorted(set(action_names) - resolved_action_names)
         if missing:
             raise APIError(f"Actions not found: {', '.join(missing)}", 404)
 
@@ -73,17 +87,7 @@ class SqlAlchemyRoleRepository(RoleRepository):
             select(Role).options(selectinload(Role.allowed_actions)).order_by(Role.name)
         )
         roles = result.scalars().all()
-        return [self._to_role_dict(role) for role in roles]
-
-    async def list_actions(self) -> list[dict[str, Any]]:
-        result = await self._session.execute(
-            select(Action).order_by(Action.name)
-        )
-        actions = result.scalars().all()
-        return [
-            {"name": a.name, "description": a.description, "is_global": a.is_global}
-            for a in actions
-        ]
+        return [RoleMapper.to_dict(role) for role in roles]
 
     async def create_role(self, name: str, description: str | None, action_names: list[str]) -> dict[str, Any]:
         await self._ensure_role_name_unique(name)
@@ -101,7 +105,7 @@ class SqlAlchemyRoleRepository(RoleRepository):
             .options(selectinload(Role.allowed_actions))
             .where(Role.id == role.id)
         )
-        return self._to_role_dict(result.scalar_one())
+        return RoleMapper.to_dict(result.scalar_one())
 
     async def update_role(
         self,
@@ -112,12 +116,12 @@ class SqlAlchemyRoleRepository(RoleRepository):
         role = await self._get_role_or_raise(role_id)
         await self._ensure_role_name_unique(name, exclude_role_id=role_id)
 
-        role.name = name
-        role.description = description
+        setattr(role, "name", name)
+        setattr(role, "description", description)
         await self._session.commit()
         await self._session.refresh(role)
 
-        return self._to_role_dict(role)
+        return RoleMapper.to_dict(role)
 
     async def add_actions_to_role(
         self,
@@ -128,8 +132,11 @@ class SqlAlchemyRoleRepository(RoleRepository):
 
         actions = await self._resolve_actions(action_names)
 
-        assigned_action_names = {action.name for action in role.allowed_actions}
-        conflicting_actions = sorted({a.name for a in actions} & assigned_action_names)
+        assigned_action_names: set[str] = {
+            cast(str, action.name) for action in role.allowed_actions
+        }
+        requested_action_names: set[str] = {cast(str, a.name) for a in actions}
+        conflicting_actions = sorted(requested_action_names & assigned_action_names)
         if conflicting_actions:
             raise APIError(
                 f"Actions already assigned to role: {', '.join(conflicting_actions)}",
@@ -140,7 +147,7 @@ class SqlAlchemyRoleRepository(RoleRepository):
         await self._session.commit()
         await self._session.refresh(role)
 
-        return self._to_role_dict(role)
+        return RoleMapper.to_dict(role)
 
     async def remove_action_from_role(
         self,
@@ -162,4 +169,4 @@ class SqlAlchemyRoleRepository(RoleRepository):
         await self._session.commit()
 
         refreshed_role = await self._get_role_or_raise(role_id)
-        return self._to_role_dict(refreshed_role)
+        return RoleMapper.to_dict(refreshed_role)
