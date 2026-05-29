@@ -1,6 +1,4 @@
 import asyncio
-import importlib
-import pkgutil
 import selectors
 from logging.config import fileConfig
 
@@ -11,12 +9,10 @@ from alembic import context
 
 # Import the metadata from our models so Alembic can autogenerate migrations.
 from constants import POSTGRES_URL
-import db.models
+from db.models import auto_import_models
 from db.base import Base
 
-package = db.models
-for _, module_name, _ in pkgutil.iter_modules(package.__path__):
-    importlib.import_module(f"{package.__name__}.{module_name}")
+auto_import_models()
 
 # Alembic Config object — gives access to values in alembic.ini.
 config = context.config

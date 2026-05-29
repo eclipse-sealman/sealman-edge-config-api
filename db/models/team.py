@@ -18,7 +18,7 @@ team_assigned_roles = Table(
 team_assigned_users = Table(
     "team_assigned_users",
     Base.metadata,
-    Column("user_id", String, ForeignKey("user.id"), primary_key=True),
+    Column("user_id", String, ForeignKey("users.id"), primary_key=True),
     Column("team_id", UUID(as_uuid=True), ForeignKey("teams.id"), primary_key=True),
 )
 
