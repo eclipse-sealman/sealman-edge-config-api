@@ -96,7 +96,7 @@ def downgrade() -> None:
     op.drop_table('team_assigned_roles')
     op.drop_table('teams')
     op.drop_table('role_actions')
-    #op.drop_table('users')
+    op.drop_table('users')
     op.drop_table('scopes')
     op.drop_table('roles')
     op.drop_table('actions')
