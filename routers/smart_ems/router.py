@@ -109,9 +109,9 @@ async def post_smart_ems_secret_request(device: str,
     return await _post_smart_ems_device_secret_request(device, renew_task_repo)
 
 @smart_ems.get("/smartems/default-template", response_model=DefaultSmartEMSTemplate, tags=["Smart-EMS"])
-async def get_smart_ems_default_template(device_type: str, hardware_version: str):
+async def get_smart_ems_default_template(device_type: str):
 
-    return await _get_smart_ems_default_template(device_type, hardware_version)
+    return await _get_smart_ems_default_template(device_type)
 
 @smart_ems.post("/{device}/smartems/apply-default-template", response_model=ApplyDefaultTemplateResult, tags=["Smart-EMS"])
 async def post_smart_ems_apply_default_template(device: str,

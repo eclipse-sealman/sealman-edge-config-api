@@ -1,16 +1,18 @@
 import datetime
 import logging
+import re
 from smart_ems import SmartEMS
 from routers.smart_ems.schemas import ApplyDefaultTemplateResult
 from exceptions import SEMSFirmwareError, SEMSTemplateError
 
+logger = logging.getLogger("EdgeConfigAPI")
 
 EAS_INIT_LABEL = "eas_init_at"
 EAS_UPDATE_LABEL = "eas_update_at"
 
 
-def get_configuration_name(type_config: dict, hardware_version: str) -> str:
-    return f"{type_config.get('configurationVersion')} [{hardware_version}: {type_config.get('firmwareVersion')}]"
+def get_configuration_name(type_config: dict) -> str:
+    return f"{type_config.get('configurationVersion')} [FW: {type_config.get('firmwareVersion')}]"
 
 
 def validate_minimum_firmware(
@@ -26,7 +28,15 @@ def validate_minimum_firmware(
         )
 
     def version_tuple(v):
-        return tuple(map(int, (v.split("."))))
+        # Strip non-numeric suffixes like _rc2, -beta, etc.
+        # Extract numeric version parts (e.g., "1.9.2" from "1.9.2_rc2")
+        numeric_version = re.match(r'^(\d+(?:\.\d+)*)', v)
+        if not numeric_version:
+            raise SEMSFirmwareError(
+                f"Invalid firmware version format: [{v}]",
+                400
+            )
+        return tuple(map(int, numeric_version.group(1).split(".")))
 
     if version_tuple(current_firmware) < version_tuple(minimum_firmware):
         raise SEMSFirmwareError(
@@ -54,7 +64,6 @@ def validate_template_data(template_data: dict):
 class TemplateConfigurator:
     def __init__(
         self,
-        sems_api: SmartEMS,
         initial_config: bool,
         eas_init_time=datetime.datetime.now(tz=datetime.timezone.utc).isoformat(),
     ):
@@ -65,7 +74,6 @@ class TemplateConfigurator:
             if initial_config
             else [{"name": EAS_UPDATE_LABEL, "variableValue": self.eas_init_time}]
         )
-        self.sems_api = sems_api
         self.template_set = {}
 
     async def configure_template(
@@ -79,7 +87,7 @@ class TemplateConfigurator:
 
         template_data = self.template_set.get(self.configuration_name)
         if template_data is None:
-            template_data = await self.sems_api.get_template_by_template_name(
+            template_data = await SmartEMS.get_template_by_template_name(
                 self.configuration_name
             )
             self.template_set[self.configuration_name] = template_data
@@ -103,13 +111,49 @@ class TemplateConfigurator:
         self.__populate_description(body)
         self.__populate_variables(body, self.type_config)
 
-        await self.sems_api.edit_device(self.device_info["id"], body)
+        await SmartEMS.edit_device(self.device_info["id"], body)
 
-        return ApplyDefaultTemplateResult(
+        result = ApplyDefaultTemplateResult(
             deviceId=self.device_id,
             deviceTemplateName=self.configuration_name,
             initTime=f"{self.eas_init_time} UTC",
         )
+
+        # if VPN configuration is required, we need to find corresponding VPN container client and update its configuration as well
+        if self.type_config.get("configureVpnContainer", False):
+            try:
+                vpn_client = await SmartEMS.get_vpn_client_by_serial(self.device_id)
+                vpn_id = vpn_client["id"]
+                vpn_body = {
+                    "name": vpn_client["name"],
+                    "serialNumber": vpn_client["serialNumber"],
+                    "labels": [],
+                    "accessTags": body["accessTags"], # same access tags as device
+                    "staging": False,
+                    "enabled": True,
+                    "virtualSubnetCidr": 26,
+                    "masqueradeType": "default",
+                    "masquerades": [],
+                    "variables": [],
+                    "endpointDevices": [],
+                    "certificateBehaviours": [
+                        {
+                            "certificateType": 1,
+                            "generateCertificate": False,
+                            "revokeCertificate": False
+                        }
+                    ]
+                }
+                await SmartEMS.edit_device(vpn_id, vpn_body)
+                result.vpnContainerConfigured = True
+            except Exception as e:
+                # In case VPN client is not found or any error occurs during fetching, we log the error and continue
+                # with device configuration since main goal is to apply template to device and VPN configuration is additional step
+                result.vpnContainerConfigured = False
+                result.vpnContainerConfigError = str(e)
+                logger.error(f"Error while fetching VPN client for device [{self.device_id}]: {e}")
+
+        return result
 
     def __set_config(self):
         type_config = self.config["deviceTypes"].get(f"{self.device_type_id}")
@@ -122,9 +166,7 @@ class TemplateConfigurator:
         self.type_config = type_config
 
         # Get configuration from SEMS
-        self.configuration_name = get_configuration_name(
-            type_config, self.device_info.get("hardwareVersion", "")
-        )
+        self.configuration_name = get_configuration_name(type_config)
         logging.info(f"Configuration name: {self.configuration_name}")
 
     def __set_device(self, device: dict):

@@ -137,5 +137,66 @@ async def populate_cache_from_iot_hub_query(repo: DeviceRepository):
                 responses[get_devices_url].status_code,
             )
 
+    # Override deviceStatus with $edgeHub module connectionState, which reflects
+    # the actual live connection for IoT Edge devices (device-level connectionState
+    # is always Disconnected for Edge devices).
+    try:
+        edgehub_map = await get_device_map_edgehub()
+        for device in devices:
+            edgehub_state = edgehub_map.get(device["deviceName"])
+            if edgehub_state is not None:
+                device["deviceStatus"] = edgehub_state
+    except Exception as e:
+        logger.warning(
+            "Could not fetch $edgeHub connection states, falling back to device-level connectionState: %s",
+            e,
+        )
+
     await repo.upsert_device_snapshot(devices)
     logger.info("Device cache populated successfully with %d devices", len(devices))
+
+
+async def get_device_map_edgehub():
+    get_devices_url = f"https://{IOT_HUB_NAME}/devices/query?api-version=2021-04-12"
+    device_map = {}
+    continuation_token = None
+    has_more_pages = True
+
+    while has_more_pages:
+        responses = {}
+        headers = get_iothub_auth_headers()
+
+        if continuation_token:
+            headers["x-ms-continuation"] = continuation_token
+
+        await asyncio.gather(
+            post_async(
+                get_devices_url,
+                responses,
+                headers={
+                    **headers,
+                    "Content-Type": "application/json",
+                },
+                _json={
+                    "query": "SELECT deviceId, moduleId, connectionState FROM devices.modules WHERE moduleId = '$edgeHub'"
+                },
+                timeout=15,
+            ),
+        )
+        resp = responses[get_devices_url]
+
+        if resp.status_code == 200:
+            for device_obj in resp.json():
+                device_id = device_obj["deviceId"]
+                connection_state = device_obj["connectionState"]
+                device_map[device_id] = connection_state
+
+            continuation_token = resp.headers.get("x-ms-continuation")
+            has_more_pages = continuation_token is not None
+        else:
+            raise IoTBackendAPIError(
+                f"could not retrieve any device from iot-hub: {responses[get_devices_url].text}",
+                responses[get_devices_url].status_code,
+            )
+
+    return device_map
