@@ -9,7 +9,6 @@ from db.repos.action import ActionRepository
 from db.repos.scope import ScopeRepository
 from db.repos.team import TeamRepository
 from db.repos.user_context import UserContextRepository
-from db.session import get_repository
 from exceptions import UserNotFound
 from routers.auth.routes import action, role, scope, team
 from db.repos.role import RoleRepository
@@ -37,20 +36,22 @@ from routers.auth.schemas import (
 from routers.base_api_router import BaseAPIRouter
 
 
-auth = BaseAPIRouter()
+auth = BaseAPIRouter(
+    prefix="/auth",
+    tags=["Authorization"]
+)
 
-
-@auth.get("/auth/roles", response_model=list[RoleResponse], tags=["Auth"])
+@auth.get("/roles", response_model=list[RoleResponse])
 async def get_roles(role_repo: RoleRepository = Depends(get_repository(RoleRepository))):
     return await role.get_roles(role_repo)
 
 
-@auth.get("/auth/actions", response_model=list[ActionResponse], tags=["Auth"])
+@auth.get("/actions", response_model=list[ActionResponse])
 async def get_actions(action_repo: ActionRepository = Depends(get_repository(ActionRepository))):
     return await action.get_actions(action_repo)
 
 
-@auth.post("/auth/roles", response_model=RoleResponse, tags=["Auth"])
+@auth.post("/roles", response_model=RoleResponse)
 async def post_role(
     body: RoleCreateRequest,
     role_repo: RoleRepository = Depends(get_repository(RoleRepository)),
@@ -58,7 +59,7 @@ async def post_role(
     return await role.post_role(body, role_repo)
 
 
-@auth.put("/auth/roles/{role_id}", response_model=RoleResponse, tags=["Auth"])
+@auth.put("/roles/{role_id}", response_model=RoleResponse)
 async def put_role_by_id(
     role_id: UUID,
     body: RoleUpdateRequest,
@@ -67,7 +68,7 @@ async def put_role_by_id(
     return await role.put_role_by_id(role_id, body, role_repo)
 
 
-@auth.post("/auth/roles/{role_id}/actions", response_model=RoleResponse, tags=["Auth"])
+@auth.post("/roles/{role_id}/actions", response_model=RoleResponse)
 async def post_role_actions(
     role_id: UUID,
     body: RoleActionsRequest,
@@ -76,11 +77,7 @@ async def post_role_actions(
     return await role.post_role_actions(role_id, body, role_repo)
 
 
-@auth.delete(
-    "/auth/roles/{role_id}/actions/{name}",
-    response_model=RoleResponse,
-    tags=["Auth"],
-)
+@auth.delete("/roles/{role_id}/actions/{name}", response_model=RoleResponse)
 async def delete_role_action_by_name(
     role_id: UUID,
     name: str,
@@ -89,9 +86,15 @@ async def delete_role_action_by_name(
     return await role.delete_role_action_by_name(role_id, name, role_repo)
 
 
-@auth.get(
-    "/auth/permissions/{resource_type}", response_model=UserPermissions, tags=["Auth"]
-)
+@auth.delete("/roles/{role_id}", response_model=None, status_code=204)
+async def delete_role(
+    role_id: UUID,
+    role_repo: RoleRepository = Depends(get_repository(RoleRepository)),
+):
+    return await role.delete_role(role_id, role_repo)
+
+
+@auth.get("/permissions/{resource_type}", response_model=UserPermissions)
 async def get_permissions(
     resource_type: str,
     resource_id: str | None = None,
@@ -136,17 +139,17 @@ async def get_permissions(
     )
 
 
-@auth.get("/teams", response_model=TeamListResponse, tags=["Auth"])
+@auth.get("/teams", response_model=TeamListResponse)
 async def get_teams(team_repo: TeamRepository = Depends(get_repository(TeamRepository))):
     return await team.get_teams(team_repo)
 
 
-@auth.get("/teams/{team_id}", response_model=TeamDetailsResponse, tags=["Auth"])
+@auth.get("/teams/{team_id}", response_model=TeamDetailsResponse)
 async def get_team_by_id(team_id: UUID, team_repo: TeamRepository = Depends(get_repository(TeamRepository))):
     return await team.get_team_by_id(team_id, team_repo)
 
 
-@auth.post("/teams", response_model=TeamSummaryResponse, tags=["Auth"])
+@auth.post("/teams", response_model=TeamSummaryResponse)
 async def create_team(
     request: TeamCreateRequest,
     team_repo: TeamRepository = Depends(get_repository(TeamRepository)),
@@ -155,7 +158,7 @@ async def create_team(
     return await team.create_team(request, team_repo, scope_repo)
 
 
-@auth.put("/teams/{team_id}", response_model=TeamSummaryResponse, tags=["Auth"])
+@auth.put("/teams/{team_id}", response_model=TeamSummaryResponse)
 async def update_team(
     team_id: UUID,
     request: TeamUpdateRequest,
@@ -165,7 +168,7 @@ async def update_team(
     return await team.update_team(team_id, request, team_repo, scope_repo)
 
 
-@auth.post("/teams/{team_id}/users", response_model=TeamDetailsResponse, tags=["Auth"])
+@auth.post("/teams/{team_id}/users", response_model=TeamDetailsResponse)
 async def add_user_to_team(
     team_id: UUID,
     request: TeamAddUserRequest,
@@ -175,7 +178,7 @@ async def add_user_to_team(
     return await team.add_user_to_team(team_id, request, team_repo, user_repo)
 
 
-@auth.delete("/teams/{team_id}/users/{user_id}", response_model=None, status_code=204, tags=["Auth"])
+@auth.delete("/teams/{team_id}/users/{user_id}", response_model=None, status_code=204)
 async def remove_user_from_team(
     team_id: UUID,
     user_id: str,
@@ -184,7 +187,7 @@ async def remove_user_from_team(
     return await team.remove_user_from_team(team_id, user_id, team_repo)
 
 
-@auth.post("/teams/{team_id}/roles", response_model=TeamDetailsResponse, tags=["Auth"])
+@auth.post("/teams/{team_id}/roles", response_model=TeamDetailsResponse)
 async def add_role_to_team(
     team_id: UUID,
     request: TeamAddRoleRequest,
@@ -194,7 +197,7 @@ async def add_role_to_team(
     return await team.add_role_to_team(team_id, request, team_repo, role_repo)
 
 
-@auth.delete("/teams/{team_id}/roles/{role_id}", response_model=None, status_code=204, tags=["Auth"])
+@auth.delete("/teams/{team_id}/roles/{role_id}", response_model=None, status_code=204)
 async def remove_role_from_team(
     team_id: UUID,
     role_id: UUID,
@@ -203,7 +206,15 @@ async def remove_role_from_team(
     return await team.remove_role_from_team(team_id, role_id, team_repo)
 
 
-@auth.get("/users", response_model=UserListResponse, tags=["Auth"])
+@auth.delete("/teams/{team_id}", response_model=None, status_code=204)
+async def delete_team(
+    team_id: UUID,
+    team_repo: TeamRepository = Depends(get_repository(TeamRepository)),
+):
+    return await team.delete_team(team_id, team_repo)
+
+
+@auth.get("/users", response_model=UserListResponse)
 async def get_users(
     is_new_user: bool | None = Query(default=None),
     user_repo: UserContextRepository = Depends(get_repository(UserContextRepository)),
@@ -211,12 +222,12 @@ async def get_users(
     return await user_repo.list(is_new_user=is_new_user)
 
 
-@auth.get("/scopes", response_model=ScopeListResponse, tags=["Auth"])
+@auth.get("/scopes", response_model=ScopeListResponse)
 async def get_scopes(scope_repo: ScopeRepository = Depends(get_repository(ScopeRepository))):
     return await scope.get_scopes(scope_repo)
 
 
-@auth.post("/scopes", response_model=ScopeResponse, tags=["Auth"])
+@auth.post("/scopes", response_model=ScopeResponse)
 async def create_scope(
     request: ScopeCreateRequest,
     scope_repo: ScopeRepository = Depends(get_repository(ScopeRepository)),
@@ -224,10 +235,20 @@ async def create_scope(
     return await scope.create_scope(request, scope_repo)
 
 
-@auth.put("/scopes/{scope_id}", response_model=ScopeResponse, tags=["Auth"])
+@auth.put("/scopes/{scope_id}", response_model=ScopeResponse)
 async def update_scope(
     scope_id: UUID,
     request: ScopeUpdateRequest,
     scope_repo: ScopeRepository = Depends(get_repository(ScopeRepository)),
 ):
     return await scope.update_scope(scope_id, request, scope_repo)
+
+
+@auth.delete("/scopes/{scope_id}", response_model=None, status_code=204)
+async def delete_scope(
+    scope_id: UUID,
+    scope_repo: ScopeRepository = Depends(get_repository(ScopeRepository)),
+):
+    return await scope.delete_scope(scope_id, scope_repo)
+
+

@@ -40,3 +40,8 @@ class RoleRepository(ABC):
         action_name: str,
     ) -> dict[str, Any]:
         pass
+
+    @abstractmethod
+    async def delete_role(self, role_id: UUID) -> None:
+        pass
+

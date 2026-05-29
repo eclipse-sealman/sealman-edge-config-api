@@ -1,7 +1,7 @@
 from typing import Any, List, Optional, cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -12,6 +12,7 @@ from db.registry import register_repository
 from db.repos.team import TeamRepository
 from db.sqlalchemy.role import RoleMapper
 from db.sqlalchemy.scope import ScopeMapper
+from exceptions import APIError
 
 
 class TeamMapper:
@@ -163,3 +164,19 @@ class SQLAlchemyTeamRepository(TeamRepository):
         team.assigned_roles.remove(target_role)
         await self._session.commit()
         return True
+
+    async def delete(self, team_id: UUID) -> None:
+        team = await self._get_team_with_details(team_id)
+        if team is None:
+            raise APIError(f"Team '{team_id}' was not found", 404)
+
+        if team.users:
+            raise APIError(
+                f"Team has {len(team.users)} assigned user(s) and cannot be deleted",
+                409,
+            )
+
+        # DB CASCADE handles team_assigned_roles automatically
+        await self._session.execute(sa_delete(Team).where(Team.id == team_id))
+        await self._session.commit()
+

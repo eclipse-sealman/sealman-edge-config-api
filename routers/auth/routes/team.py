@@ -146,3 +146,8 @@ async def remove_role_from_team(
     removed = await team_repo.remove_role(team_id, role_id)
     if not removed:
         raise APIError(f"Role '{role_id}' is not assigned to team '{team_id}'", 404)
+
+
+async def delete_team(team_id: UUID, team_repo: TeamRepository):
+    await team_repo.delete(team_id)
+

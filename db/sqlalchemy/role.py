@@ -170,3 +170,10 @@ class SqlAlchemyRoleRepository(RoleRepository):
 
         refreshed_role = await self._get_role_or_raise(role_id)
         return RoleMapper.to_dict(refreshed_role)
+
+    async def delete_role(self, role_id: UUID) -> None:
+        await self._get_role_or_raise(role_id)
+        # DB CASCADE handles role_actions and team_assigned_roles automatically
+        await self._session.execute(delete(Role).where(Role.id == role_id))
+        await self._session.commit()
+

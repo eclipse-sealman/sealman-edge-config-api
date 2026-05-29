@@ -49,3 +49,8 @@ class TeamRepository(ABC):
     @abstractmethod
     async def remove_role(self, team_id: UUID, role_id: UUID) -> bool:
         pass
+
+    @abstractmethod
+    async def delete(self, team_id: UUID) -> None:
+        pass
+

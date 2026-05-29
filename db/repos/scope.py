@@ -38,3 +38,7 @@ class ScopeRepository(ABC):
     async def delete(self, scope_id: UUID) -> bool:
         pass
 
+    @abstractmethod
+    async def list_teams(self, scope_id: UUID) -> List[dict[str, Any]]:
+        pass
+

@@ -10,7 +10,7 @@ from db.base import Base
 role_actions = Table(
     "role_actions",
     Base.metadata,
-    Column("role_id", UUID(as_uuid=True), ForeignKey("roles.id"), primary_key=True),
+    Column("role_id", UUID(as_uuid=True), ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True),
     Column("action_name", String, ForeignKey("actions.name"), primary_key=True),
 )
 
@@ -21,4 +21,4 @@ class Role(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, unique=True, nullable=False)
     description = Column(Text)
-    allowed_actions = relationship("Action", secondary=role_actions)
+    allowed_actions = relationship("Action", secondary=role_actions, passive_deletes=True)

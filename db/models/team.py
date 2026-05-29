@@ -10,8 +10,8 @@ from db.base import Base
 team_assigned_roles = Table(
     "team_assigned_roles",
     Base.metadata,
-    Column("team_id", UUID(as_uuid=True), ForeignKey("teams.id"), primary_key=True),
-    Column("role_id", UUID(as_uuid=True), ForeignKey("roles.id"), primary_key=True),
+    Column("team_id", UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True),
+    Column("role_id", UUID(as_uuid=True), ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True),
 )
 
 
@@ -23,5 +23,5 @@ class Team(Base):
     scope_id = Column(UUID(as_uuid=True), ForeignKey("scopes.id"), nullable=True)
 
     scope = relationship("Scope")
-    assigned_roles = relationship("Role", secondary=team_assigned_roles)
+    assigned_roles = relationship("Role", secondary=team_assigned_roles, passive_deletes=True)
     users = relationship("UserContext", secondary="user_context_teams", back_populates="teams")

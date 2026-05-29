@@ -8,6 +8,7 @@ from db.models.scope import AccessRule, Scope
 from db.models.team import Team
 from db.registry import register_repository
 from db.repos.scope import ScopeRepository
+from exceptions import APIError
 
 
 class ScopeMapper:
@@ -86,6 +87,12 @@ class SQLAlchemyScopeRepository(ScopeRepository):
         return ScopeMapper.to_dict(scope)
 
     async def delete(self, scope_id: UUID) -> bool:
+        teams = await self.list_teams(scope_id)
+        if teams:
+            raise APIError(
+                f"Scope is assigned to {len(teams)} team(s) and cannot be deleted",
+                409,
+            )
         result = await self._session.execute(delete(Scope).where(Scope.id == scope_id))
         await self._session.commit()
         return bool(getattr(result, "rowcount", 0))

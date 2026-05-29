@@ -30,3 +30,7 @@ async def post_role_actions(role_id: UUID, body: RoleActionsRequest, role_repo: 
 
 async def delete_role_action_by_name(role_id: UUID, name: str, role_repo: RoleRepository):
     return await role_repo.remove_action_from_role(role_id=role_id, action_name=name)
+
+
+async def delete_role(role_id: UUID, role_repo: RoleRepository):
+    await role_repo.delete_role(role_id)
