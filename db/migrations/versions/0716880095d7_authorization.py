@@ -18,6 +18,8 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+accessrule_enum = sa.Enum('ALL', 'ANY', name='accessrule')
+
 def upgrade() -> None:
     op.create_table('actions',
     sa.Column('name', sa.Text(), nullable=False),
@@ -37,7 +39,7 @@ def upgrade() -> None:
     sa.Column('name', sa.String(), nullable=False),
     sa.Column('description', sa.Text(), nullable=True),
     sa.Column('attr', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-    sa.Column('access_rule', sa.Enum('ALL', 'ANY', name='accessrule'), nullable=False),
+    sa.Column('access_rule', accessrule_enum, nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
     )
@@ -100,3 +102,4 @@ def downgrade() -> None:
     op.drop_table('scopes')
     op.drop_table('roles')
     op.drop_table('actions')
+    op.execute(sa.text('DROP TYPE IF EXISTS accessrule'))
