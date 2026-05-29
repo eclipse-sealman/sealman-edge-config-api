@@ -35,7 +35,7 @@ class ScopeRepository(ABC):
         pass
 
     @abstractmethod
-    async def delete(self, scope_id: UUID) -> bool:
+    async def delete(self, scope_id: UUID) -> None:
         pass
 
     @abstractmethod

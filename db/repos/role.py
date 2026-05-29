@@ -13,6 +13,10 @@ class RoleRepository(ABC):
         pass
 
     @abstractmethod
+    async def get_by_name(self, name: str) -> Optional[dict[str, Any]]:
+        pass
+
+    @abstractmethod
     async def create_role(self, name: str, description: str | None, action_names: list[str]) -> dict[str, Any]:
         pass
 
@@ -22,7 +26,7 @@ class RoleRepository(ABC):
         role_id: UUID,
         name: str,
         description: str | None,
-    ) -> dict[str, Any]:
+    ) -> Optional[dict[str, Any]]:
         pass
 
     @abstractmethod
@@ -30,7 +34,7 @@ class RoleRepository(ABC):
         self,
         role_id: UUID,
         action_names: list[str],
-    ) -> dict[str, Any]:
+    ) -> Optional[dict[str, Any]]:
         pass
 
     @abstractmethod
@@ -38,7 +42,7 @@ class RoleRepository(ABC):
         self,
         role_id: UUID,
         action_name: str,
-    ) -> dict[str, Any]:
+    ) -> Optional[dict[str, Any]]:
         pass
 
     @abstractmethod

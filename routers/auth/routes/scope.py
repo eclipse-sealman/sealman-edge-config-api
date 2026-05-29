@@ -54,5 +54,13 @@ async def update_scope(
 async def delete_scope(scope_id: UUID, scope_repo: ScopeRepository):
     if await scope_repo.get(scope_id) is None:
         raise APIError(f"Scope '{scope_id}' was not found", 404)
+
+    teams = await scope_repo.list_teams(scope_id)
+    if teams:
+        raise APIError(
+            f"Scope is assigned to {len(teams)} team(s) and cannot be deleted",
+            409,
+        )
+
     await scope_repo.delete(scope_id)
 

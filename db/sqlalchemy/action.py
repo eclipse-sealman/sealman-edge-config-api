@@ -1,7 +1,6 @@
-
 from typing import Any, List, Optional, cast
 
-from sqlalchemy import select, delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.action import Action
@@ -37,3 +36,14 @@ class SQLAlchemyActionRepository(ActionRepository):
         if action is None:
             return None
         return ActionMapper.to_dict(action)
+
+    async def get_by_names(self, names: List[str]) -> List[dict[str, Any]]:
+        if not names:
+            return []
+
+        result = await self._session.execute(
+            select(Action).where(Action.name.in_(names))
+        )
+        actions = result.scalars().all()
+        return [ActionMapper.to_dict(action) for action in actions]
+

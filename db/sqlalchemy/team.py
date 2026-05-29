@@ -12,7 +12,6 @@ from db.registry import register_repository
 from db.repos.team import TeamRepository
 from db.sqlalchemy.role import RoleMapper
 from db.sqlalchemy.scope import ScopeMapper
-from exceptions import APIError
 
 
 class TeamMapper:
@@ -116,8 +115,7 @@ class SQLAlchemyTeamRepository(TeamRepository):
         if user is None:
             return None
 
-        if not any(cast(str, current.id) == user_id for current in team.users):
-            team.users.append(user)
+        team.users.append(user)
 
         await self._session.commit()
         refreshed = await self._get_team_with_details(team_id)
@@ -145,8 +143,7 @@ class SQLAlchemyTeamRepository(TeamRepository):
         if role is None:
             return None
 
-        if not any(cast(UUID, current.id) == role_id for current in team.assigned_roles):
-            team.assigned_roles.append(role)
+        team.assigned_roles.append(role)
 
         await self._session.commit()
         refreshed = await self._get_team_with_details(team_id)
@@ -166,17 +163,6 @@ class SQLAlchemyTeamRepository(TeamRepository):
         return True
 
     async def delete(self, team_id: UUID) -> None:
-        team = await self._get_team_with_details(team_id)
-        if team is None:
-            raise APIError(f"Team '{team_id}' was not found", 404)
-
-        if team.users:
-            raise APIError(
-                f"Team has {len(team.users)} assigned user(s) and cannot be deleted",
-                409,
-            )
-
-        # DB CASCADE handles team_assigned_roles automatically
         await self._session.execute(sa_delete(Team).where(Team.id == team_id))
         await self._session.commit()
 

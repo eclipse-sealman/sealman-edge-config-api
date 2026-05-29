@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 
 class ActionRepository(ABC):
@@ -10,3 +10,8 @@ class ActionRepository(ABC):
     @abstractmethod
     async def get(self, name: str) -> Optional[dict[str, Any]]:
         pass
+
+    @abstractmethod
+    async def get_by_names(self, names: List[str]) -> List[dict[str, Any]]:
+        pass
+

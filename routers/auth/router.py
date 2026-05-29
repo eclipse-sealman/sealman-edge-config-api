@@ -55,8 +55,9 @@ async def get_actions(action_repo: ActionRepository = Depends(get_repository(Act
 async def post_role(
     body: RoleCreateRequest,
     role_repo: RoleRepository = Depends(get_repository(RoleRepository)),
+    action_repo: ActionRepository = Depends(get_repository(ActionRepository)),
 ):
-    return await role.post_role(body, role_repo)
+    return await role.post_role(body, role_repo, action_repo)
 
 
 @auth.put("/roles/{role_id}", response_model=RoleResponse)
@@ -73,8 +74,9 @@ async def post_role_actions(
     role_id: UUID,
     body: RoleActionsRequest,
     role_repo: RoleRepository = Depends(get_repository(RoleRepository)),
+    action_repo: ActionRepository = Depends(get_repository(ActionRepository)),
 ):
-    return await role.post_role_actions(role_id, body, role_repo)
+    return await role.post_role_actions(role_id, body, role_repo, action_repo)
 
 
 @auth.delete("/roles/{role_id}/actions/{name}", response_model=RoleResponse)

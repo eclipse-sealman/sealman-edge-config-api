@@ -149,5 +149,16 @@ async def remove_role_from_team(
 
 
 async def delete_team(team_id: UUID, team_repo: TeamRepository):
+    team = await team_repo.get_with_details(team_id)
+    if team is None:
+        raise APIError(f"Team '{team_id}' was not found", 404)
+
+    assigned_users = cast(list[dict], team["users"])
+    if assigned_users:
+        raise APIError(
+            f"Team has {len(assigned_users)} assigned user(s) and cannot be deleted",
+            409,
+        )
+
     await team_repo.delete(team_id)
 
