@@ -116,10 +116,11 @@ class SQLAlchemyUserRepository(UserRepository):
         self,
         user_id: str,
         preferred_username: str,
+        is_admin: bool = False,
     ) -> None:
         stmt = (
             pg_insert(User)
-            .values(id=user_id, preferred_username=preferred_username, is_admin=False, is_new=True)
+            .values(id=user_id, preferred_username=preferred_username, is_admin=is_admin, is_new=True)
             .on_conflict_do_nothing(index_elements=["id"])
         )
         await self._session.execute(stmt)

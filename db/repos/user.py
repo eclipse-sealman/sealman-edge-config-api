@@ -45,6 +45,7 @@ class UserRepository(ABC):
         self,
         user_id: str,
         preferred_username: str,
+        is_admin: bool = False,
     ) -> None:
         pass
 

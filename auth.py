@@ -253,7 +253,9 @@ async def ensure_user_exists(
         or auth_context.get("name")
         or user_oid
     )
-    await user_repo.ensure_exists(user_oid, preferred_username)
+    roles = auth_context.get("roles") or []
+    is_admin = Role.EDGE_CONFIG_ADMIN in roles
+    await user_repo.ensure_exists(user_oid, preferred_username, is_admin=is_admin)
     return auth_context
 
 
