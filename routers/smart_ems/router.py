@@ -1,5 +1,4 @@
-from authorization import resource_types as Resource
-from authorization.permission_check import PathParamPermissionCheck
+from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Device
 from fastapi import Depends
 
@@ -33,75 +32,75 @@ smart_ems = BaseAPIRouter()
 
 @smart_ems.get("/{device}/smartems/info", response_model=SemsInfo2, tags=["Smart-EMS"])
 async def get_smart_ems_device_info(device: str,
-                                    _=Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
+                                    _=Depends(ABACPermissionCheck(Device.READ))):
     return await _get_smart_ems_device_info(device)
 
 
 @smart_ems.get("/{device}/smartems/status", response_model=SemsFirmwareStatus, tags=["Smart-EMS"])
 async def get_smart_ems_firmware_status(device: str,
-                                        _=Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
+                                        _=Depends(ABACPermissionCheck(Device.READ))):
     return await _get_smart_ems_firmware_status(device)
 
 
 @smart_ems.post("/{device}/smartems/configure/lan", response_model=SemsUpdateLanRes, tags=["Smart-EMS"])
 async def post_smart_ems_update_lan(device: str, lan_interface_conf: SemsUpdateLan,
-                                    _=Depends(PathParamPermissionCheck(Device.NETWORK_WRITE, Resource.DEVICE, "device"))):
+                                    _=Depends(ABACPermissionCheck(Device.NETWORK_WRITE))):
     return await _post_smart_ems_update_lan(device, lan_interface_conf)
 
 
 @smart_ems.get("/{device}/smartems/config/lan", response_model=SemsGetLan, tags=["Smart-EMS"])
 async def get_smart_ems_config_lan(device: str,
-                                   _=Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
+                                   _=Depends(ABACPermissionCheck(Device.READ))):
     return await _get_smart_ems_lan(device)
 
 
 @smart_ems.get("/{device}/smartems/config/cellular", response_model=ConfigCellular, tags=["Smart-EMS"])
 async def get_smart_ems_config_cellular(device: str,
-                                        _=Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
+                                        _=Depends(ABACPermissionCheck(Device.READ))):
     return await _get_smart_ems_config_cellular(device)
 
 
 @smart_ems.post("/{device}/smartems/config/cellular", response_model=CellularInterface, tags=["Smart-EMS"])
 async def post_smart_ems_config_cellular(device: str, cellular_interface: CellularInterface,
-                                         _=Depends(PathParamPermissionCheck(Device.NETWORK_WRITE, Resource.DEVICE, "device"))):
+                                         _=Depends(ABACPermissionCheck(Device.NETWORK_WRITE))):
     return await _post_smart_ems_config_cellular(device, cellular_interface)
 
 
 @smart_ems.get("/{device}/smartems/config/export", response_model=GeneratedDeviceConfig, tags=["Smart-EMS"])
 async def get_smart_ems_device_config(device: str,
-                                      _=Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
+                                      _=Depends(ABACPermissionCheck(Device.READ))):
     return await _get_smart_ems_device_config(device)
 
 
 @smart_ems.get("/{device}/smartems/config/nat", response_model=NatConfig, tags=["Smart-EMS"])
 async def get_smart_ems_config_nat(device: str,
-                                   _=Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
+                                   _=Depends(ABACPermissionCheck(Device.READ))):
     return await _get_smart_ems_config_nat(device)
 
 
 @smart_ems.post("/{device}/smartems/config/nat", response_model=NatConfig, tags=["Smart-EMS"])
 async def post_smart_ems_config_nat(device: str, nat_config: NatConfig,
-                                    _=Depends(PathParamPermissionCheck(Device.NETWORK_WRITE, Resource.DEVICE, "device"))):
+                                    _=Depends(ABACPermissionCheck(Device.NETWORK_WRITE))):
     return await _post_smart_ems_config_nat(device, nat_config)
 
 
 @smart_ems.get("/{device}/smartems/secret/info", response_model=DeviceSecretInformation, tags=["Smart-EMS"])
 async def get_smart_ems_secret_info(device: str,
-                                    _=Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
+                                    _=Depends(ABACPermissionCheck(Device.READ))):
     return await _get_smart_ems_secret_info(device)
 
 
 @smart_ems.post("/{device}/smartems/secret/renew", tags=["Smart-EMS"])
 async def post_smart_ems_secret_renew(device: str,
                                       renew_task_repo: PasswordRenewalTaskRepository = Depends(get_repository(PasswordRenewalTaskRepository)),
-                                      _=Depends(PathParamPermissionCheck(Device.PASSWORD_WRITE, Resource.DEVICE, "device"))):
+                                      _=Depends(ABACPermissionCheck(Device.PASSWORD_WRITE))):
     return await _post_smart_ems_device_secret_renew(device, renew_task_repo)
 
 
 @smart_ems.post("/{device}/smartems/secret/request", response_model=DeviceSecretValue, tags=["Smart-EMS"])
 async def post_smart_ems_secret_request(device: str,
                                         renew_task_repo: PasswordRenewalTaskRepository = Depends(get_repository(PasswordRenewalTaskRepository)),
-                                        _=Depends(PathParamPermissionCheck(Device.PASSWORD_READ, Resource.DEVICE, "device"))):
+                                        _=Depends(ABACPermissionCheck(Device.PASSWORD_READ))):
     return await _post_smart_ems_device_secret_request(device, renew_task_repo)
 
 
@@ -114,18 +113,17 @@ async def get_smart_ems_default_template(device_type: str):
 
 @smart_ems.post("/{device}/smartems/apply-default-template", response_model=ApplyDefaultTemplateResult, tags=["Smart-EMS"])
 async def post_smart_ems_apply_default_template(device: str,
-                                                _=Depends(PathParamPermissionCheck(Device.SMARTEMS_TEMPLATE_APPLY,
-                                                                                   Resource.DEVICE, "device"))):
+                                                _=Depends(ABACPermissionCheck(Device.SMARTEMS_TEMPLATE_APPLY))):
     return await _post_smart_ems_apply_default_template(device)
 
 
 @smart_ems.post("/{device}/smartems/config/port-forwarding", response_model=PortForwardingConfig, tags=["Smart-EMS"])
 async def set_port_forwarding(device: str, config: PortForwardingConfig,
-                              _=Depends(PathParamPermissionCheck(Device.NETWORK_WRITE, Resource.DEVICE, "device"))):
+                              _=Depends(ABACPermissionCheck(Device.NETWORK_WRITE))):
     return await post_smart_ems_config_portforwarding(device, config)
 
 
 @smart_ems.get("/{device}/smartems/config/port-forwarding", response_model=PortForwardingConfig, tags=["Smart-EMS"])
 async def get_port_forwarding(device: str,
-                              _=Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
+                              _=Depends(ABACPermissionCheck(Device.READ))):
     return await get_smart_ems_config_portforwarding(device)

@@ -1,8 +1,7 @@
 import logging
 from typing import Any, Dict
 from fastapi import Depends
-from authorization.permission_check import PathParamPermissionCheck
-from authorization import resource_types as Resource
+from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Device
 from db.repos.device import DeviceRepository
 from db.session import get_repository
@@ -38,13 +37,13 @@ logger = logging.getLogger("EdgeConfigAPI")
 @general.patch("/{device}/metadata", response_model=DeviceMetadataResponse, tags=["General"])
 async def patch_device_metadata(device: str, metadata: Dict[str, Any],
                                 repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
-                                _ = Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
-    device = await _patch_device_metadata(device, metadata=metadata, repo=repo)
-    return device
+                                _ = Depends(ABACPermissionCheck(Device.READ))):
+    device_metadata = await _patch_device_metadata(device, metadata=metadata, repo=repo)
+    return device_metadata
 
 @general.put("/{device}/deployment", response_model=DeploymentTag, tags=["General"])
 async def put_deployment_tag(device: str, deployment: DeploymentTag,
-                             _ = Depends(PathParamPermissionCheck(Device.DEPLOYMENT_WRITE, Resource.DEVICE, "device"))):
+                             _ = Depends(ABACPermissionCheck(Device.DEPLOYMENT_WRITE))):
     return await _put_deployment_tag(device, deployment.deployment)
 
 # ============================================================
@@ -53,7 +52,7 @@ async def put_deployment_tag(device: str, deployment: DeploymentTag,
 
 @general.post("/{device}/{module}/methods", response_model=DirectMethod[Any], tags=["General"])
 async def post_module_method(device: str, module: str, method_data: DeviceModuleMethodReq,
-                             auth_context = Depends(PathParamPermissionCheck(Device.MODULE_EXECUTE_METHOD, Resource.DEVICE, "device"))):
+                             auth_context = Depends(ABACPermissionCheck(Device.MODULE_EXECUTE_METHOD))):
     return await _post_module_method(device, module, method_data, auth_context)
 
 
@@ -63,13 +62,13 @@ async def post_module_method(device: str, module: str, method_data: DeviceModule
 
 @general.get("/{device}/metadata", response_model=DeviceMetadataResponse, tags=["General"])
 async def get_device_metadata(device: str, repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
-                              _=Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
-    device = await _get_device_metadata(device, repo=repo)
-    return device
+                              _ = Depends(ABACPermissionCheck(Device.READ))):
+    device_response = await _get_device_metadata(device, repo=repo)
+    return device_response
 
 @general.get("/{device}/deployment", response_model=DeploymentTag, tags=["General"])
 async def get_deployment_tag(device: str,
-                           _ = Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
+                           _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _get_deployment_tag(device)
 
 @general.get("/deployments", response_model=ResponseDeploymentList, tags=["General"])
@@ -78,15 +77,15 @@ async def get_deployment_list():
 
 @general.get("/{device}/modules", response_model=DeviceModuleList, tags=["General"])
 async def get_device_modules(device,
-                             _ = Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
+                             _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _get_device_modules(device)
 
 @general.get("/{device}/connection/status", response_model=DeviceConnectionStatus, tags=["General"])
 async def get_device_connection_status(device: str,
-                                       _ = Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
+                                       _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _get_device_connection_status(device)
 
 @general.get("/{device}/deployment/status", response_model=ModuleDeploymentStatus, tags=["General"])
 async def get_module_deployment_status(device: str,
-                                       _ = Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
+                                       _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _get_module_deployment_status(device)
