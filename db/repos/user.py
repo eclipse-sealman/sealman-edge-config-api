@@ -52,3 +52,8 @@ class UserRepository(ABC):
     @abstractmethod
     async def list_teams(self, user_id: str) -> List[dict[str, Any]]:
         pass
+
+    @abstractmethod
+    async def get_teams_with_roles_and_scopes(self, user_id: str) -> Optional[dict[str, Any]]:
+        """Returns user with teams eagerly loaded with roles (+ actions) and scopes."""
+        pass

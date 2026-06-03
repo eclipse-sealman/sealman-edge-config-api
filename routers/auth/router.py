@@ -1,8 +1,10 @@
+import logging
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query
 
 from auth import RBACPermissionChecker, validate_jwt
+from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Device, Platform
 from constants import AUTHORIZATION_API_PLATFORM_NAME
 from db.repos.action import ActionRepository
@@ -42,18 +44,21 @@ auth = BaseAPIRouter(
 )
 
 @auth.get("/roles", response_model=list[RoleResponse])
-async def get_roles(role_repo: RoleRepository = Depends(get_repository(RoleRepository))):
+async def get_roles(_ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_READ)), 
+                    role_repo: RoleRepository = Depends(get_repository(RoleRepository))):
     return await role.get_roles(role_repo)
 
 
 @auth.get("/actions", response_model=list[ActionResponse])
-async def get_actions(action_repo: ActionRepository = Depends(get_repository(ActionRepository))):
+async def get_actions(_ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_READ)),
+                     action_repo: ActionRepository = Depends(get_repository(ActionRepository))):
     return await action.get_actions(action_repo)
 
 
 @auth.post("/roles", response_model=RoleResponse)
 async def post_role(
     body: RoleCreateRequest,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     role_repo: RoleRepository = Depends(get_repository(RoleRepository)),
     action_repo: ActionRepository = Depends(get_repository(ActionRepository)),
 ):
@@ -64,6 +69,7 @@ async def post_role(
 async def put_role_by_id(
     role_id: UUID,
     body: RoleUpdateRequest,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     role_repo: RoleRepository = Depends(get_repository(RoleRepository)),
 ):
     return await role.put_role_by_id(role_id, body, role_repo)
@@ -73,6 +79,7 @@ async def put_role_by_id(
 async def post_role_actions(
     role_id: UUID,
     body: RoleActionsRequest,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     role_repo: RoleRepository = Depends(get_repository(RoleRepository)),
     action_repo: ActionRepository = Depends(get_repository(ActionRepository)),
 ):
@@ -83,6 +90,7 @@ async def post_role_actions(
 async def delete_role_action_by_name(
     role_id: UUID,
     name: str,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     role_repo: RoleRepository = Depends(get_repository(RoleRepository)),
 ):
     return await role.delete_role_action_by_name(role_id, name, role_repo)
@@ -91,6 +99,7 @@ async def delete_role_action_by_name(
 @auth.delete("/roles/{role_id}", response_model=None, status_code=204)
 async def delete_role(
     role_id: UUID,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     role_repo: RoleRepository = Depends(get_repository(RoleRepository)),
 ):
     return await role.delete_role(role_id, role_repo)
@@ -100,6 +109,7 @@ async def delete_role(
 async def get_permissions(
     resource_type: str,
     resource_id: str | None = None,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_READ)),
     auth_context: dict = Depends(validate_jwt),
 ):
 
@@ -142,18 +152,22 @@ async def get_permissions(
 
 
 @auth.get("/teams", response_model=TeamListResponse)
-async def get_teams(team_repo: TeamRepository = Depends(get_repository(TeamRepository))):
+async def get_teams(_ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_READ)),
+                   team_repo: TeamRepository = Depends(get_repository(TeamRepository))):
     return await team.get_teams(team_repo)
 
 
 @auth.get("/teams/{team_id}", response_model=TeamDetailsResponse)
-async def get_team_by_id(team_id: UUID, team_repo: TeamRepository = Depends(get_repository(TeamRepository))):
+async def get_team_by_id(team_id: UUID,
+                        _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_READ)),
+                        team_repo: TeamRepository = Depends(get_repository(TeamRepository))):
     return await team.get_team_by_id(team_id, team_repo)
 
 
 @auth.post("/teams", response_model=TeamDetailsResponse)
 async def create_team(
     request: TeamCreateRequest,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     team_repo: TeamRepository = Depends(get_repository(TeamRepository)),
     scope_repo: ScopeRepository = Depends(get_repository(ScopeRepository)),
     user_repo: UserRepository = Depends(get_repository(UserRepository)),
@@ -166,6 +180,7 @@ async def create_team(
 async def update_team(
     team_id: UUID,
     request: TeamUpdateRequest,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     team_repo: TeamRepository = Depends(get_repository(TeamRepository)),
     scope_repo: ScopeRepository = Depends(get_repository(ScopeRepository)),
 ):
@@ -176,6 +191,7 @@ async def update_team(
 async def add_user_to_team(
     team_id: UUID,
     request: TeamAddUserRequest,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     team_repo: TeamRepository = Depends(get_repository(TeamRepository)),
     user_repo: UserRepository = Depends(get_repository(UserRepository)),
 ):
@@ -186,6 +202,7 @@ async def add_user_to_team(
 async def remove_user_from_team(
     team_id: UUID,
     user_id: str,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     team_repo: TeamRepository = Depends(get_repository(TeamRepository)),
 ):
     return await team.remove_user_from_team(team_id, user_id, team_repo)
@@ -195,6 +212,7 @@ async def remove_user_from_team(
 async def add_role_to_team(
     team_id: UUID,
     request: TeamAddRoleRequest,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     team_repo: TeamRepository = Depends(get_repository(TeamRepository)),
     role_repo: RoleRepository = Depends(get_repository(RoleRepository)),
 ):
@@ -205,6 +223,7 @@ async def add_role_to_team(
 async def remove_role_from_team(
     team_id: UUID,
     role_id: UUID,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     team_repo: TeamRepository = Depends(get_repository(TeamRepository)),
 ):
     return await team.remove_role_from_team(team_id, role_id, team_repo)
@@ -213,6 +232,7 @@ async def remove_role_from_team(
 @auth.delete("/teams/{team_id}", response_model=None, status_code=204)
 async def delete_team(
     team_id: UUID,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     team_repo: TeamRepository = Depends(get_repository(TeamRepository)),
 ):
     return await team.delete_team(team_id, team_repo)
@@ -221,19 +241,22 @@ async def delete_team(
 @auth.get("/users", response_model=UserListResponse)
 async def get_users(
     is_new: bool | None = Query(default=None),
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_READ)),
     user_repo: UserRepository = Depends(get_repository(UserRepository)),
 ):
     return await user_repo.list(is_new=is_new)
 
 
 @auth.get("/scopes", response_model=ScopeListResponse)
-async def get_scopes(scope_repo: ScopeRepository = Depends(get_repository(ScopeRepository))):
+async def get_scopes(_ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_READ)),
+                    scope_repo: ScopeRepository = Depends(get_repository(ScopeRepository))):
     return await scope.get_scopes(scope_repo)
 
 
 @auth.post("/scopes", response_model=ScopeResponse)
 async def create_scope(
     request: ScopeCreateRequest,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     scope_repo: ScopeRepository = Depends(get_repository(ScopeRepository)),
 ):
     return await scope.create_scope(request, scope_repo)
@@ -243,6 +266,7 @@ async def create_scope(
 async def update_scope(
     scope_id: UUID,
     request: ScopeUpdateRequest,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     scope_repo: ScopeRepository = Depends(get_repository(ScopeRepository)),
 ):
     return await scope.update_scope(scope_id, request, scope_repo)
@@ -251,6 +275,7 @@ async def update_scope(
 @auth.delete("/scopes/{scope_id}", response_model=None, status_code=204)
 async def delete_scope(
     scope_id: UUID,
+    _ = Depends(ABACPermissionCheck(Platform.AUTHORIZATION_WRITE)),
     scope_repo: ScopeRepository = Depends(get_repository(ScopeRepository)),
 ):
     return await scope.delete_scope(scope_id, scope_repo)

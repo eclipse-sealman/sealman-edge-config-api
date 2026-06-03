@@ -1,4 +1,7 @@
 class Platform:
+    AUTHORIZATION_READ = "platform.authorization.read"
+    AUTHORIZATION_WRITE = "platform.authorization.write"
+
     ReadPermissions = []
     EditPermissions = []
 

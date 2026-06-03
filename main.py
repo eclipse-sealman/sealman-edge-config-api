@@ -45,10 +45,12 @@ from routers.devices.router import devices
 # logger config
 logger = logging.getLogger("EdgeConfigAPI")
 logger.setLevel(logging.INFO)
-log_handler = logging.StreamHandler()
-log_formatter = logging.Formatter(fmt="%(levelname)s:     %(asctime)s >> %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-log_handler.setFormatter(log_formatter)
-logger.addHandler(log_handler)
+logger.propagate = False
+if not logger.handlers:
+    log_handler = logging.StreamHandler()
+    log_formatter = logging.Formatter(fmt="%(levelname)s:     %(asctime)s >> %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    log_handler.setFormatter(log_formatter)
+    logger.addHandler(log_handler)
 
 logger.info(f"Edge-Config-API ({VERSION})")
 background_tasks: Set[asyncio.Task] = set()

@@ -5,6 +5,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from db.models.role import Role
+from db.models.team import Team
 from db.models.user import User
 from db.registry import register_repository
 from db.repos.user import UserRepository
@@ -145,3 +147,42 @@ class SQLAlchemyUserRepository(UserRepository):
 
         teams = sorted(user.teams, key=lambda item: item.name)
         return [TeamMapper.to_dict(team) for team in teams]
+
+    async def get_teams_with_roles_and_scopes(self, user_id: str) -> Optional[dict[str, Any]]:
+        result = await self._session.execute(
+            select(User)
+            .options(
+                selectinload(User.teams)
+                .selectinload(Team.assigned_roles)
+                .selectinload(Role.allowed_actions),
+                selectinload(User.teams)
+                .selectinload(Team.scope),
+            )
+            .where(User.id == user_id)
+        )
+        user = result.scalar_one_or_none()
+        if user is None:
+            return None
+        return {
+            "id": user.id,
+            "is_admin": user.is_admin,
+            "teams": [
+                {
+                    "id": team.id,
+                    "name": team.name,
+                    "scope": {
+                        "attr": team.scope.attr,
+                        "access_rule": team.scope.access_rule.value,
+                    } if team.scope else None,
+                    "roles": [
+                        {
+                            "id": role.id,
+                            "name": role.name,
+                            "allowed_actions": [action.name for action in role.allowed_actions],
+                        }
+                        for role in team.assigned_roles
+                    ],
+                }
+                for team in user.teams
+            ],
+        }

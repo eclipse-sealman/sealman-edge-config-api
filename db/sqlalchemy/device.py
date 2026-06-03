@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from sqlalchemy import select, update, func, delete, text, and_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -310,14 +310,8 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
             for device in devices
         ]
 
-    async def get_all_devices_raw(self) -> List[Dict[str, Any]]:
-        result = await self._session.execute(select(Device))
-        devices = result.scalars().all()
-        return [
-            {
-                "device_id": device.device_id,
-                "device_meta": device.device_meta or {},
-            }
-            for device in devices
-        ]
-
+    async def get_device_meta_raw(self, device_id: str) -> Optional[Dict[str, Any]]:
+        device = await self._get_device(device_id)
+        if device is None:
+            return None
+        return dict(cast(Dict[str, Any], device.device_meta) or {})

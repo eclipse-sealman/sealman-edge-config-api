@@ -69,6 +69,16 @@ ACTION_ROWS = [
         "description": "Update device line settings",
         "is_global": False,
     },
+    {
+        "name": "platform.authorization.read",
+        "description": "Read platform authorization data (users, teams, roles, permissions)",
+        "is_global": True,
+    },
+    {
+        "name": "platform.authorization.write",
+        "description": "Write platform authorization data (users, teams, roles, permissions)",
+        "is_global": True,
+    },
 ]
 
 
