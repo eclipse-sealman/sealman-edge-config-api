@@ -30,23 +30,6 @@ class Role:
     EDGE_CONFIG_VIEWER = "user.viewer"
 
 
-PermissionMap = {
-    Role.EDGE_CONFIG_ADMIN: Platform.ReadPermissions
-                            + Platform.EditPermissions
-                            + Device.ReadPermissions
-                            + Device.EditPermissions,
-    Role.EDGE_CONFIG_VIEWER: Platform.ReadPermissions
-                             + Device.ReadPermissions
-                             + [
-                                 Device.MODULE_EXECUTE_METHOD,
-                                 Device.NETWORK_DISCOVER,
-                             ],
-    Role.EDGE_CONFIG_EDITOR: Platform.ReadPermissions
-                             + Platform.EditPermissions
-                             + Device.ReadPermissions
-                             + Device.EditPermissions,
-}
-
 # Configure authentication endpoints based on provider
 if AUTHENTICATION_PROVIDER == "entra":
     _oidc_discovery_url = f"{AZURE_AD_INSTANCE}{AZURE_AD_TENANT_ID}/.well-known/openid-configuration"
