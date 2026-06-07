@@ -9,10 +9,8 @@ from alembic import context
 
 # Import the metadata from our models so Alembic can autogenerate migrations.
 from constants import POSTGRES_URL
-from db.models import auto_import_models
+import db.models
 from db.base import Base
-
-auto_import_models()
 
 # Alembic Config object — gives access to values in alembic.ini.
 config = context.config

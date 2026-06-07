@@ -3,12 +3,10 @@ from typing import Callable, Type, TypeVar, cast
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from constants import POSTGRES_URL
-from db.models import auto_import_models
 from db.sqlalchemy import auto_import_repositories
 from helper import normalize_database_url
 from db.registry import repo_registry
 
-auto_import_models()
 auto_import_repositories()
 
 DATABASE_URL = normalize_database_url(POSTGRES_URL)
