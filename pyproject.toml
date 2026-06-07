@@ -1,8 +1,12 @@
 [tool.pytest.ini_options]
+pythonpath = ["."]
 asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::pydantic.warnings.PydanticDeprecatedSince20",
+]
 addopts = "-v --tb=short"
 testpaths = [
-    ".",
+    "tests",
 ]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]

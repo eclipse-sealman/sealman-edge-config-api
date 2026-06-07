@@ -245,7 +245,7 @@ class TestABACPermissionCheck:
 
     @pytest.mark.asyncio
     async def test_permission_granted_no_device_id(self, user_repo, device_repo, auth_context):
-        checker = ABACPermissionCheck("device.read", device_path=None)
+        checker = ABACPermissionCheck("device.read", device_path="")
         request = self._make_request()
 
         team = self._make_team(actions=["device.read"])
