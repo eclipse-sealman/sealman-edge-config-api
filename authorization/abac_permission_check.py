@@ -123,7 +123,7 @@ class ABACPermissionCheck:
         user_id = auth_context.get("oid") or auth_context.get("sub")
         user_name = get_current_user(auth_context)
 
-        logger.info(f"ABAC permission check: {self.permission} for device {device_id} by user {user_name}")
+        logger.debug(f"ABAC permission check: {self.permission} for device {device_id} by user {user_name}")
 
         if not user_id:
             raise InsufficientPermissions("User identifier missing from token", status_code=403)
