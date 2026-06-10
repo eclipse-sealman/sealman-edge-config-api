@@ -51,6 +51,7 @@ class DeviceRepository(ABC):
     async def add_platform_meta_key(
         self,
         key: str,
+        options: Dict[str, Any],
         platform_name: str = "default",
     ) -> Dict[str, Any]:
         pass
@@ -94,6 +95,12 @@ class DeviceRepository(ABC):
     ) -> Dict[str, Any]:
         pass
 
+
+    @abstractmethod
+    async def get_all_devices_raw(
+        self
+    ) -> List[Dict[str, Any]]:
+        pass
 
     @abstractmethod
     async def get_all_devices_raw(

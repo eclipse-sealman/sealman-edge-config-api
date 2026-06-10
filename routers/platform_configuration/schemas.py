@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 
 # ---------- Templates ----------
@@ -52,9 +52,14 @@ class ServiceUpdateRequest(BaseModel):
 
 # ---------- Platform Metadata Keys ----------
 
+class MetadataKeyOptions(BaseModel):
+    prepopulate: bool
+    allowAddition: bool
+
+
 class AddMetadataKeyRequest(BaseModel):
-    key: str
+    key: Dict[str, MetadataKeyOptions]
 
 
 class MetadataKeysResponse(BaseModel):
-    keys: List[str]
+    keys: List[Dict[str, MetadataKeyOptions]]
