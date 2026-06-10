@@ -209,6 +209,7 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
     async def add_platform_meta_key(
         self,
         key: str,
+        options: Dict[str, Any],
         platform_name: str = "default",
     ) -> Dict[str, Any]:
         platform = await self._get_platform(platform_name)
@@ -217,7 +218,10 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         if key in current_meta:
             raise APIError(f"Metadata key '{key}' already exists", 409)
 
-        current_meta[key] = None
+         current_meta[key] = {
+            "prepopulate": options.get("prepopulate", False),
+            "allowAddition": options.get("allowAddition", False),
+        }
 
         stmt = (
             update(PlatformSettings)
@@ -296,6 +300,18 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         stmt = delete(Device).where(Device.device_id == device_id)
         await self._session.execute(stmt)
         await self._session.commit()
+
+
+    async def get_all_devices_raw(self) -> List[Dict[str, Any]]:
+        result = await self._session.execute(select(Device))
+        devices = result.scalars().all()
+        return [
+            {
+                "device_id": device.device_id,
+                "device_meta": device.device_meta or {},
+            }
+            for device in devices
+        ]
 
 
     async def get_all_devices_raw(self) -> List[Dict[str, Any]]:
