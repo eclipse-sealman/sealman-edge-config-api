@@ -14,9 +14,9 @@ from exceptions import APIError
 
 DEVICE_SNAPSHOT_CACHE_KEY = "current"
 
+
 @register_repository(DeviceRepository)
 class SqlAlchemyDeviceRepository(DeviceRepository):
-
     def __init__(self, session: AsyncSession):
         self._session = session
 
@@ -96,9 +96,7 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
 
     async def _get_platform(self, platform_name: str):
         result = await self._session.execute(
-            select(PlatformSettings).where(
-                PlatformSettings.name == platform_name
-            )
+            select(PlatformSettings).where(PlatformSettings.name == platform_name)
         )
         platform = result.scalar_one_or_none()
 
@@ -218,7 +216,7 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         if key in current_meta:
             raise APIError(f"Metadata key '{key}' already exists", 409)
 
-         current_meta[key] = {
+        current_meta[key] = {
             "prepopulate": options.get("prepopulate", False),
             "allowAddition": options.get("allowAddition", False),
         }
@@ -279,6 +277,7 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         await self._session.commit()
 
         return current_meta
+
     async def device_exists(self, device_id: str) -> bool:
         device = await self._get_device(device_id)
         return device is not None
@@ -301,6 +300,16 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         await self._session.execute(stmt)
         await self._session.commit()
 
+    async def get_all_devices_raw(self) -> List[Dict[str, Any]]:
+        result = await self._session.execute(select(Device))
+        devices = result.scalars().all()
+        return [
+            {
+                "device_id": device.device_id,
+                "device_meta": device.device_meta or {},
+            }
+            for device in devices
+        ]
 
     async def get_all_devices_raw(self) -> List[Dict[str, Any]]:
         result = await self._session.execute(select(Device))
@@ -313,14 +322,3 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
             for device in devices
         ]
 
-
-    async def get_all_devices_raw(self) -> List[Dict[str, Any]]:
-        result = await self._session.execute(select(Device))
-        devices = result.scalars().all()
-        return [
-            {
-                "device_id": device.device_id,
-                "device_meta": device.device_meta or {},
-            }
-            for device in devices
-        ]
