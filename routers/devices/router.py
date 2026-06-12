@@ -1,5 +1,7 @@
 from fastapi import Depends, Request
 from routers.base_api_router import BaseAPIRouter
+from authorization.abac_permission_check import ABACDeviceListFilter, ABACDeviceListFilterResult
+from authorization.permission_types import Device
 from db.repos.device import DeviceRepository
 from db.session import get_repository
 from .routes.get_devices import get_devices, populate_cache_from_iot_hub_query
@@ -12,10 +14,14 @@ devices = BaseAPIRouter(prefix="/devices", tags=["Devices"])
 @devices.get("")
 async def get_devices_route(
     request: Request,
+    abac_context: ABACDeviceListFilterResult = Depends(ABACDeviceListFilter(Device.READ)),
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
 ):
-    return await get_devices(repo, query_params=request.query_params)
-
+    return await get_devices(
+        repo=repo,
+        filter_device=abac_context["filter_device"],
+        query_params=request.query_params,
+    )
 
 @devices.put("/{device_id}")
 async def create_device_route(

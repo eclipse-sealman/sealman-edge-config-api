@@ -25,13 +25,6 @@ class DeviceRepository(ABC):
         pass
 
     @abstractmethod
-    async def get_devices_metadata(
-        self,
-        platform_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-        pass
-
-    @abstractmethod
     async def update_device_metadata(
         self,
         device_id: str,
@@ -103,7 +96,6 @@ class DeviceRepository(ABC):
         pass
 
     @abstractmethod
-    async def get_all_devices_raw(
-        self
-    ) -> List[Dict[str, Any]]:
+    async def get_device_meta_raw(self, device_id: str) -> Optional[Dict[str, Any]]:
+        """Returns raw device_meta JSONB for scope evaluation, or None if device not found."""
         pass

@@ -1,16 +1,11 @@
 import json
 
 from fastapi import Depends, HTTPException, Query
-from constants import AUTHORIZATION_API_PLATFORM_NAME
-from authorization.permission_check import PermissionCheck
-from authorization import resource_types as Resource
-from authorization.permission_types import Platform
 from db.repos.compose import ComposeRepository
 from db.session import get_repository
 from routers.base_api_router import BaseAPIRouter
 from smart_ems import SmartEMS
 from .schemas import (
-    ActivateDeploymentRequest,
     ActiveDeploymentResponse,
     ComposeRequest,
     ComposeResponse,
@@ -21,11 +16,7 @@ from .schemas import (
 from .lp_compose_builder import LPComposeBuilder
 
 def _platform_read():
-    return Depends(PermissionCheck(
-        Platform.READ_DEPLOYMENT_LIST,
-        Resource.PLATFORM,
-        AUTHORIZATION_API_PLATFORM_NAME,
-    ))
+    return True
 
 compose_deployment = BaseAPIRouter(
     prefix="/compose-deployments",

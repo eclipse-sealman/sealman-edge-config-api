@@ -18,6 +18,8 @@ from constants import (
 )
 from fastapi import Depends, HTTPException, status, Security
 from fastapi.security import OAuth2AuthorizationCodeBearer
+from db.repos.user import UserRepository
+from db.session import get_repository
 from exceptions import InsufficientPermissions, InvalidUserRole
 from helper import AuditTrail
 
@@ -26,25 +28,6 @@ class Role:
     EDGE_CONFIG_ADMIN = "user.admin"
     EDGE_CONFIG_EDITOR = "user.editor"
     EDGE_CONFIG_VIEWER = "user.viewer"
-
-
-PermissionMap = {
-    Role.EDGE_CONFIG_ADMIN: Platform.ReadPermissions
-        + Platform.EditPermissions
-        + Device.ReadPermissions
-        + Device.EditPermissions,
-    Role.EDGE_CONFIG_VIEWER: Platform.ReadPermissions
-        + Device.ReadPermissions
-        + [
-            Device.EDIT_MODULE_CONFIG_STATUS,
-            Device.EXECUTE_MODULE_METHOD,
-            Device.DISCOVER_NETWORK,
-        ],
-    Role.EDGE_CONFIG_EDITOR: Platform.ReadPermissions
-        + Platform.EditPermissions
-        + Device.ReadPermissions
-        + Device.EditPermissions,
-}
 
 
 # Configure authentication endpoints based on provider
@@ -188,6 +171,7 @@ def verify_token(token: str) -> dict:
         options={"verify_exp": True},
     )
 
+
 async def validate_jwt(token: str = Security(oauth2_scheme)) -> dict:
     """
     Validates JWT token from the configured authentication provider (Entra or KeyCloak).
@@ -217,51 +201,52 @@ def get_current_user(auth_context: dict) -> str:
     Extracts a user identifier from the auth context for logging/audit purposes.
     Tries multiple claims to be compatible with different providers and configurations.
     """
-    return auth_context.get("name") or auth_context.get("preferred_username") or auth_context.get("email") or auth_context.get("oid") or auth_context.get("sub")
+    user = (
+        auth_context.get("name")
+        or auth_context.get("preferred_username")
+        or auth_context.get("email")
+        or auth_context.get("oid")
+        or auth_context.get("sub")
+    )
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="token does not contain a recognizable user identity claim",
+        )
+    return user
 
 
-class RBACPermissionChecker:
+async def ensure_user_exists(
+    auth_context: dict = Depends(validate_jwt),
+    user_repo: UserRepository = Depends(get_repository(UserRepository)),
+) -> dict:
+    """
+    Provisions a new user row on first access.
+    Uses INSERT ... ON CONFLICT (id) DO NOTHING so existing users are never modified.
+    """
+    user_oid = auth_context.get("oid") or auth_context.get("sub")
+    if not user_oid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="token is missing user identifier (oid/sub)",
+        )
+    preferred_username = (
+        auth_context.get("preferred_username")
+        or auth_context.get("email")
+        or auth_context.get("name")
+        or user_oid
+    )
+    roles = auth_context.get("roles") or []
+    is_admin = Role.EDGE_CONFIG_ADMIN in roles
+    await user_repo.ensure_exists(user_oid, preferred_username, is_admin=is_admin)
+    return auth_context
 
-    def __init__(self, required_permissions: list[str]) -> None:
-        self.required_permissions = required_permissions
 
-    async def __call__(self, auth_context: dict = Depends(validate_jwt)) -> dict:
-        assigned_permissions = RBACPermissionChecker.get_assigned_permissions(auth_context)
-
-        # check if permission of assigned group fits the required permissions of this call
-        for r_perm in self.required_permissions:
-            if r_perm not in assigned_permissions:
-                raise InsufficientPermissions(f"user has insufficient permissions - required permission: {r_perm}",
-                                              status_code=403)
-        
-        user_id = get_current_user(auth_context)
-        org_id = auth_context.get("oid") or auth_context.get("sub")
-
-        await AuditTrail.log(user_id, self.required_permissions)
-        return {
-            "user_id": user_id,
-            "org_id": org_id,
-            "assigned_permissions": assigned_permissions,
-            "required_permissions": self.required_permissions
-        }
-
-    @staticmethod
-    def get_assigned_permissions(auth_context: dict) -> list[str]:
-        """
-        Returns the permissions of the user.
-        """
-        # get assigned roles of the groups the user is attached to
-        assigned_roles = auth_context.get("roles")
-
-        if assigned_roles is None:
-            user_id = get_current_user(auth_context)
-            raise InvalidUserRole(f"user <{user_id}> is missing required role assignment", status_code=401)
-
-        # collect permissions of assigned groups
-        assigned_permissions: list[str] = []
-        for role in assigned_roles:
-            perm_of_role = PermissionMap.get(role)
-            if perm_of_role is not None:
-                assigned_permissions.extend(perm_of_role)
-
-        return assigned_permissions
+async def get_user_with_provisioning(
+    auth_context: dict = Depends(ensure_user_exists),
+) -> dict:
+    """
+    Dependency chain: decode_jwt → ensure_user_exists → return auth_context.
+    Use this instead of validate_jwt when automatic user provisioning is desired.
+    """
+    return auth_context

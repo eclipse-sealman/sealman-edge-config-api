@@ -1,6 +1,5 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
-from datetime import datetime, timezone
 from sqlalchemy import select, update, func, delete, text, and_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -132,33 +131,6 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
             "created_at": device.created_at,
             "updated_at": device.updated_at,
         }
-
-    async def get_devices_metadata(
-        self,
-        platform_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-
-        platform_meta = await self.get_platform_meta_keys()
-
-        devices = await self.get_devices_joined_snapshot()
-
-        response: List[Dict[str, Any]] = []
-
-        for device in devices:
-            device_meta = device.get("device_meta", {})
-            merged = self._merge_metadata(platform_meta, device_meta)
-
-            response.append(
-                {
-                    "device_id": device.get("device_id"),
-                    "device_status": device.get("connection_state"),
-                    "device_metadata": merged,
-                    "created_at": device.get("created_at"),
-                    "updated_at": device.get("updated_at"),
-                }
-            )
-
-        return response
 
     async def update_device_metadata(
         self,
@@ -311,14 +283,8 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
             for device in devices
         ]
 
-    async def get_all_devices_raw(self) -> List[Dict[str, Any]]:
-        result = await self._session.execute(select(Device))
-        devices = result.scalars().all()
-        return [
-            {
-                "device_id": device.device_id,
-                "device_meta": device.device_meta or {},
-            }
-            for device in devices
-        ]
-
+    async def get_device_meta_raw(self, device_id: str) -> Optional[Dict[str, Any]]:
+        device = await self._get_device(device_id)
+        if device is None:
+            return None
+        return dict(cast(Dict[str, Any], device.device_meta) or {})

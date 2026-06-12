@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from typing import Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from starlette.datastructures import QueryParams
 
@@ -14,6 +14,19 @@ from helper import get_iothub_auth_headers
 
 logger = logging.getLogger("EdgeConfigAPI")
 _META_DEEP_OBJECT_RE = re.compile(r"^meta\[(.*)]$")
+
+
+def _merge_metadata(platform_meta: Dict[str, Any], device_meta: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    for key in platform_meta.keys():
+        if key in device_meta:
+            merged[key] = {"value": device_meta[key], "source": "platform"}
+        else:
+            merged[key] = {"value": None, "source": "platform"}
+    for key, value in device_meta.items():
+        if key not in platform_meta:
+            merged[key] = {"value": value, "source": "device"}
+    return merged
 
 
 def _extract_metadata_filters(query_params: QueryParams | None) -> Dict[str, Optional[str]]:
@@ -42,7 +55,7 @@ def _extract_metadata_filters(query_params: QueryParams | None) -> Dict[str, Opt
 
 async def get_devices(
     repo: DeviceRepository,
-    readable_device_map: Dict[str, bool] | None = None,
+    filter_device: Callable[[Dict], bool],
     query_params: QueryParams | None = None,
 ):
     metadata_filters = _extract_metadata_filters(query_params)
@@ -56,30 +69,36 @@ async def get_devices(
         if not matching_device_ids:
             return []
 
-    devices_meta_list = await repo.get_devices_metadata()
+    devices = await repo.get_devices_joined_snapshot()
+    platform_meta = await repo.get_platform_meta_keys()
 
     devices_output = []
 
-    for dev_meta in devices_meta_list:
-        device_id = dev_meta.get("device_id")
+    for device in devices:
+        device_id = device.get("device_id")
 
         if matching_device_ids is not None and device_id not in matching_device_ids:
+            continue
+
+        # ABAC scope filter against raw device_meta
+        device_meta = device.get("device_meta") or {}
+        if not filter_device(device_meta):
             continue
 
         dev_output = {}
         dev_output["deviceId"] = device_id
         dev_output.setdefault("lastSeenInRange", False)
-        device_status = dev_meta.get("device_status", "Unknown") or "Unknown"
+        device_status = device.get("connection_state", "Unknown") or "Unknown"
         dev_output.setdefault("deviceStatus", device_status)
         dev_output.setdefault("iotEdgeRuntime", device_status)
         dev_output.setdefault("iotHub", "Unknown")
         dev_output.setdefault("sems", "Unknown")
         dev_output.setdefault("vpn", "Unknown")
 
-        dev_output["deviceMetadata"] = dev_meta.get("device_metadata", {})
+        dev_output["deviceMetadata"] = _merge_metadata(platform_meta, device_meta)
 
-        dev_output["createdAt"] = dev_meta.get("created_at", None)
-        dev_output["updatedAt"] = dev_meta.get("updated_at", None)
+        dev_output["createdAt"] = device.get("created_at", None)
+        dev_output["updatedAt"] = device.get("updated_at", None)
 
         devices_output.append(dev_output)
 

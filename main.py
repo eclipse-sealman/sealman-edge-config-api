@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from auth import validate_jwt, SWAGGER_CLIENT_ID, refresh_jwks_cache, fetch_oidc_issuer
+from auth import validate_jwt, ensure_user_exists, SWAGGER_CLIENT_ID, refresh_jwks_cache, fetch_oidc_issuer
 from contextlib import asynccontextmanager
 from constants import (
     DEVICE_CACHE_INTERVAL,
@@ -45,10 +45,12 @@ from routers.devices.router import devices
 # logger config
 logger = logging.getLogger("EdgeConfigAPI")
 logger.setLevel(logging.INFO)
-log_handler = logging.StreamHandler()
-log_formatter = logging.Formatter(fmt="%(levelname)s:     %(asctime)s >> %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-log_handler.setFormatter(log_formatter)
-logger.addHandler(log_handler)
+logger.propagate = False
+if not logger.handlers:
+    log_handler = logging.StreamHandler()
+    log_formatter = logging.Formatter(fmt="%(levelname)s:     %(asctime)s >> %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    log_handler.setFormatter(log_formatter)
+    logger.addHandler(log_handler)
 
 logger.info(f"Edge-Config-API ({VERSION})")
 background_tasks: Set[asyncio.Task] = set()
@@ -117,7 +119,7 @@ app = FastAPI(
     version=VERSION,
     root_path=ROOT_PATH,
     lifespan=lifespan,
-    dependencies=[Security(validate_jwt)],  # Every request must provide a token signed for this application
+    dependencies=[Security(ensure_user_exists)],  # Every request: validate token + auto-provision user
     docs_url=None,
     redoc_url=None,
     openapi_url="/openapi.json",

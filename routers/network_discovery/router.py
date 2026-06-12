@@ -1,6 +1,5 @@
 from typing import Union
-from authorization.permission_check import PathParamPermissionCheck
-from authorization import resource_types as Resource
+from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Device
 from fastapi import Depends
 
@@ -16,12 +15,12 @@ network_discovery = BaseAPIRouter()
 @network_discovery.post("/{device}/network/discover", tags=["Network Discovery"],
                         response_model=DirectMethod[NetworkScan])
 async def post_network_discover(device: str, network_discover: NetworkDiscover,
-                                 auth_context = Depends(PathParamPermissionCheck(Device.DISCOVER_NETWORK, Resource.DEVICE, "device"))):
+                                 auth_context = Depends(ABACPermissionCheck(Device.NETWORK_DISCOVER))):
     return await _post_network_discover2(device, network_discover, auth_context)
 
 
 @network_discovery.get("/{device}/network/topology", tags=["Network Discovery"],
                        response_model=Union[NetworkScan, None])
 async def get_network_topology(device: str,
-                                _ = Depends(PathParamPermissionCheck(Device.READ, Resource.DEVICE, "device"))):
+                                _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _get_network_topology(device)
