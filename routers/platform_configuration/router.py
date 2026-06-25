@@ -11,6 +11,8 @@ from .schemas import (
     AddMetadataKeyRequest,
     MetadataKeysResponse,
     MetadataKeyOptions,
+    DeviceTemplateConfigResponse,
+    UpdateDeviceTemplateConfigRequest,
 )
 
 from .service import (
@@ -133,3 +135,22 @@ async def delete_metadata_key(
 ):
     meta = await repo.delete_platform_meta_key(key)
     return MetadataKeysResponse(keys=_meta_to_response_keys(meta))
+
+
+# ==================== DEVICE TEMPLATE CONFIG ====================
+
+@platform_config.get("/device-template-config", response_model=DeviceTemplateConfigResponse)
+async def get_device_template_config(
+    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+):
+    config = await repo.get_device_template_config()
+    return DeviceTemplateConfigResponse(config=config)
+
+
+@platform_config.patch("/device-template-config", response_model=DeviceTemplateConfigResponse)
+async def update_device_template_config(
+    request: UpdateDeviceTemplateConfigRequest,
+    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+):
+    config = await repo.update_device_template_config(request.config)
+    return DeviceTemplateConfigResponse(config=config)

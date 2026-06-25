@@ -288,3 +288,32 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         if device is None:
             return None
         return dict(cast(Dict[str, Any], device.device_meta) or {})
+
+
+    # -------------------- Device Template Config --------------------
+
+    async def get_device_template_config(
+        self,
+        platform_name: str = "default",
+    ) -> Dict[str, Any]:
+        platform = await self._get_platform(platform_name)
+        return platform.device_template_config or {}
+
+    async def update_device_template_config(
+        self,
+        config: Dict[str, Any],
+        platform_name: str = "default",
+    ) -> Dict[str, Any]:
+        platform = await self._get_platform(platform_name)
+        current = dict(platform.device_template_config or {})
+        current.update(config)
+
+        stmt = (
+            update(PlatformSettings)
+            .where(PlatformSettings.name == platform_name)
+            .values(device_template_config=current)
+        )
+        await self._session.execute(stmt)
+        await self._session.commit()
+
+        return current

@@ -8,5 +8,6 @@ class PlatformSettings(Base):
 
     name = Column(Text, primary_key=True)
     platform_meta = Column(JSONB, nullable=False, default=dict)
+    device_template_config = Column(JSONB, nullable=False, default=dict)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

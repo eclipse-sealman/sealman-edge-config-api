@@ -63,3 +63,12 @@ class AddMetadataKeyRequest(BaseModel):
 
 class MetadataKeysResponse(BaseModel):
     keys: List[Dict[str, MetadataKeyOptions]]
+
+
+# ---------- Device Template Config ----------
+
+class DeviceTemplateConfigResponse(BaseModel):
+    config: Dict[str, Any]
+
+class UpdateDeviceTemplateConfigRequest(BaseModel):
+    config: Dict[str, Any]

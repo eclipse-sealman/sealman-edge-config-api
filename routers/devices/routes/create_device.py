@@ -6,7 +6,7 @@ from db.repos.device import DeviceRepository
 import asyncio
 from smart_ems import generate_resp_from_device_info
 from routers.devices.routes.get_devices import populate_cache_from_iot_hub_query
-from constants import IOT_HUB_NAME, SEMS_DEVICE_TEMPLATE_VARIABLES, BOOTSTRAP_SEMS_TEMPLATE_NAME
+from constants import IOT_HUB_NAME, BOOTSTRAP_SEMS_TEMPLATE_NAME
 from helper import get_iothub_auth_headers
 from routers.general.routes.put_deployment_tag import put_deployment_tag
 
@@ -80,7 +80,7 @@ async def create_device(
         sems_device = await SmartEMS.get_device_by_serial(device_id, require_template=False)
 
         # Start with infrastructure constants from env.
-        variables_to_set = dict(SEMS_DEVICE_TEMPLATE_VARIABLES)
+        variables_to_set = await repo.get_device_template_config()
         # Add per-device variables (user input + derived).
         variables_to_set["registration_id_generated"] = registration_id_generated
         # Ensure device_connection_string is always set from IoTHub key material.
@@ -89,13 +89,15 @@ async def create_device(
         # Remove empty values before sending to SEMS.
         variables_to_set = {k: str(v) for k, v in variables_to_set.items() if v}
 
+        template = None
+        template_id = None
         try:
             template = await SmartEMS.get_template_by_template_name(BOOTSTRAP_SEMS_TEMPLATE_NAME)
             template_id = template.get("id")
             logger.info(f"Found template '{BOOTSTRAP_SEMS_TEMPLATE_NAME}' with id: {template_id}")
         except Exception as e:
             logger.error(f"Could not fetch template '{BOOTSTRAP_SEMS_TEMPLATE_NAME}': {e}")
-            template_id = None
+            # template_id = None
 
         if sems_device:
             clean_body = generate_resp_from_device_info(sems_device)
