@@ -15,15 +15,7 @@ from .schemas import (
     UpdateDeviceTemplateConfigRequest,
 )
 
-from .service import (
-    read_json_blob,
-    write_json_blob,
-    get_available_templates,
-    PLATFORM_CONTAINER,
-    TEMPLATES_FILE,
-    ENDPOINT_TYPES_FILE,
-    SERVICES_FILE,
-)
+from .service import (get_available_templates)
 
 
 platform_config = BaseAPIRouter(
@@ -35,46 +27,60 @@ platform_config = BaseAPIRouter(
 # ==================== TEMPLATES ====================
 
 @platform_config.get("/devices/available-templates", response_model=TemplateListResponse)
-async def get_available_templates_route():
-    templates = await get_available_templates()
+async def get_available_templates_route(
+    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+):
+    selected = await repo.get_selected_templates()
+    templates = await get_available_templates(selected)
     return {"templates": templates}
 
 
 @platform_config.post("/devices/selected-templates")
-async def update_selected_templates(request: SelectedTemplatesRequest):
-    payload = {"selected": request.templates}
-    await write_json_blob(PLATFORM_CONTAINER, TEMPLATES_FILE, payload)
+async def update_selected_templates(
+    request: SelectedTemplatesRequest,
+    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+):
+    await repo.save_selected_templates(request.templates)
     return {"status": "updated"}
 
 
 # ==================== ENDPOINT TYPES ====================
 
 @platform_config.get("/device-endpoints/types")
-async def get_endpoint_types():
-    data = await read_json_blob(PLATFORM_CONTAINER, ENDPOINT_TYPES_FILE)
+async def get_endpoint_types(
+    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+):
+    data = await repo.get_endpoint_types()
     return {"types": data}
 
 
 @platform_config.post("/device-endpoints/types")
-async def update_endpoint_types(request: EndpointTypeUpdateRequest):
+async def update_endpoint_types(
+    request: EndpointTypeUpdateRequest,
+    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+):
     payload = [
         {"name": item.name, "description": item.description, "defaultIP": item.defaultIP}
         for item in request.types
     ]
-    await write_json_blob(PLATFORM_CONTAINER, ENDPOINT_TYPES_FILE, payload)
+    await repo.save_endpoint_types(payload)
     return {"status": "updated"}
 
 
 # ==================== SERVICES ====================
 
 @platform_config.get("/device-endpoints/services")
-async def get_services():
-    data = await read_json_blob(PLATFORM_CONTAINER, SERVICES_FILE)
+async def get_services(
+    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+):
+    data = await repo.get_service_ports()
     return {"services": data}
 
-
 @platform_config.post("/device-endpoints/services")
-async def update_services(request: ServiceUpdateRequest):
+async def update_services(
+    request: ServiceUpdateRequest,
+    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+):
     payload = [
         {
             "deviceEndpointServiceName": s.deviceEndpointServiceName,
@@ -83,7 +89,7 @@ async def update_services(request: ServiceUpdateRequest):
         }
         for s in request.services
     ]
-    await write_json_blob(PLATFORM_CONTAINER, SERVICES_FILE, payload)
+    await repo.save_service_ports(payload)
     return {"status": "updated"}
 
 
