@@ -21,6 +21,7 @@ async def create_device(
 ):
     auth_type = body.get("authType")
     metadata = body.get("meta", {})
+    type_id = body.get("type_id") or "default"
     registration_id_generated = body.get("registration_id_generated", "").strip()
     if not registration_id_generated:
         # Frontend should always send this, but fall back to device_id as safe default
@@ -39,7 +40,7 @@ async def create_device(
 
     try:
         # 2. INSERT DB
-        device = await repo.create_device(device_id, metadata)
+        device = await repo.create_device(device_id, metadata, type_id=type_id)
         created_in_db = True
 
         # 3. REGISTER IN IoTHub

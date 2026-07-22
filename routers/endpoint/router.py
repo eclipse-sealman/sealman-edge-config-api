@@ -25,7 +25,7 @@ def _handle_api_error(exc: APIError) -> Never:
 @endpoints.get(
     "/endpoint-types",
     response_model=List[EndpointTypeResponse],
-    tags=["Endpoints"],
+    tags=["Endpoint Types"],
     summary="List all endpoint types",
 )
 async def list_endpoint_types(
@@ -38,7 +38,7 @@ async def list_endpoint_types(
 @endpoints.get(
     "/endpoint-types/{type_id}",
     response_model=EndpointTypeResponse,
-    tags=["Endpoints"],
+    tags=["Endpoint Types"],
     summary="Get a single endpoint type",
 )
 async def get_endpoint_type(
@@ -57,7 +57,7 @@ async def get_endpoint_type(
     "/endpoint-types",
     response_model=EndpointTypeResponse,
     status_code=201,
-    tags=["Endpoints"],
+    tags=["Endpoint Types"],
     summary="Create an endpoint type",
 )
 async def create_endpoint_type(
@@ -80,7 +80,7 @@ async def create_endpoint_type(
 @endpoints.patch(
     "/endpoint-types/{type_id}",
     response_model=EndpointTypeResponse,
-    tags=["Endpoints"],
+    tags=["Endpoint Types"],
     summary="Update an endpoint type",
 )
 async def update_endpoint_type(
@@ -142,7 +142,7 @@ async def update_endpoint_type(
 @endpoints.delete(
     "/endpoint-types/{type_id}",
     status_code=204,
-    tags=["Endpoints"],
+    tags=["Endpoint Types"],
     summary="Delete an endpoint type",
 )
 async def delete_endpoint_type(

@@ -48,6 +48,7 @@ from routers.compose_deployments.router import compose_deployment, active_deploy
 from routers.devices.router import devices
 from routers.endpoint.router import endpoints
 from routers.service.router import services
+from routers.device_type.router import device_types
 
 # logger config
 logger = logging.getLogger("EdgeConfigAPI")
@@ -183,6 +184,7 @@ app.include_router(general)
 app.include_router(compose_deployment)
 app.include_router(endpoints)
 app.include_router(services)
+app.include_router(device_types)
 app.include_router(active_deployment)
 app.include_router(module_config)
 app.include_router(smart_ems)

@@ -68,6 +68,7 @@ async def get_devices(
 
         dev_output = {}
         dev_output["deviceId"] = device_id
+        dev_output["typeId"] = dev_meta.get("type_id")
         dev_output.setdefault("lastSeenInRange", False)
         device_status = dev_meta.get("device_status", "Unknown") or "Unknown"
         dev_output.setdefault("deviceStatus", device_status)

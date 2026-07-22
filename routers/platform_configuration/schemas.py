@@ -48,13 +48,3 @@ class ServiceListResponse(BaseModel):
 
 class ServiceUpdateRequest(BaseModel):
     services: List[ServiceConfig]
-
-
-# ---------- Platform Metadata Keys ----------
-
-class AddMetadataKeyRequest(BaseModel):
-    key: str
-
-
-class MetadataKeysResponse(BaseModel):
-    keys: List[str]

@@ -12,8 +12,8 @@ async def get_device_meta_values(
     meta_values: dict[str, set] = {}
 
     for device in devices:
-        device_meta = device.get("device_meta") or {}
-        for key, value in device_meta.items():
+        device_data = device.get("device_data") or {}
+        for key, value in device_data.items():
             if value is None or str(value).strip() == "":
                 continue
             if key not in meta_values:

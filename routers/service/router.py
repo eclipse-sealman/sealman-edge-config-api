@@ -25,7 +25,7 @@ def _handle_api_error(exc: APIError) -> Never:
 @services.get(
     "/service-types",
     response_model=List[ServiceTypeResponse],
-    tags=["Services"],
+    tags=["Service Types"],
     summary="List all service types",
 )
 async def list_service_types(
@@ -38,7 +38,7 @@ async def list_service_types(
 @services.get(
     "/service-types/{type_id}",
     response_model=ServiceTypeResponse,
-    tags=["Services"],
+    tags=["Service Types"],
     summary="Get a single service type",
 )
 async def get_service_type(
@@ -57,7 +57,7 @@ async def get_service_type(
     "/service-types",
     response_model=ServiceTypeResponse,
     status_code=201,
-    tags=["Services"],
+    tags=["Service Types"],
     summary="Create a service type",
 )
 async def create_service_type(
@@ -80,7 +80,7 @@ async def create_service_type(
 @services.patch(
     "/service-types/{type_id}",
     response_model=ServiceTypeResponse,
-    tags=["Services"],
+    tags=["Service Types"],
     summary="Update a service type",
 )
 async def update_service_type(
@@ -141,7 +141,7 @@ async def update_service_type(
 @services.delete(
     "/service-types/{type_id}",
     status_code=204,
-    tags=["Services"],
+    tags=["Service Types"],
     summary="Delete a service type",
 )
 async def delete_service_type(

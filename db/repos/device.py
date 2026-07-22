@@ -20,14 +20,12 @@ class DeviceRepository(ABC):
     async def get_device_metadata(
         self,
         device_id: str,
-        platform_name: str = "default",
     ) -> Optional[Dict[str, Any]]:
         pass
 
     @abstractmethod
     async def get_devices_metadata(
         self,
-        platform_name: str = "default",
     ) -> List[Dict[str, Any]]:
         pass
 
@@ -36,38 +34,13 @@ class DeviceRepository(ABC):
         self,
         device_id: str,
         metadata: Dict[str, Any],
-        platform_name: str = "default",
     ) -> Optional[Dict[str, Any]]:
-        pass
-
-    @abstractmethod
-    async def get_platform_meta_keys(
-        self,
-        platform_name: str = "default",
-    ) -> Dict[str, Any]:
-        pass
-
-    @abstractmethod
-    async def add_platform_meta_key(
-        self,
-        key: str,
-        platform_name: str = "default",
-    ) -> Dict[str, Any]:
-        pass
-
-    @abstractmethod
-    async def delete_platform_meta_key(
-        self,
-        key: str,
-        platform_name: str = "default",
-    ) -> Dict[str, Any]:
         pass
 
     @abstractmethod
     async def get_device_ids_by_metadata_filters(
         self,
         metadata_filters: Dict[str, Optional[str]],
-        platform_name: str = "default",
     ) -> List[str]:
         pass
 
@@ -90,7 +63,8 @@ class DeviceRepository(ABC):
     async def create_device(
         self,
         device_id: str,
-        metadata: Dict[str, Any]
+        metadata: Dict[str, Any],
+        type_id: str = "default",
     ) -> Dict[str, Any]:
         pass
 
