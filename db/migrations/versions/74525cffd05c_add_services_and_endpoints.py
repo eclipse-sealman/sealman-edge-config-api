@@ -27,7 +27,8 @@ def upgrade() -> None:
     sa.Column('fields', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.PrimaryKeyConstraint('type_id')
+    sa.PrimaryKeyConstraint('type_id'),
+    sa.UniqueConstraint('label', name='uq_endpoint_types_label')
     )
     op.create_table('service_types',
     sa.Column('type_id', sa.Text(), nullable=False),
@@ -36,7 +37,8 @@ def upgrade() -> None:
     sa.Column('fields', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.PrimaryKeyConstraint('type_id')
+    sa.PrimaryKeyConstraint('type_id'),
+    sa.UniqueConstraint('label', name='uq_service_types_label')
     )
     op.create_table('endpoints',
     sa.Column('endpoint_id', sa.Text(), nullable=False),

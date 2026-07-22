@@ -1,12 +1,13 @@
 from typing import Any, Dict, List, Optional, cast
 
 from sqlalchemy import select, update, delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.service import Service, ServiceType
 from db.registry import register_repository
 from db.repos.service import ServiceRepository
-from db.merge import BlueprintResolver, patch_data, patch_fields
+from db.merge import BlueprintResolver, patch_data, patch_fields, validate_instance_data
 from exceptions import APIError
 
 
@@ -56,13 +57,28 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         )
         if existing.scalar_one_or_none() is not None:
             raise APIError(f"ServiceType '{type_id}' already exists", 409)
+        await self._raise_if_label_taken(label)
         st = ServiceType(
             type_id=type_id, label=label, description=description, fields=fields or {}
         )
         self._session.add(st)
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError:
+            await self._session.rollback()
+            raise APIError(f"ServiceType label '{label}' already exists", 409)
         await self._session.refresh(st)
         return self._serialize_type(st)
+
+    async def _raise_if_label_taken(
+        self, label: str, exclude_type_id: Optional[str] = None
+    ) -> None:
+        stmt = select(ServiceType).where(ServiceType.label == label)
+        if exclude_type_id is not None:
+            stmt = stmt.where(ServiceType.type_id != exclude_type_id)
+        existing = await self._session.execute(stmt)
+        if existing.scalar_one_or_none() is not None:
+            raise APIError(f"ServiceType label '{label}' already exists", 409)
 
     async def update_service_type(
         self,
@@ -74,18 +90,23 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         st = await self._get_service_type_or_raise(type_id)
         values: Dict[str, Any] = {}
         if label is not None:
+            await self._raise_if_label_taken(label, exclude_type_id=type_id)
             values["label"] = label
         if description is not None:
             values["description"] = description
         if fields is not None:
             values["fields"] = patch_fields(st.fields or {}, fields)
         if values:
-            await self._session.execute(
-                update(ServiceType)
-                .where(ServiceType.type_id == type_id)
-                .values(**values)
-            )
-            await self._session.commit()
+            try:
+                await self._session.execute(
+                    update(ServiceType)
+                    .where(ServiceType.type_id == type_id)
+                    .values(**values)
+                )
+                await self._session.commit()
+            except IntegrityError:
+                await self._session.rollback()
+                raise APIError(f"ServiceType label '{label}' already exists", 409)
             await self._session.refresh(st)
         return self._serialize_type(st)
 
@@ -133,6 +154,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         service_data: Dict[str, Any],
     ) -> Dict[str, Any]:
         service_type = await self._get_service_type_or_raise(type_id)
+        validate_instance_data(service_data or {}, service_type.fields or {})
         service = Service(
             endpoint_id=endpoint_id, type_id=type_id, service_data=service_data or {}
         )
@@ -149,10 +171,13 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         service = await self._get_service(service_id)
         if service is None:
             return None
+        service_type = await self._get_service_type_or_raise(service.type_id)
+        merged_data = patch_data(service.service_data or {}, service_data)
+        validate_instance_data(merged_data, service_type.fields or {})
         await self._session.execute(
             update(Service)
             .where(Service.service_id == service_id)
-            .values(service_data=patch_data(service.service_data or {}, service_data))
+            .values(service_data=merged_data)
         )
         await self._session.commit()
         return await self.get_service(service_id)

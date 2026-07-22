@@ -1,5 +1,8 @@
 from typing import Any, Dict, Optional, Protocol, runtime_checkable
 
+from exceptions import ValidationError
+from field_validation import validate_value
+
 
 @runtime_checkable
 class TypedEntity(Protocol):
@@ -14,14 +17,38 @@ def resolve_fields(
 ) -> Dict[str, Any]:
     resolved: Dict[str, Any] = {}
     for field_key, field_def in type_fields.items():
+        value = instance_data.get(field_key)
+        if value is None:
+            value = field_def.get("default")
         resolved[field_key] = {
-            "value": instance_data.get(field_key),
+            "value": value,
             "field": field_def,
         }
     for data_key, data_value in instance_data.items():
         if data_key not in type_fields:
             resolved[data_key] = {"value": data_value, "field": None}
     return resolved
+
+
+def validate_instance_data(
+    data: Dict[str, Any],
+    type_fields: Dict[str, Any],
+) -> None:
+    """Validate submitted endpoint_data/service_data against its type's field definitions.
+
+    Raises ValidationError (422) on the first violation: missing required field,
+    wrong data type, failed validation rule, or a value outside `options`.
+    """
+    for field_key, field_def in type_fields.items():
+        value = data.get(field_key)
+        if value is None:
+            if field_def.get("required"):
+                raise ValidationError(f"'{field_key}' is required", 422)
+            continue
+        try:
+            validate_value(field_key, value, field_def)
+        except ValueError as exc:
+            raise ValidationError(str(exc), 422)
 
 
 def patch_fields(

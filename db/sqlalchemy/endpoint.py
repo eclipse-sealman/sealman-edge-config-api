@@ -1,10 +1,11 @@
 from typing import Any, Dict, List, Optional
 from sqlalchemy import select, update, delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from db.models.endpoint import Endpoint, EndpointType
 from db.registry import register_repository
 from db.repos.endpoint import EndpointRepository
-from db.merge import BlueprintResolver, patch_data, patch_fields
+from db.merge import BlueprintResolver, patch_data, patch_fields, validate_instance_data
 from exceptions import APIError
 
 
@@ -54,13 +55,28 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         )
         if existing.scalar_one_or_none() is not None:
             raise APIError(f"EndpointType '{type_id}' already exists", 409)
+        await self._raise_if_label_taken(label)
         et = EndpointType(
             type_id=type_id, label=label, description=description, fields=fields or {}
         )
         self._session.add(et)
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError:
+            await self._session.rollback()
+            raise APIError(f"EndpointType label '{label}' already exists", 409)
         await self._session.refresh(et)
         return self._serialize_type(et)
+
+    async def _raise_if_label_taken(
+        self, label: str, exclude_type_id: Optional[str] = None
+    ) -> None:
+        stmt = select(EndpointType).where(EndpointType.label == label)
+        if exclude_type_id is not None:
+            stmt = stmt.where(EndpointType.type_id != exclude_type_id)
+        existing = await self._session.execute(stmt)
+        if existing.scalar_one_or_none() is not None:
+            raise APIError(f"EndpointType label '{label}' already exists", 409)
 
     async def update_endpoint_type(
         self,
@@ -72,18 +88,23 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         et = await self._get_endpoint_type_or_raise(type_id)
         values: Dict[str, Any] = {}
         if label is not None:
+            await self._raise_if_label_taken(label, exclude_type_id=type_id)
             values["label"] = label
         if description is not None:
             values["description"] = description
         if fields is not None:
             values["fields"] = patch_fields(et.fields or {}, fields)
         if values:
-            await self._session.execute(
-                update(EndpointType)
-                .where(EndpointType.type_id == type_id)
-                .values(**values)
-            )
-            await self._session.commit()
+            try:
+                await self._session.execute(
+                    update(EndpointType)
+                    .where(EndpointType.type_id == type_id)
+                    .values(**values)
+                )
+                await self._session.commit()
+            except IntegrityError:
+                await self._session.rollback()
+                raise APIError(f"EndpointType label '{label}' already exists", 409)
             await self._session.refresh(et)
         return self._serialize_type(et)
 
@@ -122,6 +143,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         self, device_id: str, type_id: str, endpoint_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         et = await self._get_endpoint_type_or_raise(type_id)
+        validate_instance_data(endpoint_data or {}, et.fields or {})
         endpoint = Endpoint(
             device_id=device_id, type_id=type_id, endpoint_data=endpoint_data or {}
         )
@@ -136,12 +158,13 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         endpoint = await self._get_endpoint(endpoint_id)
         if endpoint is None:
             return None
+        et = await self._get_endpoint_type_or_raise(endpoint.type_id)
+        merged_data = patch_data(endpoint.endpoint_data or {}, endpoint_data)
+        validate_instance_data(merged_data, et.fields or {})
         await self._session.execute(
             update(Endpoint)
             .where(Endpoint.endpoint_id == endpoint_id)
-            .values(
-                endpoint_data=patch_data(endpoint.endpoint_data or {}, endpoint_data)
-            )
+            .values(endpoint_data=merged_data)
         )
         await self._session.commit()
         return await self.get_endpoint(endpoint_id)

@@ -11,7 +11,7 @@ class ServiceType(Base):
     __tablename__ = "service_types"
 
     type_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    label: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     fields: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
