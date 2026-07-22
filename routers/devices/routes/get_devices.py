@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from starlette.datastructures import QueryParams
 
@@ -42,7 +42,7 @@ def _extract_metadata_filters(query_params: QueryParams | None) -> Dict[str, Opt
 
 async def get_devices(
     repo: DeviceRepository,
-    readable_device_map: Dict[str, bool] | None = None,
+    filter_device: Callable[[Dict], bool],
     query_params: QueryParams | None = None,
 ):
     metadata_filters = _extract_metadata_filters(query_params)
@@ -56,31 +56,37 @@ async def get_devices(
         if not matching_device_ids:
             return []
 
-    devices_meta_list = await repo.get_devices_metadata()
+    devices = await repo.get_devices_metadata()
 
     devices_output = []
 
-    for dev_meta in devices_meta_list:
-        device_id = dev_meta.get("device_id")
+    for device in devices:
+        device_id = device.get("device_id")
 
         if matching_device_ids is not None and device_id not in matching_device_ids:
             continue
 
+        resolved_metadata = device.get("device_metadata") or {}
+        # ABAC scope filter against raw metadata values (derived from the resolved fields)
+        raw_metadata = {key: entry.get("value") for key, entry in resolved_metadata.items()}
+        if not filter_device(raw_metadata):
+            continue
+
         dev_output = {}
         dev_output["deviceId"] = device_id
-        dev_output["typeId"] = dev_meta.get("type_id")
+        dev_output["typeId"] = device.get("type_id")
         dev_output.setdefault("lastSeenInRange", False)
-        device_status = dev_meta.get("device_status", "Unknown") or "Unknown"
+        device_status = device.get("device_status", "Unknown") or "Unknown"
         dev_output.setdefault("deviceStatus", device_status)
         dev_output.setdefault("iotEdgeRuntime", device_status)
         dev_output.setdefault("iotHub", "Unknown")
         dev_output.setdefault("sems", "Unknown")
         dev_output.setdefault("vpn", "Unknown")
 
-        dev_output["deviceMetadata"] = dev_meta.get("device_metadata", {})
+        dev_output["deviceMetadata"] = resolved_metadata
 
-        dev_output["createdAt"] = dev_meta.get("created_at", None)
-        dev_output["updatedAt"] = dev_meta.get("updated_at", None)
+        dev_output["createdAt"] = device.get("created_at", None)
+        dev_output["updatedAt"] = device.get("updated_at", None)
 
         devices_output.append(dev_output)
 

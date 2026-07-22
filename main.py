@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from auth import validate_jwt, SWAGGER_CLIENT_ID, refresh_jwks_cache, fetch_oidc_issuer
+from auth import validate_jwt, ensure_user_exists, SWAGGER_CLIENT_ID, refresh_jwks_cache, fetch_oidc_issuer
 from contextlib import asynccontextmanager
 from constants import (
     DEVICE_CACHE_INTERVAL,
@@ -34,6 +34,7 @@ from routers.smart_ems.password_renewal_task_processor import (
 )
 from smart_ems import init_smart_ems
 from bootstrap import bootstrap_sems, bootstrap_iothub_base_deployment
+from authorization.sync_permissions import sync_permissions_to_db
 from helper import AuditTrail
 
 from routers.cmd_proxy.router import cmd_proxy
@@ -53,12 +54,12 @@ from routers.device_type.router import device_types
 # logger config
 logger = logging.getLogger("EdgeConfigAPI")
 logger.setLevel(logging.INFO)
-log_handler = logging.StreamHandler()
-log_formatter = logging.Formatter(
-    fmt="%(levelname)s:     %(asctime)s >> %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-)
-log_handler.setFormatter(log_formatter)
-logger.addHandler(log_handler)
+logger.propagate = False
+if not logger.handlers:
+    log_handler = logging.StreamHandler()
+    log_formatter = logging.Formatter(fmt="%(levelname)s:     %(asctime)s >> %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    log_handler.setFormatter(log_formatter)
+    logger.addHandler(log_handler)
 
 logger.info(f"Edge-Config-API ({VERSION})")
 background_tasks: Set[asyncio.Task] = set()
@@ -75,6 +76,8 @@ async def populate_cache_from_iot_hub_query_wrapper():
 async def lifespan(_: FastAPI):
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, run_migrations)
+
+    await sync_permissions_to_db()
 
     jwks_refresh_task = None
 
@@ -136,9 +139,7 @@ app = FastAPI(
     version=VERSION,
     root_path=ROOT_PATH,
     lifespan=lifespan,
-    dependencies=[
-        Security(validate_jwt)
-    ],  # Every request must provide a token signed for this application
+    dependencies=[Security(ensure_user_exists)],  # Every request: validate token + auto-provision user
     docs_url=None,
     redoc_url=None,
     openapi_url="/openapi.json",

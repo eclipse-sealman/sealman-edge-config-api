@@ -1,0 +1,87 @@
+from uuid import UUID
+
+from sqlalchemy.exc import IntegrityError
+
+from db.repos.scope import ScopeRepository
+from exceptions import APIError
+from routers.auth.schemas import (
+    ScopeCreateRequest,
+    ScopeDetailsResponse,
+    ScopeUpdateRequest,
+    TeamSummaryResponse,
+)
+
+
+async def get_scopes(scope_repo: ScopeRepository):
+    return await scope_repo.list()
+
+
+async def get_scope_details(scope_id: UUID, scope_repo: ScopeRepository):
+    scope = await scope_repo.get(scope_id)
+    if scope is None:
+        raise APIError(f"Scope '{scope_id}' was not found", 404)
+
+    teams = await scope_repo.list_teams(scope_id)
+    return ScopeDetailsResponse(
+        **scope,
+        teams=[TeamSummaryResponse(**team) for team in teams],
+    )
+
+
+async def create_scope(
+    request: ScopeCreateRequest,
+    scope_repo: ScopeRepository,
+):
+    try:
+        return await scope_repo.create(
+            name=request.name,
+            description=request.description,
+            attr=request.attr,
+            access_rule=request.access_rule,
+        )
+    except IntegrityError:
+        raise APIError(f"Scope with name '{request.name}' already exists", 409)
+
+
+async def update_scope(
+    scope_id: UUID,
+    request: ScopeUpdateRequest,
+    scope_repo: ScopeRepository,
+):
+    if request.name.strip() == "":
+        raise APIError("Field 'name' must not be empty", 400)
+
+    if await scope_repo.get(scope_id) is None:
+        raise APIError(f"Scope '{scope_id}' was not found", 404)
+
+    try:
+        scope = await scope_repo.update(
+            scope_id=scope_id,
+            name=request.name,
+            description=request.description,
+            attr=request.attr,
+            access_rule=request.access_rule,
+        )
+    except IntegrityError:
+        raise APIError(f"Scope with name '{request.name}' already exists", 409)
+
+    if scope is None:
+        raise APIError(f"Scope '{scope_id}' was not found", 404)
+
+    return scope
+
+
+async def delete_scope(scope_id: UUID, scope_repo: ScopeRepository):
+    if await scope_repo.get(scope_id) is None:
+        raise APIError(f"Scope '{scope_id}' was not found", 404)
+
+    teams = await scope_repo.list_teams(scope_id)
+    if teams:
+        team_names = ", ".join(team["name"] for team in teams)
+        raise APIError(
+            f"Scope is assigned to {len(teams)} team(s) and cannot be deleted. Teams: {team_names}",
+            409,
+        )
+
+    await scope_repo.delete(scope_id)
+

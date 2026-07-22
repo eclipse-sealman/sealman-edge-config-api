@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 
 # ---------- Templates ----------
@@ -48,3 +48,12 @@ class ServiceListResponse(BaseModel):
 
 class ServiceUpdateRequest(BaseModel):
     services: List[ServiceConfig]
+
+
+# ---------- Device Template Config ----------
+
+class DeviceTemplateConfigResponse(BaseModel):
+    config: Dict[str, Any]
+
+class UpdateDeviceTemplateConfigRequest(BaseModel):
+    config: Dict[str, Any]

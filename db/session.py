@@ -1,7 +1,7 @@
-from typing import Callable, Type, TypeVar
+from typing import Callable, Type, TypeVar, cast
 
 from fastapi import Depends
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from constants import POSTGRES_URL
 from db.sqlalchemy import auto_import_repositories
 from helper import normalize_database_url
@@ -15,7 +15,6 @@ engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
-    class_=AsyncSession,
     expire_on_commit=False,
 )
 
@@ -31,7 +30,6 @@ T = TypeVar("T")
 def get_repository(interface: Type[T]) -> Callable[..., T]:
     def _get_repo(session: AsyncSession = Depends(get_db)) -> T:
         repo_cls = repo_registry.get(interface)
-        return repo_cls(session)
-
+        repo_factory = cast(Callable[[AsyncSession], T], repo_cls)
+        return repo_factory(session)
     return _get_repo
-

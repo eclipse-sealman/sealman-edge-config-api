@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from sqlalchemy import select, update, func, delete, text, and_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.device import Device, DeviceSnapshotCache
 from db.models.device_type import DeviceType
+from db.models.platform_config import PlatformConfig
 from db.registry import register_repository
 from db.repos.device import DeviceRepository
 from db.merge import resolve_fields, validate_instance_data, patch_data
@@ -81,6 +82,15 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
             select(Device).where(Device.device_id == device_id)
         )
         return result.scalar_one_or_none()
+
+    async def _get_platform_config(self, config_name: str) -> PlatformConfig:
+        result = await self._session.execute(
+            select(PlatformConfig).where(PlatformConfig.name == config_name)
+        )
+        config = result.scalar_one_or_none()
+        if not config:
+            raise ValueError(f"PlatformConfig '{config_name}' not found")
+        return config
 
     async def get_device_metadata(
         self,
@@ -211,7 +221,6 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         await self._session.execute(stmt)
         await self._session.commit()
 
-
     async def get_all_devices_raw(self) -> List[Dict[str, Any]]:
         result = await self._session.execute(select(Device))
         devices = result.scalars().all()
@@ -223,3 +232,108 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
             }
             for device in devices
         ]
+
+    async def get_device_meta_raw(self, device_id: str) -> Optional[Dict[str, Any]]:
+        device = await self._get_device(device_id)
+        if device is None:
+            return None
+        return dict(cast(Dict[str, Any], device.device_data) or {})
+
+
+    # -------------------- Device Template Config --------------------
+
+    async def get_device_template_config(
+        self,
+        config_name: str = "default",
+    ) -> Dict[str, Any]:
+        config = await self._get_platform_config(config_name)
+        return config.device_template_config or {}
+
+    async def update_device_template_config(
+        self,
+        config: Dict[str, Any],
+        config_name: str = "default",
+    ) -> Dict[str, Any]:
+        platform_config = await self._get_platform_config(config_name)
+        current = dict(platform_config.device_template_config or {})
+        current.update(config)
+
+        stmt = (
+            update(PlatformConfig)
+            .where(PlatformConfig.name == config_name)
+            .values(device_template_config=current)
+        )
+        await self._session.execute(stmt)
+        await self._session.commit()
+
+        return current
+
+
+    # -------------------- Endpoint Types --------------------
+
+    async def get_endpoint_types(
+        self,
+        config_name: str = "default",
+    ) -> List[Dict[str, Any]]:
+        config = await self._get_platform_config(config_name)
+        return config.endpoint_types or []
+
+    async def save_endpoint_types(
+        self,
+        types: List[Dict[str, Any]],
+        config_name: str = "default",
+    ) -> List[Dict[str, Any]]:
+        stmt = (
+            update(PlatformConfig)
+            .where(PlatformConfig.name == config_name)
+            .values(endpoint_types=types)
+        )
+        await self._session.execute(stmt)
+        await self._session.commit()
+        return types
+
+    # -------------------- Service Ports --------------------
+
+    async def get_service_ports(
+        self,
+        config_name: str = "default",
+    ) -> List[Dict[str, Any]]:
+        config = await self._get_platform_config(config_name)
+        return config.service_ports or []
+
+    async def save_service_ports(
+        self,
+        ports: List[Dict[str, Any]],
+        config_name: str = "default",
+    ) -> List[Dict[str, Any]]:
+        stmt = (
+            update(PlatformConfig)
+            .where(PlatformConfig.name == config_name)
+            .values(service_ports=ports)
+        )
+        await self._session.execute(stmt)
+        await self._session.commit()
+        return ports
+
+    # -------------------- Selected Templates --------------------
+
+    async def get_selected_templates(
+        self,
+        config_name: str = "default",
+    ) -> List[str]:
+        config = await self._get_platform_config(config_name)
+        return config.selected_templates or []
+
+    async def save_selected_templates(
+        self,
+        templates: List[str],
+        config_name: str = "default",
+    ) -> List[str]:
+        stmt = (
+            update(PlatformConfig)
+            .where(PlatformConfig.name == config_name)
+            .values(selected_templates=templates)
+        )
+        await self._session.execute(stmt)
+        await self._session.commit()
+        return templates
