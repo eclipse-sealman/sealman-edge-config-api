@@ -51,6 +51,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         label: str,
         description: Optional[str],
         fields: Dict[str, Any],
+        mapping: Dict[str, Any],
     ) -> Dict[str, Any]:
         existing = await self._session.execute(
             select(ServiceType).where(ServiceType.type_id == type_id)
@@ -59,7 +60,11 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
             raise APIError(f"ServiceType '{type_id}' already exists", 409)
         await self._raise_if_label_taken(label)
         st = ServiceType(
-            type_id=type_id, label=label, description=description, fields=fields or {}
+            type_id=type_id,
+            label=label,
+            description=description,
+            fields=fields or {},
+            mapping=mapping or {},
         )
         self._session.add(st)
         try:
@@ -86,6 +91,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         label: Optional[str] = None,
         description: Optional[str] = None,
         fields: Optional[Dict[str, Any]] = None,
+        mapping: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         st = await self._get_service_type_or_raise(type_id)
         values: Dict[str, Any] = {}
@@ -96,6 +102,8 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
             values["description"] = description
         if fields is not None:
             values["fields"] = patch_fields(st.fields or {}, fields)
+        if mapping is not None:
+            values["mapping"] = patch_data(st.mapping or {}, mapping)
         if values:
             try:
                 await self._session.execute(

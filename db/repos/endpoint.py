@@ -16,6 +16,7 @@ class EndpointRepository(ABC):
         label: str,
         description: Optional[str],
         fields: Dict[str, Any],
+        mapping: Dict[str, Any],
     ) -> Dict[str, Any]: ...
 
     @abstractmethod
@@ -25,6 +26,7 @@ class EndpointRepository(ABC):
         label: Optional[str] = None,
         description: Optional[str] = None,
         fields: Optional[Dict[str, Any]] = None,
+        mapping: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]: ...
 
     @abstractmethod

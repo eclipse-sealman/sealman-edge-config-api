@@ -89,6 +89,7 @@ class BlueprintResolver:
             "label": entity_type.label,
             "description": entity_type.description,
             "fields": entity_type.fields or {},
+            "mapping": entity_type.mapping or {},
             "created_at": entity_type.created_at,
             "updated_at": entity_type.updated_at,
         }

@@ -49,6 +49,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         label: str,
         description: Optional[str],
         fields: Dict[str, Any],
+        mapping: Dict[str, Any],
     ) -> Dict[str, Any]:
         existing = await self._session.execute(
             select(EndpointType).where(EndpointType.type_id == type_id)
@@ -57,7 +58,11 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             raise APIError(f"EndpointType '{type_id}' already exists", 409)
         await self._raise_if_label_taken(label)
         et = EndpointType(
-            type_id=type_id, label=label, description=description, fields=fields or {}
+            type_id=type_id,
+            label=label,
+            description=description,
+            fields=fields or {},
+            mapping=mapping or {},
         )
         self._session.add(et)
         try:
@@ -84,6 +89,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         label: Optional[str] = None,
         description: Optional[str] = None,
         fields: Optional[Dict[str, Any]] = None,
+        mapping: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         et = await self._get_endpoint_type_or_raise(type_id)
         values: Dict[str, Any] = {}
@@ -94,6 +100,8 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             values["description"] = description
         if fields is not None:
             values["fields"] = patch_fields(et.fields or {}, fields)
+        if mapping is not None:
+            values["mapping"] = patch_data(et.mapping or {}, mapping)
         if values:
             try:
                 await self._session.execute(
