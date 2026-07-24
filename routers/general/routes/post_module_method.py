@@ -17,24 +17,32 @@ async def post_module_method(device: str, module: str, method_data, auth_context
         f"/methods?api-version=2020-05-31-preview"
     )
 
+    connect_timeout_seconds = 10
+    response_timeout_seconds = 25
+
     if hasattr(method_data, "methodPayload") and method_data.methodPayload is not None:
         data = {
-            "connectTimeoutInSeconds": 10,
+            "connectTimeoutInSeconds": connect_timeout_seconds,
             "methodName": method_data.methodName,
-            "responseTimeoutInSeconds": 25,
+            "responseTimeoutInSeconds": response_timeout_seconds,
             "payload": method_data.methodPayload,
         }
     else:
         data = {
-            "connectTimeoutInSeconds": 10,
+            "connectTimeoutInSeconds": connect_timeout_seconds,
             "methodName": method_data.methodName,
-            "responseTimeoutInSeconds": 25,
+            "responseTimeoutInSeconds": response_timeout_seconds,
         }
 
     headers = get_iothub_auth_headers()
 
-    # Use longer timeout for restart operations since device/module needs time to reboot
-    timeout = 60 if "restart" in method_data.methodName.lower() else 8
+    # Our own HTTP timeout must exceed how long we tell IoT Hub to wait for the device
+    # (connect + response timeout above), otherwise we give up before IoT Hub does and
+    # misreport a healthy-but-slow device/module as "not responding". Add a margin for
+    # network/relay overhead on top. Restarts get extra headroom since the module needs
+    # time to actually reboot before it can respond.
+    default_timeout = connect_timeout_seconds + response_timeout_seconds + 10
+    timeout = 60 if "restart" in method_data.methodName.lower() else default_timeout
 
     await asyncio.gather(
         post_async(

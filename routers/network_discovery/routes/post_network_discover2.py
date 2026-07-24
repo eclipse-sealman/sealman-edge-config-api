@@ -1,7 +1,11 @@
+import logging
+
 from routers.general.routes.post_module_method import post_module_method
 from routers.network_discovery.schemas import NetworkDiscover
 from exceptions import EdgeModuleAPIError
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 
 class RequestDeviceModuleMethod(BaseModel):
@@ -21,9 +25,10 @@ async def post_network_discover2(device: str, network_discover: NetworkDiscover,
     method_data = RequestDeviceModuleMethod(methodName=method_name, methodPayload=method_payload)
     try:
         resp = await post_module_method(device, module_name, method_data, auth_context)
-    except Exception:
+    except Exception as exc:
+        logger.exception(f"network scan direct method call failed for device <{device}>, module <{module_name}>")
         raise EdgeModuleAPIError(f"module {module_name} is not responding - please check if its deployed and connected "
-                                 f"to the system", status_code=400)
+                                 f"to the system ({exc})", status_code=400)
 
     if resp.get("status") != 200:
         raise EdgeModuleAPIError(f"error while executing <{method_name}> on module <{module_name}>: "

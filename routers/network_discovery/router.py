@@ -1,13 +1,18 @@
-from typing import Union
+from typing import List, Union
 from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Device
 from fastapi import Depends
 
 from routers.base_api_router import BaseAPIRouter
-from .schemas import NetworkScan, NetworkDiscover
+from .schemas import NetworkScan, NetworkDiscover, NetworkOverview
 from common_schemas import DirectMethod
 from routers.network_discovery.routes.post_network_discover2 import post_network_discover2 as _post_network_discover2
 from routers.network_discovery.routes.get_network_topology import get_network_topology as _get_network_topology
+from routers.network_discovery.routes.post_network_overview import build_network_overview as _build_network_overview
+from routers.network_discovery.routes.get_network_scan_ports import get_network_scan_ports as _get_network_scan_ports
+from db.repos.endpoint import EndpointRepository
+from db.repos.service import ServiceRepository
+from db.session import get_repository
 
 
 network_discovery = BaseAPIRouter()
@@ -24,3 +29,21 @@ async def post_network_discover(device: str, network_discover: NetworkDiscover,
 async def get_network_topology(device: str,
                                 _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _get_network_topology(device)
+
+
+@network_discovery.post("/{device}/network/overview", tags=["Network"],
+                        response_model=NetworkOverview)
+async def post_network_overview(device: str, scan: NetworkScan,
+                                 endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
+                                 service_repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+                                 _ = Depends(ABACPermissionCheck(Device.READ))):
+    return await _build_network_overview(device, scan, endpoint_repo, service_repo)
+
+
+@network_discovery.get("/{device}/network/scan-ports", tags=["Network"],
+                       response_model=List[int])
+async def get_network_scan_ports(device: str,
+                                  endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
+                                  service_repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+                                  _ = Depends(ABACPermissionCheck(Device.READ))):
+    return await _get_network_scan_ports(device, endpoint_repo, service_repo)
