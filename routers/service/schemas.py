@@ -3,6 +3,10 @@ from typing import Optional, Dict, Any, Union
 from datetime import datetime
 from routers.schemas import ResolvedField, FieldDefinition, FieldDefinitionUpdate
 
+# Not constrained to a fixed set of values - the frontend maintains an extensible registry of
+# browser kinds (see registerBrowser()), so new kinds can be added there without a backend change.
+BrowserKind = str
+
 
 class ServiceTypeCreate(BaseModel):
     type_id: str
@@ -10,6 +14,7 @@ class ServiceTypeCreate(BaseModel):
     description: Optional[str] = None
     fields: Dict[str, FieldDefinition] = {}
     mapping: Dict[str, str] = {}
+    browser_kind: Optional[BrowserKind] = None
 
     @model_validator(mode="after")
     def _check_mapping(self) -> "ServiceTypeCreate":
@@ -27,6 +32,9 @@ class ServiceTypeUpdate(BaseModel):
     description: Optional[str] = None
     fields: Optional[Dict[str, Union[FieldDefinitionUpdate, None]]] = None
     mapping: Optional[Dict[str, Optional[str]]] = None
+    # Unlike the other fields here, this is always applied as given (None clears it back to "no
+    # browse action") rather than "None means leave unchanged" - there's no other way to clear it.
+    browser_kind: Optional[BrowserKind] = None
 
 
 class ServiceTypeResponse(BaseModel):
@@ -35,6 +43,7 @@ class ServiceTypeResponse(BaseModel):
     description: Optional[str]
     fields: Dict[str, FieldDefinition]
     mapping: Dict[str, str]
+    browser_kind: Optional[BrowserKind]
     created_at: datetime
     updated_at: datetime
 

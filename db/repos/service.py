@@ -17,6 +17,7 @@ class ServiceRepository(ABC):
         description: Optional[str],
         fields: Dict[str, Any],
         mapping: Dict[str, Any],
+        browser_kind: Optional[str] = None,
     ) -> Dict[str, Any]: ...
 
     @abstractmethod
@@ -27,6 +28,7 @@ class ServiceRepository(ABC):
         description: Optional[str] = None,
         fields: Optional[Dict[str, Any]] = None,
         mapping: Optional[Dict[str, Any]] = None,
+        browser_kind: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]: ...
 
     @abstractmethod

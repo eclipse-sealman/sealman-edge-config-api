@@ -15,6 +15,9 @@ class ServiceType(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     fields: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     mapping: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # Which built-in browser this service type opens when its "Browse" action is used
+    # (e.g. "http", "vnc", "opcua"). None means no browse action is available.
+    browser_kind: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
     )

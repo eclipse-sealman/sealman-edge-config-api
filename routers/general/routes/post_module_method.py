@@ -1,6 +1,5 @@
 import asyncio
 import json
-from auth import get_current_user
 from helper import AuditTrail, get_iothub_auth_headers
 from constants import IOT_HUB_NAME
 from async_requests import post_async
@@ -94,9 +93,12 @@ async def post_module_method(device: str, module: str, method_data, auth_context
 
     # TODO: Check if this audit trail is needed and correct - use centralized logging with querying capabilities instead
     if auth_context is not None:
+        # auth_context here is an ABACPermissionCheckResult ({user_name, user_id, permission,
+        # device_id}), not the raw JWT claims - it already carries the resolved user identity,
+        # so there's no need (and no correct way) to re-derive it via get_current_user().
         await AuditTrail.log(
-            get_current_user(auth_context),
-            f"{auth_context.get('resource_type')}.{auth_context.get('permission')} ID:{auth_context.get('resource_id')}",
+            auth_context.get("user_name"),
+            f"{auth_context.get('permission')} ID:{auth_context.get('device_id')}",
             method=f"{module}::{method_data.methodName}",
         )
 

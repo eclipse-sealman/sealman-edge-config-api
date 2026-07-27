@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Annotated, Dict, List, Literal, Optional
 from common_schemas import IPv4SubnetInt
 from routers.schemas import ResolvedField
+from routers.service.schemas import BrowserKind
 
 
 class NetworkDiscover(BaseModel):
@@ -40,6 +41,8 @@ class MappedPort(BaseModel):
     type_id: Optional[str] = None
     type_label: Optional[str] = None
     type_description: Optional[str] = None
+    service_data: Optional[Dict[str, ResolvedField]] = None
+    browser_kind: Optional[BrowserKind] = None
 
 
 class MappedEndpoint(BaseModel):
@@ -58,3 +61,8 @@ class MappedEndpoint(BaseModel):
 class NetworkOverview(BaseModel):
     scanDefinition: NetworkDiscover
     endpoints: List[MappedEndpoint]
+
+
+class NetworkRange(BaseModel):
+    networkDefinition: str
+    subnetMask: int

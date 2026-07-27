@@ -34,6 +34,11 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         )
         return result.scalar_one_or_none()
 
+    def _serialize_type(self, entity_type: Any) -> Dict[str, Any]:
+        result = super()._serialize_type(entity_type)
+        result["browser_kind"] = entity_type.browser_kind
+        return result
+
     async def get_service_types(self) -> List[Dict[str, Any]]:
         result = await self._session.execute(select(ServiceType))
         return [self._serialize_type(st) for st in result.scalars().all()]
@@ -52,6 +57,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         description: Optional[str],
         fields: Dict[str, Any],
         mapping: Dict[str, Any],
+        browser_kind: Optional[str] = None,
     ) -> Dict[str, Any]:
         existing = await self._session.execute(
             select(ServiceType).where(ServiceType.type_id == type_id)
@@ -65,6 +71,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
             description=description,
             fields=fields or {},
             mapping=mapping or {},
+            browser_kind=browser_kind,
         )
         self._session.add(st)
         try:
@@ -92,6 +99,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         description: Optional[str] = None,
         fields: Optional[Dict[str, Any]] = None,
         mapping: Optional[Dict[str, Any]] = None,
+        browser_kind: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         st = await self._get_service_type_or_raise(type_id)
         values: Dict[str, Any] = {}
@@ -104,6 +112,9 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
             values["fields"] = patch_fields(st.fields or {}, fields)
         if mapping is not None:
             values["mapping"] = patch_data(st.mapping or {}, mapping)
+        # Always applied (even when None, to clear it back to "no browse action") - unlike the
+        # fields above, there's no separate signal for "leave this unchanged" here.
+        values["browser_kind"] = browser_kind
         if values:
             try:
                 await self._session.execute(

@@ -37,6 +37,7 @@ def upgrade() -> None:
     sa.Column('description', sa.Text(), nullable=True),
     sa.Column('fields', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('mapping', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('browser_kind', sa.Text(), nullable=True),
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('type_id'),

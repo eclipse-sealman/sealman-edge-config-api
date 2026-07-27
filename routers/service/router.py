@@ -71,6 +71,7 @@ async def create_service_type(
             description=body.description,
             fields={k: v.model_dump(exclude_none=True) for k, v in body.fields.items()},
             mapping=body.mapping,
+            browser_kind=body.browser_kind,
         )
         return ServiceTypeResponse.model_validate(result)
     except APIError as exc:
@@ -128,6 +129,7 @@ async def update_service_type(
             description=body.description,
             fields=field_patch,
             mapping=body.mapping,
+            browser_kind=body.browser_kind,
         )
     except APIError as exc:
         _handle_api_error(exc)

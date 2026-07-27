@@ -4,12 +4,13 @@ from authorization.permission_types import Device
 from fastapi import Depends
 
 from routers.base_api_router import BaseAPIRouter
-from .schemas import NetworkScan, NetworkDiscover, NetworkOverview
+from .schemas import NetworkScan, NetworkDiscover, NetworkOverview, NetworkRange
 from common_schemas import DirectMethod
 from routers.network_discovery.routes.post_network_discover2 import post_network_discover2 as _post_network_discover2
 from routers.network_discovery.routes.get_network_topology import get_network_topology as _get_network_topology
 from routers.network_discovery.routes.post_network_overview import build_network_overview as _build_network_overview
 from routers.network_discovery.routes.get_network_scan_ports import get_network_scan_ports as _get_network_scan_ports
+from routers.network_discovery.routes.get_network_scan_range import get_network_scan_range as _get_network_scan_range
 from db.repos.endpoint import EndpointRepository
 from db.repos.service import ServiceRepository
 from db.session import get_repository
@@ -47,3 +48,11 @@ async def get_network_scan_ports(device: str,
                                   service_repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
                                   _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _get_network_scan_ports(device, endpoint_repo, service_repo)
+
+
+@network_discovery.get("/{device}/network/scan-range", tags=["Network"],
+                       response_model=NetworkRange)
+async def get_network_scan_range(device: str,
+                                  endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
+                                  _ = Depends(ABACPermissionCheck(Device.READ))):
+    return await _get_network_scan_range(device, endpoint_repo)
