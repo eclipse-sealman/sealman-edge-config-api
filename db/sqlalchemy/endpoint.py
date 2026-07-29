@@ -5,7 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models.endpoint import Endpoint, EndpointType
 from db.registry import register_repository
 from db.repos.endpoint import EndpointRepository
-from db.merge import BlueprintResolver, patch_data, patch_fields, validate_instance_data
+from db.merge import (
+    BlueprintResolver,
+    patch_data,
+    patch_fields,
+    reject_non_changeable_updates,
+    validate_instance_data,
+)
 from exceptions import APIError
 
 
@@ -161,19 +167,39 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         return self._serialize_resolved(endpoint, et)
 
     async def update_endpoint(
-        self, endpoint_id: str, endpoint_data: Dict[str, Any]
+        self,
+        endpoint_id: str,
+        endpoint_data: Optional[Dict[str, Any]] = None,
+        type_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         endpoint = await self._get_endpoint(endpoint_id)
         if endpoint is None:
             return None
-        et = await self._get_endpoint_type_or_raise(endpoint.type_id)
-        merged_data = patch_data(endpoint.endpoint_data or {}, endpoint_data)
-        validate_instance_data(merged_data, et.fields or {})
-        await self._session.execute(
-            update(Endpoint)
-            .where(Endpoint.endpoint_id == endpoint_id)
-            .values(endpoint_data=merged_data)
-        )
+
+        if type_id is not None and type_id != endpoint.type_id:
+            # Reassigning to a different type: the old endpoint_data was validated against a
+            # different field schema, so it isn't merged forward - the caller supplies fresh
+            # data for the new type, validated the same way a newly-created endpoint would be.
+            new_et = await self._get_endpoint_type_or_raise(type_id)
+            new_data = endpoint_data or {}
+            validate_instance_data(new_data, new_et.fields or {})
+            await self._session.execute(
+                update(Endpoint)
+                .where(Endpoint.endpoint_id == endpoint_id)
+                .values(type_id=type_id, endpoint_data=new_data)
+            )
+        else:
+            et = await self._get_endpoint_type_or_raise(endpoint.type_id)
+            patch = endpoint_data or {}
+            reject_non_changeable_updates(endpoint.endpoint_data or {}, patch, et.fields or {})
+            merged_data = patch_data(endpoint.endpoint_data or {}, patch)
+            validate_instance_data(merged_data, et.fields or {})
+            await self._session.execute(
+                update(Endpoint)
+                .where(Endpoint.endpoint_id == endpoint_id)
+                .values(endpoint_data=merged_data)
+            )
+
         await self._session.commit()
         return await self.get_endpoint(endpoint_id)
 

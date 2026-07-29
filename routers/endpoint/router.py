@@ -226,6 +226,7 @@ async def update_endpoint(
         result = await repo.update_endpoint(
             endpoint_id=endpoint_id,
             endpoint_data=body.endpoint_data,
+            type_id=body.type_id,
         )
     except (APIError, ValueError) as exc:
         if isinstance(exc, APIError):

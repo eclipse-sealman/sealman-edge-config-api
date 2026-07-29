@@ -54,7 +54,8 @@ class EndpointRepository(ABC):
     async def update_endpoint(
         self,
         endpoint_id: str,
-        endpoint_data: Dict[str, Any],
+        endpoint_data: Optional[Dict[str, Any]] = None,
+        type_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]: ...
 
     @abstractmethod

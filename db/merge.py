@@ -51,6 +51,24 @@ def validate_instance_data(
             raise ValidationError(str(exc), 422)
 
 
+def reject_non_changeable_updates(
+    current_data: Dict[str, Any],
+    data_patch: Dict[str, Any],
+    type_fields: Dict[str, Any],
+) -> None:
+    """Raises ValidationError if the patch tries to set a different value for a field whose
+    definition has `changeable: false` and which already has a value (e.g. a scanned IP
+    address that must not be hand-edited once discovered).
+    """
+    for field_key, new_value in data_patch.items():
+        field_def = type_fields.get(field_key)
+        if field_def is None or field_def.get("changeable", True):
+            continue
+        current_value = current_data.get(field_key)
+        if current_value is not None and new_value != current_value:
+            raise ValidationError(f"'{field_key}' is not changeable once set", 422)
+
+
 def patch_fields(
     current_fields: Dict[str, Any],
     field_patches: Dict[str, Any],

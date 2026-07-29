@@ -89,6 +89,10 @@ class FieldDefinition(BaseModel):
     default: Optional[Any] = Field(
         default=None, description="Default value used when none is provided"
     )
+    changeable: bool = Field(
+        default=True,
+        description="If false, the value can no longer be edited once an instance has it set",
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -163,6 +167,10 @@ class FieldDefinitionUpdate(BaseModel):
     )
     default: Optional[Any] = Field(
         default=None, description="Default value used when none is provided"
+    )
+    changeable: Optional[bool] = Field(
+        default=None,
+        description="If false, the value can no longer be edited once an instance has it set",
     )
 
     model_config = {"extra": "forbid"}

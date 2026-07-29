@@ -45,7 +45,8 @@ class EndpointCreate(BaseModel):
 
 
 class EndpointUpdate(BaseModel):
-    endpoint_data: Dict[str, Optional[Any]]
+    type_id: Optional[str] = None
+    endpoint_data: Dict[str, Optional[Any]] = {}
 
 
 class EndpointResponse(BaseModel):
