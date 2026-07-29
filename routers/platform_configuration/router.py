@@ -17,6 +17,9 @@ from .schemas import (
 
 from .service import (get_available_templates)
 
+from authorization.abac_permission_check import ABACPermissionCheck
+from authorization.permission_types import Platform
+
 
 platform_config = BaseAPIRouter(
     prefix="/platform",
@@ -29,6 +32,7 @@ platform_config = BaseAPIRouter(
 @platform_config.get("/devices/available-templates", response_model=TemplateListResponse)
 async def get_available_templates_route(
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    _ = Depends(ABACPermissionCheck(Platform.CONFIG_READ, device_path=None)),
 ):
     selected = await repo.get_selected_templates()
     templates = await get_available_templates(selected)
@@ -39,6 +43,7 @@ async def get_available_templates_route(
 async def update_selected_templates(
     request: SelectedTemplatesRequest,
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    _ = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None)),
 ):
     await repo.save_selected_templates(request.templates)
     return {"status": "updated"}
@@ -49,6 +54,7 @@ async def update_selected_templates(
 @platform_config.get("/device-endpoints/types")
 async def get_endpoint_types(
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    _ = Depends(ABACPermissionCheck(Platform.CONFIG_READ, device_path=None)),
 ):
     data = await repo.get_endpoint_types()
     return {"types": data}
@@ -58,6 +64,7 @@ async def get_endpoint_types(
 async def update_endpoint_types(
     request: EndpointTypeUpdateRequest,
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    _ = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None)),
 ):
     payload = [
         {"name": item.name, "description": item.description, "defaultIP": item.defaultIP}
@@ -72,6 +79,7 @@ async def update_endpoint_types(
 @platform_config.get("/device-endpoints/services")
 async def get_services(
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    _ = Depends(ABACPermissionCheck(Platform.CONFIG_READ, device_path=None)),
 ):
     data = await repo.get_service_ports()
     return {"services": data}
@@ -80,6 +88,7 @@ async def get_services(
 async def update_services(
     request: ServiceUpdateRequest,
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    _ = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None)),
 ):
     payload = [
         {
@@ -119,6 +128,7 @@ def _meta_to_response_keys(meta: dict) -> list:
 @platform_config.get("/metadata/keys", response_model=MetadataKeysResponse)
 async def get_metadata_keys(
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    _ = Depends(ABACPermissionCheck(Platform.CONFIG_READ, device_path=None)),
 ):
     meta = await repo.get_platform_meta_keys()
     return MetadataKeysResponse(keys=_meta_to_response_keys(meta))
@@ -128,6 +138,7 @@ async def get_metadata_keys(
 async def add_metadata_key(
     request: AddMetadataKeyRequest,
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    _ = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None)),
 ):
     key_name, key_options = next(iter(request.key.items()))
     meta = await repo.add_platform_meta_key(key_name, key_options.model_dump())
@@ -138,6 +149,7 @@ async def add_metadata_key(
 async def delete_metadata_key(
     key: str,
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    _ = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None)),
 ):
     meta = await repo.delete_platform_meta_key(key)
     return MetadataKeysResponse(keys=_meta_to_response_keys(meta))
@@ -148,6 +160,7 @@ async def delete_metadata_key(
 @platform_config.get("/device-template-config", response_model=DeviceTemplateConfigResponse)
 async def get_device_template_config(
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    _ = Depends(ABACPermissionCheck(Platform.CONFIG_READ, device_path=None)),
 ):
     config = await repo.get_device_template_config()
     return DeviceTemplateConfigResponse(config=config)
@@ -157,6 +170,7 @@ async def get_device_template_config(
 async def update_device_template_config(
     request: UpdateDeviceTemplateConfigRequest,
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    _ = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None)),
 ):
     config = await repo.update_device_template_config(request.config)
     return DeviceTemplateConfigResponse(config=config)

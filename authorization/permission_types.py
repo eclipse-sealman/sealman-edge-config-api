@@ -1,18 +1,24 @@
 class Platform:
     AUTHORIZATION_READ = "platform.authorization.read"
     AUTHORIZATION_WRITE = "platform.authorization.write"
+    CONFIG_READ = "platform.config.read"
+    CONFIG_WRITE = "platform.config.write"
 
     ReadPermissions = [
         AUTHORIZATION_READ,
+        CONFIG_READ,
     ]
     EditPermissions = [
         AUTHORIZATION_WRITE,
+        CONFIG_WRITE,
     ]
 
     _is_global = True
     _descriptions = {
         AUTHORIZATION_READ: "Read platform authorization data (users, teams, roles, permissions)",
         AUTHORIZATION_WRITE: "Write platform authorization data (users, teams, roles, permissions)",
+        CONFIG_READ: "Read platform configuration (templates, endpoint types, services, metadata keys)",
+        CONFIG_WRITE: "Write platform configuration (templates, endpoint types, services, metadata keys)",
     }
 
 
