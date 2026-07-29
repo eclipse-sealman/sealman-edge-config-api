@@ -64,5 +64,5 @@ class NetworkOverview(BaseModel):
 
 
 class NetworkRange(BaseModel):
-    networkDefinition: str
-    subnetMask: int
+    networkDefinition: Annotated[str, IPv4Address]
+    subnetMask: IPv4SubnetInt

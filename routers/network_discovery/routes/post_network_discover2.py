@@ -25,7 +25,6 @@ async def post_network_discover2(device: str, network_discover: NetworkDiscover,
     method_data = RequestDeviceModuleMethod(methodName=method_name, methodPayload=method_payload)
     try:
         resp = await post_module_method(device, module_name, method_data, auth_context)
-        print(resp)
     except Exception as exc:
         logger.exception(f"network scan direct method call failed for device <{device}>, module <{module_name}>")
         raise EdgeModuleAPIError(f"module {module_name} is not responding - please check if its deployed and connected "

@@ -1,7 +1,9 @@
 import logging
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 from db.repos.endpoint import EndpointRepository
+from db.repos.host_status import HostStatusRepository
 from db.repos.service import ServiceRepository
 from routers.network_discovery.mapping_helpers import role_field_key, resolved_value
 from routers.network_discovery.schemas import (
@@ -12,6 +14,19 @@ from routers.network_discovery.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_status_change(
+    previous: Optional[Tuple[str, datetime]], status: str, now: datetime
+) -> datetime:
+    """
+    A fresh scan runs every few seconds, so the module's own `lastStatusChange` can't be trusted
+    to mean anything but "now". Instead, only advance the timestamp when the status actually
+    differs from the last one we persisted for this host/port - otherwise keep the old timestamp.
+    """
+    if previous is None or previous[0] != status:
+        return now
+    return previous[1]
 
 
 def _build_instance_data(
@@ -36,10 +51,17 @@ async def build_network_overview(
     scan: NetworkScan,
     endpoint_repo: EndpointRepository,
     service_repo: ServiceRepository,
+    host_status_repo: HostStatusRepository,
 ) -> NetworkOverview:
     endpoint_types = {et["type_id"]: et for et in await endpoint_repo.get_endpoint_types()}
     service_types = {st["type_id"]: st for st in await service_repo.get_service_types()}
     configured_endpoints = await endpoint_repo.get_endpoints(device_id=device)
+
+    now = datetime.now(timezone.utc)
+    previous_host_statuses = await host_status_repo.get_host_statuses(device)
+    previous_port_statuses = await host_status_repo.get_port_statuses(device)
+    new_host_statuses: Dict[str, Tuple[str, datetime]] = {}
+    new_port_statuses: Dict[Tuple[str, int], Tuple[str, datetime]] = {}
 
     configured_endpoints_by_ip: Dict[str, Dict[str, Any]] = {}
     for endpoint in configured_endpoints:
@@ -78,6 +100,8 @@ async def build_network_overview(
     mapped_endpoints: List[MappedEndpoint] = []
     for host in scan.scanResults:
         ip_str = str(host.ip)
+        host_changed_at = _resolve_status_change(previous_host_statuses.get(ip_str), host.status, now)
+        new_host_statuses[ip_str] = (host.status, host_changed_at)
         configured_endpoint = configured_endpoints_by_ip.get(ip_str)
         default_endpoint_type = None if configured_endpoint else default_endpoint_types_by_ip.get(ip_str)
 
@@ -155,6 +179,11 @@ async def build_network_overview(
             except ValueError:
                 continue
 
+            port_changed_at = _resolve_status_change(
+                previous_port_statuses.get((ip_str, port_num)), port_status.status, now
+            )
+            new_port_statuses[(ip_str, port_num)] = (port_status.status, port_changed_at)
+
             configured_service = configured_services_by_port.get(port_num)
             default_service_type = None if configured_service else default_service_types_by_port.get(port_num)
 
@@ -163,7 +192,7 @@ async def build_network_overview(
                 mapped_ports.append(MappedPort(
                     port=port_num,
                     status=port_status.status,
-                    lastStatusChange=port_status.lastStatusChange,
+                    lastStatusChange=port_changed_at.isoformat(),
                     source="configured",
                     service_id=configured_service["service_id"],
                     type_id=configured_service["type_id"],
@@ -198,7 +227,7 @@ async def build_network_overview(
                     mapped_ports.append(MappedPort(
                         port=port_num,
                         status=port_status.status,
-                        lastStatusChange=port_status.lastStatusChange,
+                        lastStatusChange=port_changed_at.isoformat(),
                         source="configured",
                         service_id=created_service["service_id"],
                         type_id=created_service["type_id"],
@@ -211,7 +240,7 @@ async def build_network_overview(
                     mapped_ports.append(MappedPort(
                         port=port_num,
                         status=port_status.status,
-                        lastStatusChange=port_status.lastStatusChange,
+                        lastStatusChange=port_changed_at.isoformat(),
                         source="default",
                         type_id=default_service_type["type_id"],
                         type_label=default_service_type["label"],
@@ -223,14 +252,14 @@ async def build_network_overview(
             mapped_ports.append(MappedPort(
                 port=port_num,
                 status=port_status.status,
-                lastStatusChange=port_status.lastStatusChange,
+                lastStatusChange=port_changed_at.isoformat(),
                 source="unidentified",
             ))
 
         mapped_endpoints.append(MappedEndpoint(
             ip=ip_str,
             status=host.status,
-            lastStatusChange=host.lastStatusChange,
+            lastStatusChange=host_changed_at.isoformat(),
             source=source,
             endpoint_id=endpoint_id,
             type_id=type_id,
@@ -239,5 +268,8 @@ async def build_network_overview(
             endpoint_data=endpoint_data,
             ports=mapped_ports,
         ))
+
+    await host_status_repo.set_host_statuses(device, new_host_statuses)
+    await host_status_repo.set_port_statuses(device, new_port_statuses)
 
     return NetworkOverview(scanDefinition=scan.scanDefinition, endpoints=mapped_endpoints)
