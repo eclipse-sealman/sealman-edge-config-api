@@ -1,15 +1,13 @@
 from fastapi import Depends
 from routers.base_api_router import BaseAPIRouter
-from db.repos.device import DeviceRepository
+from db.repos.device_template import DeviceTemplateRepository
 from db.session import get_repository
 
 from .schemas import (
     TemplateListResponse,
     SelectedTemplatesRequest,
-    EndpointTypeUpdateRequest,
-    ServiceUpdateRequest,
-    DeviceTemplateConfigResponse,
-    UpdateDeviceTemplateConfigRequest,
+    TemplateVariableListResponse,
+    SetTemplateVariableRequest,
 )
 
 from .service import (get_available_templates)
@@ -25,7 +23,7 @@ platform_config = BaseAPIRouter(
 
 @platform_config.get("/devices/available-templates", response_model=TemplateListResponse)
 async def get_available_templates_route(
-    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    repo: DeviceTemplateRepository = Depends(get_repository(DeviceTemplateRepository)),
 ):
     selected = await repo.get_selected_templates()
     templates = await get_available_templates(selected)
@@ -35,75 +33,36 @@ async def get_available_templates_route(
 @platform_config.post("/devices/selected-templates")
 async def update_selected_templates(
     request: SelectedTemplatesRequest,
-    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    repo: DeviceTemplateRepository = Depends(get_repository(DeviceTemplateRepository)),
 ):
     await repo.save_selected_templates(request.templates)
     return {"status": "updated"}
 
 
-# ==================== ENDPOINT TYPES ====================
+# ==================== DEVICE TEMPLATE VARIABLES ====================
 
-@platform_config.get("/device-endpoints/types")
-async def get_endpoint_types(
-    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+@platform_config.get("/device-template-variables", response_model=TemplateVariableListResponse)
+async def get_template_variables(
+    repo: DeviceTemplateRepository = Depends(get_repository(DeviceTemplateRepository)),
 ):
-    data = await repo.get_endpoint_types()
-    return {"types": data}
+    variables = await repo.get_template_variables()
+    return TemplateVariableListResponse(variables=variables)
 
 
-@platform_config.post("/device-endpoints/types")
-async def update_endpoint_types(
-    request: EndpointTypeUpdateRequest,
-    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+@platform_config.put("/device-template-variables/{name}", response_model=TemplateVariableListResponse)
+async def set_template_variable(
+    name: str,
+    request: SetTemplateVariableRequest,
+    repo: DeviceTemplateRepository = Depends(get_repository(DeviceTemplateRepository)),
 ):
-    payload = [
-        {"name": item.name, "description": item.description, "defaultIP": item.defaultIP}
-        for item in request.types
-    ]
-    await repo.save_endpoint_types(payload)
-    return {"status": "updated"}
+    variables = await repo.set_template_variable(name, request.value)
+    return TemplateVariableListResponse(variables=variables)
 
 
-# ==================== SERVICES ====================
-
-@platform_config.get("/device-endpoints/services")
-async def get_services(
-    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+@platform_config.delete("/device-template-variables/{name}")
+async def delete_template_variable(
+    name: str,
+    repo: DeviceTemplateRepository = Depends(get_repository(DeviceTemplateRepository)),
 ):
-    data = await repo.get_service_ports()
-    return {"services": data}
-
-@platform_config.post("/device-endpoints/services")
-async def update_services(
-    request: ServiceUpdateRequest,
-    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
-):
-    payload = [
-        {
-            "deviceEndpointServiceName": s.deviceEndpointServiceName,
-            "description": s.description,
-            "defaultPort": s.defaultPort,
-        }
-        for s in request.services
-    ]
-    await repo.save_service_ports(payload)
-    return {"status": "updated"}
-
-
-# ==================== DEVICE TEMPLATE CONFIG ====================
-
-@platform_config.get("/device-template-config", response_model=DeviceTemplateConfigResponse)
-async def get_device_template_config(
-    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
-):
-    config = await repo.get_device_template_config()
-    return DeviceTemplateConfigResponse(config=config)
-
-
-@platform_config.patch("/device-template-config", response_model=DeviceTemplateConfigResponse)
-async def update_device_template_config(
-    request: UpdateDeviceTemplateConfigRequest,
-    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
-):
-    config = await repo.update_device_template_config(request.config)
-    return DeviceTemplateConfigResponse(config=config)
+    await repo.delete_template_variable(name)
+    return {"status": "deleted"}

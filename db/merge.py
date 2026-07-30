@@ -30,6 +30,17 @@ def resolve_fields(
     return resolved
 
 
+def merge_type_fields(
+    base_fields: Dict[str, Any],
+    override_fields: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merges two field-definition dicts, with `override_fields`' definitions taking precedence
+    on key collisions. Used to make a device type inherit another type's field schema (e.g. the
+    default type's required fields) while still letting it redefine any of those keys itself.
+    """
+    return {**base_fields, **override_fields}
+
+
 def validate_instance_data(
     data: Dict[str, Any],
     type_fields: Dict[str, Any],

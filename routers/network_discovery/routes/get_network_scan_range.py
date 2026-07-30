@@ -66,7 +66,8 @@ async def get_network_scan_range(
 
     # No default entry: if nothing is known (no configured endpoints, no type defaults) and
     # nothing has ever been derived/stored before, there's simply no automatic baseline range -
-    # the caller falls back to only scanning whatever extra ranges/IPs the user has added.
+    # the caller falls back to only scanning whatever extra range/ports/IPs the user has added
+    # for this one scan (see ScanNetworkDialog's "Read Network Configuration" button).
     if not points and stored is None:
         return None
 

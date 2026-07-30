@@ -6,10 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.device import Device, DeviceSnapshotCache
 from db.models.device_type import DeviceType
-from db.models.platform_config import PlatformConfig
 from db.registry import register_repository
 from db.repos.device import DeviceRepository
-from db.merge import resolve_fields, validate_instance_data, patch_data
+from db.merge import resolve_fields, validate_instance_data, patch_data, merge_type_fields
 from exceptions import APIError
 
 
@@ -77,20 +76,26 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
             raise APIError(f"DeviceType '{type_id}' not found", 404)
         return dt
 
+    async def _get_default_type_fields(self) -> Dict[str, Any]:
+        result = await self._session.execute(
+            select(DeviceType).where(DeviceType.type_id == "default")
+        )
+        dt = result.scalar_one_or_none()
+        return dt.fields or {} if dt else {}
+
+    async def _effective_fields_for(self, device_type: DeviceType) -> Dict[str, Any]:
+        """The default type's required fields apply to every device type, so a non-default
+        type's effective schema is the default type's fields with its own overlaid on top."""
+        if device_type.type_id == "default":
+            return device_type.fields or {}
+        default_fields = await self._get_default_type_fields()
+        return merge_type_fields(default_fields, device_type.fields or {})
+
     async def _get_device(self, device_id: str) -> Optional[Device]:
         result = await self._session.execute(
             select(Device).where(Device.device_id == device_id)
         )
         return result.scalar_one_or_none()
-
-    async def _get_platform_config(self, config_name: str) -> PlatformConfig:
-        result = await self._session.execute(
-            select(PlatformConfig).where(PlatformConfig.name == config_name)
-        )
-        config = result.scalar_one_or_none()
-        if not config:
-            raise ValueError(f"PlatformConfig '{config_name}' not found")
-        return config
 
     async def get_device_metadata(
         self,
@@ -102,12 +107,13 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
             return None
 
         device_type = await self._get_device_type_or_raise(device.type_id)
+        effective_fields = await self._effective_fields_for(device_type)
 
         return {
             "device_id": device.device_id,
             "type_id": device.type_id,
             "device_metadata": resolve_fields(
-                device.device_data or {}, device_type.fields or {}
+                device.device_data or {}, effective_fields
             ),
             "created_at": device.created_at,
             "updated_at": device.updated_at,
@@ -118,7 +124,14 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
     ) -> List[Dict[str, Any]]:
 
         types_result = await self._session.execute(select(DeviceType))
-        fields_by_type = {dt.type_id: dt.fields or {} for dt in types_result.scalars().all()}
+        raw_fields_by_type = {dt.type_id: dt.fields or {} for dt in types_result.scalars().all()}
+        default_fields = raw_fields_by_type.get("default", {})
+        fields_by_type = {
+            type_id: (
+                fields if type_id == "default" else merge_type_fields(default_fields, fields)
+            )
+            for type_id, fields in raw_fields_by_type.items()
+        }
 
         devices = await self.get_devices_joined_snapshot()
 
@@ -157,7 +170,8 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
 
         device_type = await self._get_device_type_or_raise(device.type_id)
         merged_data = patch_data(device.device_data or {}, metadata)
-        validate_instance_data(merged_data, device_type.fields or {})
+        effective_fields = await self._effective_fields_for(device_type)
+        validate_instance_data(merged_data, effective_fields)
 
         stmt = (
             update(Device)
@@ -201,7 +215,8 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         self, device_id: str, metadata: Dict[str, Any], type_id: str = "default"
     ):
         device_type = await self._get_device_type_or_raise(type_id)
-        validate_instance_data(metadata or {}, device_type.fields or {})
+        effective_fields = await self._effective_fields_for(device_type)
+        validate_instance_data(metadata or {}, effective_fields)
 
         device = Device(device_id=device_id, type_id=type_id, device_data=metadata or {})
         self._session.add(device)
@@ -238,102 +253,3 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         if device is None:
             return None
         return dict(cast(Dict[str, Any], device.device_data) or {})
-
-
-    # -------------------- Device Template Config --------------------
-
-    async def get_device_template_config(
-        self,
-        config_name: str = "default",
-    ) -> Dict[str, Any]:
-        config = await self._get_platform_config(config_name)
-        return config.device_template_config or {}
-
-    async def update_device_template_config(
-        self,
-        config: Dict[str, Any],
-        config_name: str = "default",
-    ) -> Dict[str, Any]:
-        platform_config = await self._get_platform_config(config_name)
-        current = dict(platform_config.device_template_config or {})
-        current.update(config)
-
-        stmt = (
-            update(PlatformConfig)
-            .where(PlatformConfig.name == config_name)
-            .values(device_template_config=current)
-        )
-        await self._session.execute(stmt)
-        await self._session.commit()
-
-        return current
-
-
-    # -------------------- Endpoint Types --------------------
-
-    async def get_endpoint_types(
-        self,
-        config_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-        config = await self._get_platform_config(config_name)
-        return config.endpoint_types or []
-
-    async def save_endpoint_types(
-        self,
-        types: List[Dict[str, Any]],
-        config_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-        stmt = (
-            update(PlatformConfig)
-            .where(PlatformConfig.name == config_name)
-            .values(endpoint_types=types)
-        )
-        await self._session.execute(stmt)
-        await self._session.commit()
-        return types
-
-    # -------------------- Service Ports --------------------
-
-    async def get_service_ports(
-        self,
-        config_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-        config = await self._get_platform_config(config_name)
-        return config.service_ports or []
-
-    async def save_service_ports(
-        self,
-        ports: List[Dict[str, Any]],
-        config_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-        stmt = (
-            update(PlatformConfig)
-            .where(PlatformConfig.name == config_name)
-            .values(service_ports=ports)
-        )
-        await self._session.execute(stmt)
-        await self._session.commit()
-        return ports
-
-    # -------------------- Selected Templates --------------------
-
-    async def get_selected_templates(
-        self,
-        config_name: str = "default",
-    ) -> List[str]:
-        config = await self._get_platform_config(config_name)
-        return config.selected_templates or []
-
-    async def save_selected_templates(
-        self,
-        templates: List[str],
-        config_name: str = "default",
-    ) -> List[str]:
-        stmt = (
-            update(PlatformConfig)
-            .where(PlatformConfig.name == config_name)
-            .values(selected_templates=templates)
-        )
-        await self._session.execute(stmt)
-        await self._session.commit()
-        return templates

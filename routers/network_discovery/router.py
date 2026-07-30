@@ -11,14 +11,9 @@ from routers.network_discovery.routes.get_network_topology import get_network_to
 from routers.network_discovery.routes.post_network_overview import build_network_overview as _build_network_overview
 from routers.network_discovery.routes.get_network_scan_ports import get_network_scan_ports as _get_network_scan_ports
 from routers.network_discovery.routes.get_network_scan_range import get_network_scan_range as _get_network_scan_range
-from routers.network_discovery.routes.scan_ranges_list import (
-    get_network_scan_ranges as _get_network_scan_ranges,
-    put_network_scan_ranges as _put_network_scan_ranges,
-)
 from db.repos.endpoint import EndpointRepository
 from db.repos.service import ServiceRepository
 from db.repos.network_range import NetworkRangeRepository
-from db.repos.extra_network_range import ExtraNetworkRangeRepository
 from db.repos.host_status import HostStatusRepository
 from db.session import get_repository
 
@@ -65,19 +60,3 @@ async def get_network_scan_range(device: str,
                                   network_range_repo: NetworkRangeRepository = Depends(get_repository(NetworkRangeRepository)),
                                   _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _get_network_scan_range(device, endpoint_repo, network_range_repo)
-
-
-@network_discovery.get("/{device}/network/scan-ranges", tags=["Network"],
-                       response_model=List[NetworkRange])
-async def get_network_scan_ranges(device: str,
-                                   repo: ExtraNetworkRangeRepository = Depends(get_repository(ExtraNetworkRangeRepository)),
-                                   _ = Depends(ABACPermissionCheck(Device.READ))):
-    return await _get_network_scan_ranges(device, repo)
-
-
-@network_discovery.put("/{device}/network/scan-ranges", tags=["Network"],
-                       response_model=List[NetworkRange])
-async def put_network_scan_ranges(device: str, ranges: List[NetworkRange],
-                                   repo: ExtraNetworkRangeRepository = Depends(get_repository(ExtraNetworkRangeRepository)),
-                                   _ = Depends(ABACPermissionCheck(Device.NETWORK_WRITE))):
-    return await _put_network_scan_ranges(device, ranges, repo)

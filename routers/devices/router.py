@@ -3,6 +3,7 @@ from routers.base_api_router import BaseAPIRouter
 from authorization.abac_permission_check import ABACDeviceListFilter, ABACDeviceListFilterResult
 from authorization.permission_types import Device
 from db.repos.device import DeviceRepository
+from db.repos.device_template import DeviceTemplateRepository
 from db.session import get_repository
 from .routes.get_devices import get_devices, populate_cache_from_iot_hub_query
 from .routes.create_device import create_device
@@ -28,9 +29,10 @@ async def create_device_route(
     device_id: str,
     request: Request,
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    template_repo: DeviceTemplateRepository = Depends(get_repository(DeviceTemplateRepository)),
 ):
     body = await request.json()
-    return await create_device(device_id, body, repo)
+    return await create_device(device_id, body, repo, template_repo)
 
 
 @devices.delete("/{device_id}")
