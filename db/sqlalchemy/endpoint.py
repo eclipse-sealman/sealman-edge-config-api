@@ -122,8 +122,21 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             await self._session.refresh(et)
         return self._serialize_type(et)
 
-    async def delete_endpoint_type(self, type_id: str) -> None:
+    async def delete_endpoint_type(self, type_id: str, cascade: bool = False) -> None:
         await self._get_endpoint_type_or_raise(type_id)
+        if cascade:
+            # Services cascade via their own FK to endpoints (ondelete=CASCADE).
+            await self._session.execute(
+                delete(Endpoint).where(Endpoint.type_id == type_id)
+            )
+        else:
+            in_use = await self._session.execute(
+                select(Endpoint.endpoint_id).where(Endpoint.type_id == type_id).limit(1)
+            )
+            if in_use.scalar_one_or_none() is not None:
+                raise APIError(
+                    f"EndpointType '{type_id}' is still in use by one or more endpoints", 409
+                )
         await self._session.execute(
             delete(EndpointType).where(EndpointType.type_id == type_id)
         )

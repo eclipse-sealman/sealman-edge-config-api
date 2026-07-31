@@ -147,10 +147,11 @@ async def update_endpoint_type(
 )
 async def delete_endpoint_type(
     type_id: str,
+    cascade: bool = False,
     repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
 ) -> None:
     try:
-        await repo.delete_endpoint_type(type_id)
+        await repo.delete_endpoint_type(type_id, cascade=cascade)
     except APIError as exc:
         _handle_api_error(exc)
 

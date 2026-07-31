@@ -129,8 +129,20 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
             await self._session.refresh(st)
         return self._serialize_type(st)
 
-    async def delete_service_type(self, type_id: str) -> None:
+    async def delete_service_type(self, type_id: str, cascade: bool = False) -> None:
         await self._get_service_type_or_raise(type_id)
+        if cascade:
+            await self._session.execute(
+                delete(Service).where(Service.type_id == type_id)
+            )
+        else:
+            in_use = await self._session.execute(
+                select(Service.service_id).where(Service.type_id == type_id).limit(1)
+            )
+            if in_use.scalar_one_or_none() is not None:
+                raise APIError(
+                    f"ServiceType '{type_id}' is still in use by one or more services", 409
+                )
         await self._session.execute(
             delete(ServiceType).where(ServiceType.type_id == type_id)
         )

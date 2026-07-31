@@ -1,7 +1,7 @@
 """replace platform config with device template tables
 
 Revision ID: 859f082eda85
-Revises: 12c6283b33b6
+Revises: 74525cffd05c, d33b34e890bc, 9b11c9dfe633
 Create Date: 2026-07-30
 
 """
@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 # revision identifiers, used by Alembic.
 revision: str = '859f082eda85'
-down_revision: Union[str, None] = '12c6283b33b6'
+down_revision: Union[str, None] = ('74525cffd05c', 'd33b34e890bc', '9b11c9dfe633')
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

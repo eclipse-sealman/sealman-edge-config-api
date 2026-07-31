@@ -38,6 +38,10 @@ async def get_network_scan_range(
     endpoint_types = {et["type_id"]: et for et in await endpoint_repo.get_endpoint_types()}
     known_ips: List[str] = []
 
+    # Only IPs actually configured on THIS device's own endpoints count as evidence for its scan
+    # range. Endpoint types' `default` IP values are global/system-wide (not scoped to any
+    # device), so they must never widen or seed a specific device's persisted range - otherwise a
+    # placeholder default typed into any type, anywhere, permanently pollutes every device.
     for endpoint in await endpoint_repo.get_endpoints(device_id=device):
         endpoint_type = endpoint_types.get(endpoint["type_id"])
         if endpoint_type is None:
@@ -46,14 +50,6 @@ async def get_network_scan_range(
         ip_value = resolved_value(endpoint["endpoint_data"], ip_field)
         if ip_value:
             known_ips.append(str(ip_value))
-
-    for endpoint_type in endpoint_types.values():
-        ip_field = role_field_key(endpoint_type["fields"], endpoint_type["mapping"], "ip")
-        if ip_field is None:
-            continue
-        default_ip = (endpoint_type["fields"].get(ip_field) or {}).get("default")
-        if default_ip:
-            known_ips.append(str(default_ip))
 
     points: List[int] = []
     for ip in known_ips:
@@ -64,10 +60,10 @@ async def get_network_scan_range(
 
     stored: Optional[Tuple[str, int]] = await network_range_repo.get_range(device)
 
-    # No default entry: if nothing is known (no configured endpoints, no type defaults) and
-    # nothing has ever been derived/stored before, there's simply no automatic baseline range -
-    # the caller falls back to only scanning whatever extra range/ports/IPs the user has added
-    # for this one scan (see ScanNetworkDialog's "Read Network Configuration" button).
+    # No default entry: if nothing is known (no configured endpoints) and nothing has ever been
+    # derived/stored before, there's simply no automatic baseline range - the caller falls back
+    # to only scanning whatever extra range/ports/IPs the user has added for this one scan (see
+    # ScanNetworkDialog's "Read Network Configuration" button).
     if not points and stored is None:
         return None
 

@@ -32,7 +32,10 @@ class ServiceRepository(ABC):
     ) -> Optional[Dict[str, Any]]: ...
 
     @abstractmethod
-    async def delete_service_type(self, type_id: str) -> None: ...
+    async def delete_service_type(self, type_id: str, cascade: bool = False) -> None:
+        """Deletes the type. If `cascade` is False and services of this type still exist,
+        raises APIError(409). If `cascade` is True, deletes those services first."""
+        ...
 
     @abstractmethod
     async def get_services(

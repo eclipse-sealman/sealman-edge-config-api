@@ -148,10 +148,11 @@ async def update_service_type(
 )
 async def delete_service_type(
     type_id: str,
+    cascade: bool = False,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
 ) -> None:
     try:
-        await repo.delete_service_type(type_id)
+        await repo.delete_service_type(type_id, cascade=cascade)
     except APIError as exc:
         _handle_api_error(exc)
 

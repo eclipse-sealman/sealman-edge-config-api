@@ -30,7 +30,11 @@ class EndpointRepository(ABC):
     ) -> Optional[Dict[str, Any]]: ...
 
     @abstractmethod
-    async def delete_endpoint_type(self, type_id: str) -> None: ...
+    async def delete_endpoint_type(self, type_id: str, cascade: bool = False) -> None:
+        """Deletes the type. If `cascade` is False and endpoints of this type still exist,
+        raises APIError(409). If `cascade` is True, deletes those endpoints (and, via FK
+        cascade, their services) first."""
+        ...
 
     @abstractmethod
     async def get_endpoints(
