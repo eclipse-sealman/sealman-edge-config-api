@@ -64,5 +64,10 @@ class NetworkOverview(BaseModel):
 
 
 class NetworkRange(BaseModel):
-    networkDefinition: Annotated[str, IPv4Address]
-    subnetMask: IPv4SubnetInt
+    # Both absent when there's no per-device evidence yet (no configured endpoints, nothing
+    # previously persisted) - `suggestedIps` alone can still be non-empty in that case.
+    networkDefinition: Optional[Annotated[str, IPv4Address]] = None
+    subnetMask: Optional[IPv4SubnetInt] = None
+    # Endpoint types' default IPs, probed individually on every scan - global suggestions, never
+    # persisted (see get_network_scan_range.py).
+    suggestedIps: List[str] = []

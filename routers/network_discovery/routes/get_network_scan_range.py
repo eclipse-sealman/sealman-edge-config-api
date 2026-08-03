@@ -38,10 +38,12 @@ async def get_network_scan_range(
     endpoint_types = {et["type_id"]: et for et in await endpoint_repo.get_endpoint_types()}
     known_ips: List[str] = []
 
-    # Only IPs actually configured on THIS device's own endpoints count as evidence for its scan
-    # range. Endpoint types' `default` IP values are global/system-wide (not scoped to any
-    # device), so they must never widen or seed a specific device's persisted range - otherwise a
-    # placeholder default typed into any type, anywhere, permanently pollutes every device.
+    # Only IPs actually configured on THIS device's own endpoints count as evidence for its
+    # persisted scan range. Endpoint types' `default` IP values are global/system-wide (not
+    # scoped to any device), so they must never widen or seed a specific device's persisted
+    # range - otherwise a placeholder default typed into any type, anywhere, permanently
+    # pollutes every device. They're still worth trying, though - see `suggested_ips` below,
+    # which probes them individually on every scan without ever persisting them.
     for endpoint in await endpoint_repo.get_endpoints(device_id=device):
         endpoint_type = endpoint_types.get(endpoint["type_id"])
         if endpoint_type is None:
@@ -60,25 +62,52 @@ async def get_network_scan_range(
 
     stored: Optional[Tuple[str, int]] = await network_range_repo.get_range(device)
 
-    # No default entry: if nothing is known (no configured endpoints) and nothing has ever been
-    # derived/stored before, there's simply no automatic baseline range - the caller falls back
-    # to only scanning whatever extra range/ports/IPs the user has added for this one scan (see
-    # ScanNetworkDialog's "Read Network Configuration" button).
-    if not points and stored is None:
-        return None
-
     if stored is not None:
         # Anchor the computation with the previously persisted range's own bounds, so the result
         # can only widen to also cover newly known IPs - it never shrinks just because an IP that
         # used to justify a wider range was edited or deleted.
         points.extend(_network_bounds(stored[0], stored[1]))
 
-    if not points:
+    network_definition: Optional[str] = None
+    subnet_mask: Optional[int] = None
+    if points:
+        network_definition, subnet_mask = _covering_network(points)
+        if stored is None or (network_definition, subnet_mask) != stored:
+            await network_range_repo.set_range(device, network_definition, subnet_mask)
+
+    # Every endpoint type's configured default IP is probed individually on every scan cycle -
+    # a global suggestion, not per-device evidence, so unlike the range above it's never
+    # persisted and never widens it. This is what lets "a type has a default IP" alone lead to
+    # auto-discovery (see post_network_overview.py's default-IP auto-create) for a device with
+    # no matching endpoint yet, without resurrecting the old bug where a stray/placeholder
+    # default permanently bloated every device's stored range.
+    suggested_ips: List[str] = []
+    seen_suggested_ips = set()
+    for endpoint_type in endpoint_types.values():
+        ip_field = role_field_key(endpoint_type["fields"], endpoint_type["mapping"], "ip")
+        if ip_field is None:
+            continue
+        default_ip = (endpoint_type["fields"].get(ip_field) or {}).get("default")
+        if not default_ip:
+            continue
+        default_ip = str(default_ip)
+        try:
+            ip_address(default_ip)
+        except ValueError:
+            continue
+        if default_ip not in seen_suggested_ips:
+            seen_suggested_ips.add(default_ip)
+            suggested_ips.append(default_ip)
+
+    if network_definition is None and not suggested_ips:
+        # Nothing known/configured and no type has a default IP either - no automatic baseline
+        # at all. The caller falls back to only scanning whatever extra range/ports/IPs the user
+        # has added for this one scan (see ScanNetworkDialog's "Read Network Configuration"
+        # button).
         return None
 
-    network_definition, subnet_mask = _covering_network(points)
-
-    if stored is None or (network_definition, subnet_mask) != stored:
-        await network_range_repo.set_range(device, network_definition, subnet_mask)
-
-    return NetworkRange(networkDefinition=network_definition, subnetMask=subnet_mask)
+    return NetworkRange(
+        networkDefinition=network_definition,
+        subnetMask=subnet_mask,
+        suggestedIps=suggested_ips,
+    )
