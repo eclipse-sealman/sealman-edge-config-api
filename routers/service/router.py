@@ -2,6 +2,8 @@ from typing import List, Optional, Never
 from fastapi import HTTPException, Depends, Query, APIRouter
 from pydantic import ValidationError as PydanticValidationError
 from exceptions import APIError
+from authorization.abac_permission_check import ABACPermissionCheck
+from authorization.permission_types import Device
 from db.repos.service import ServiceRepository
 from db.session import get_repository
 from db.merge import patch_fields, patch_data
@@ -17,6 +19,11 @@ from routers.service.schemas import (
 
 services = APIRouter()
 
+# See routers/endpoint/router.py - same rationale: device/endpoint id arrives as a query
+# param here, not a path param, so ABAC device-scope resolution is skipped explicitly.
+_read = Depends(ABACPermissionCheck(Device.ENDPOINT_READ, device_path=None))
+_write = Depends(ABACPermissionCheck(Device.ENDPOINT_WRITE, device_path=None))
+
 
 def _handle_api_error(exc: APIError) -> Never:
     raise HTTPException(status_code=exc.status_code, detail=str(exc))
@@ -30,6 +37,7 @@ def _handle_api_error(exc: APIError) -> Never:
 )
 async def list_service_types(
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    _auth=_read,
 ):
     results = await repo.get_service_types()
     return [ServiceTypeResponse.model_validate(r) for r in results]
@@ -44,6 +52,7 @@ async def list_service_types(
 async def get_service_type(
     type_id: str,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    _auth=_read,
 ) -> ServiceTypeResponse:
     result = await repo.get_service_type(type_id)
     if result is None:
@@ -63,6 +72,7 @@ async def get_service_type(
 async def create_service_type(
     body: ServiceTypeCreate,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    _auth=_write,
 ) -> ServiceTypeResponse:
     try:
         result = await repo.create_service_type(
@@ -88,6 +98,7 @@ async def update_service_type(
     type_id: str,
     body: ServiceTypeUpdate,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    _auth=_write,
 ) -> ServiceTypeResponse:
     field_patch = (
         {
@@ -150,6 +161,7 @@ async def delete_service_type(
     type_id: str,
     cascade: bool = False,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    _auth=_write,
 ) -> None:
     try:
         await repo.delete_service_type(type_id, cascade=cascade)
@@ -167,6 +179,7 @@ async def list_services(
     endpoint_id: str = Query(description="Endpoint to list services for"),
     type_id: Optional[str] = Query(default=None, description="Filter by service type"),
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    _auth=_read,
 ) -> List[ServiceResponse]:
     results = await repo.get_services(endpoint_id=endpoint_id, type_id=type_id)
     return [ServiceResponse.model_validate(r) for r in results]
@@ -181,6 +194,7 @@ async def list_services(
 async def get_service(
     service_id: str,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    _auth=_read,
 ) -> ServiceResponse:
     result = await repo.get_service(service_id=service_id)
     if result is None:
@@ -199,6 +213,7 @@ async def create_service(
     body: ServiceCreate,
     endpoint_id: str = Query(description="Endpoint to create the service on"),
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    _auth=_write,
 ) -> ServiceResponse:
     try:
         result = await repo.create_service(
@@ -221,6 +236,7 @@ async def update_service(
     service_id: str,
     body: ServiceUpdate,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    _auth=_write,
 ) -> ServiceResponse:
     try:
         result = await repo.update_service(
@@ -245,5 +261,6 @@ async def update_service(
 async def delete_service(
     service_id: str,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    _auth=_write,
 ) -> None:
     await repo.delete_service(service_id=service_id)
