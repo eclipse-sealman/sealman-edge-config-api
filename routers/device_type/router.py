@@ -63,7 +63,6 @@ async def create_device_type(
 ) -> DeviceTypeResponse:
     try:
         result = await repo.create_device_type(
-            type_id=body.type_id,
             label=body.label,
             description=body.description,
             fields={k: v.model_dump(exclude_none=True) for k, v in body.fields.items()},

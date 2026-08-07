@@ -93,6 +93,10 @@ class FieldDefinition(BaseModel):
         default=True,
         description="If false, the value can no longer be edited once an instance has it set",
     )
+    show_in_list: bool = Field(
+        default=True,
+        description="If true, this field's value shows as extra info in the endpoints list",
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -171,6 +175,10 @@ class FieldDefinitionUpdate(BaseModel):
     changeable: Optional[bool] = Field(
         default=None,
         description="If false, the value can no longer be edited once an instance has it set",
+    )
+    show_in_list: Optional[bool] = Field(
+        default=None,
+        description="If true, this field's value shows as extra info in the endpoints list",
     )
 
     model_config = {"extra": "forbid"}

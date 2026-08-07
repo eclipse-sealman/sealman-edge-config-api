@@ -14,7 +14,9 @@ class EndpointType(Base):
 
     __tablename__ = "endpoint_types"
 
-    type_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    type_id: Mapped[str] = mapped_column(
+        Text, primary_key=True, default=lambda: str(uuid.uuid4())
+    )
     label: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     fields: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)

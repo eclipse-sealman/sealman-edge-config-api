@@ -14,6 +14,37 @@ from db.merge import (
 )
 from exceptions import APIError
 
+# Every endpoint type automatically gets these fields - rather than letting an admin manually
+# define/toggle them (see routers/endpoint/schemas.py's reserved-field checks, which reject any
+# client-supplied field with a mismatched type at these keys):
+# - "ip": required, non-changeable, mapped to the "ip" role for network discovery.
+# - "name": required, but changeable (unlike "ip") so admins can rename an endpoint after it's
+#   created - e.g. to tell apart two endpoints of the same type on one device. Defaults to
+#   "Unnamed" so auto-created endpoints (see post_network_overview.py) always get a value, the
+#   same way any other field's `default` is picked up by `_build_instance_data` there.
+IP_FIELD_KEY = "ip"
+NAME_FIELD_KEY = "name"
+_IP_FIELD_DEFINITION: Dict[str, Any] = {
+    "type": "string",
+    "label": "IP Address",
+    "required": True,
+    "changeable": False,
+    "ui": "input",
+}
+_NAME_FIELD_DEFINITION: Dict[str, Any] = {
+    "type": "string",
+    "label": "Name",
+    "required": True,
+    "changeable": True,
+    "ui": "input",
+    "default": "Unnamed",
+}
+_RESERVED_FIELD_DEFAULTS = {IP_FIELD_KEY: _IP_FIELD_DEFINITION, NAME_FIELD_KEY: _NAME_FIELD_DEFINITION}
+_RESERVED_FIELD_OVERRIDES = {
+    IP_FIELD_KEY: {"type": "string", "required": True, "changeable": False},
+    NAME_FIELD_KEY: {"type": "string", "required": True, "changeable": True},
+}
+
 
 @register_repository(EndpointRepository)
 class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
@@ -51,24 +82,22 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
 
     async def create_endpoint_type(
         self,
-        type_id: str,
         label: str,
         description: Optional[str],
         fields: Dict[str, Any],
-        mapping: Dict[str, Any],
     ) -> Dict[str, Any]:
-        existing = await self._session.execute(
-            select(EndpointType).where(EndpointType.type_id == type_id)
-        )
-        if existing.scalar_one_or_none() is not None:
-            raise APIError(f"EndpointType '{type_id}' already exists", 409)
         await self._raise_if_label_taken(label)
+        # label/description/default/validation/ui may be admin-supplied (e.g. a default IP for
+        # auto-discovery, see get_network_scan_range.py) - type/required/changeable are always
+        # forced back to the fixed values regardless, so the client can't weaken them.
+        all_fields = dict(fields or {})
+        for key, base in _RESERVED_FIELD_DEFAULTS.items():
+            all_fields[key] = {**base, **(fields.get(key) or {}), **_RESERVED_FIELD_OVERRIDES[key]}
         et = EndpointType(
-            type_id=type_id,
             label=label,
             description=description,
-            fields=fields or {},
-            mapping=mapping or {},
+            fields=all_fields,
+            mapping={IP_FIELD_KEY: "ip"},
         )
         self._session.add(et)
         try:
@@ -95,7 +124,6 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         label: Optional[str] = None,
         description: Optional[str] = None,
         fields: Optional[Dict[str, Any]] = None,
-        mapping: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         et = await self._get_endpoint_type_or_raise(type_id)
         values: Dict[str, Any] = {}
@@ -105,9 +133,14 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         if description is not None:
             values["description"] = description
         if fields is not None:
-            values["fields"] = patch_fields(et.fields or {}, fields)
-        if mapping is not None:
-            values["mapping"] = patch_data(et.mapping or {}, mapping)
+            merged_fields = patch_fields(et.fields or {}, fields)
+            # Restores a built-in field if a patch somehow removed it, and always re-forces its
+            # structural properties - label/description/default/validation/ui stay whatever the
+            # patch (or, failing that, the field's previous state) had.
+            for key, base in _RESERVED_FIELD_DEFAULTS.items():
+                current = merged_fields.get(key) or et.fields.get(key) or base
+                merged_fields[key] = {**current, **_RESERVED_FIELD_OVERRIDES[key]}
+            values["fields"] = merged_fields
         if values:
             try:
                 await self._session.execute(
@@ -167,7 +200,10 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         return self._serialize_resolved(*row)
 
     async def create_endpoint(
-        self, device_id: str, type_id: str, endpoint_data: Dict[str, Any]
+        self,
+        device_id: str,
+        type_id: str,
+        endpoint_data: Dict[str, Any],
     ) -> Dict[str, Any]:
         et = await self._get_endpoint_type_or_raise(type_id)
         validate_instance_data(endpoint_data or {}, et.fields or {})
@@ -192,7 +228,8 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         if type_id is not None and type_id != endpoint.type_id:
             # Reassigning to a different type: the old endpoint_data was validated against a
             # different field schema, so it isn't merged forward - the caller supplies fresh
-            # data for the new type, validated the same way a newly-created endpoint would be.
+            # data for the new type (including a fresh "name"), validated the same way a
+            # newly-created endpoint would be.
             new_et = await self._get_endpoint_type_or_raise(type_id)
             new_data = endpoint_data or {}
             validate_instance_data(new_data, new_et.fields or {})

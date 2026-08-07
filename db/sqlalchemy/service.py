@@ -10,6 +10,19 @@ from db.repos.service import ServiceRepository
 from db.merge import BlueprintResolver, patch_data, patch_fields, validate_instance_data
 from exceptions import APIError
 
+# Every service type automatically gets this field - required, non-changeable, mapped to the
+# "port" role - rather than letting an admin manually pick/toggle which field plays that role
+# (see routers/service/schemas.py's PORT_FIELD_KEY, which rejects any client-supplied field at
+# this key).
+PORT_FIELD_KEY = "port"
+_PORT_FIELD_DEFINITION: Dict[str, Any] = {
+    "type": "integer",
+    "label": "Port",
+    "required": True,
+    "changeable": False,
+    "ui": "number",
+}
+
 
 @register_repository(ServiceRepository)
 class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
@@ -52,25 +65,28 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
 
     async def create_service_type(
         self,
-        type_id: str,
         label: str,
         description: Optional[str],
         fields: Dict[str, Any],
-        mapping: Dict[str, Any],
         browser_kind: Optional[str] = None,
     ) -> Dict[str, Any]:
-        existing = await self._session.execute(
-            select(ServiceType).where(ServiceType.type_id == type_id)
-        )
-        if existing.scalar_one_or_none() is not None:
-            raise APIError(f"ServiceType '{type_id}' already exists", 409)
         await self._raise_if_label_taken(label)
+        # label/description/default/validation/ui may be admin-supplied (e.g. a default port for
+        # auto-discovery) - type/required/changeable are always forced back to the fixed values
+        # regardless, so the client can't weaken them.
+        port_field = {
+            **_PORT_FIELD_DEFINITION,
+            **(fields.get(PORT_FIELD_KEY) or {}),
+            "type": "integer",
+            "required": True,
+            "changeable": False,
+        }
+        all_fields = {**(fields or {}), PORT_FIELD_KEY: port_field}
         st = ServiceType(
-            type_id=type_id,
             label=label,
             description=description,
-            fields=fields or {},
-            mapping=mapping or {},
+            fields=all_fields,
+            mapping={PORT_FIELD_KEY: "port"},
             browser_kind=browser_kind,
         )
         self._session.add(st)
@@ -98,7 +114,6 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         label: Optional[str] = None,
         description: Optional[str] = None,
         fields: Optional[Dict[str, Any]] = None,
-        mapping: Optional[Dict[str, Any]] = None,
         browser_kind: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         st = await self._get_service_type_or_raise(type_id)
@@ -109,9 +124,18 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         if description is not None:
             values["description"] = description
         if fields is not None:
-            values["fields"] = patch_fields(st.fields or {}, fields)
-        if mapping is not None:
-            values["mapping"] = patch_data(st.mapping or {}, mapping)
+            merged_fields = patch_fields(st.fields or {}, fields)
+            # Restores the built-in field if a patch somehow removed it, and always re-forces
+            # its structural properties - label/description/default/validation/ui stay whatever
+            # the patch (or, failing that, the field's previous state) had.
+            current_port = merged_fields.get(PORT_FIELD_KEY) or st.fields.get(PORT_FIELD_KEY) or _PORT_FIELD_DEFINITION
+            merged_fields[PORT_FIELD_KEY] = {
+                **current_port,
+                "type": "integer",
+                "required": True,
+                "changeable": False,
+            }
+            values["fields"] = merged_fields
         # Always applied (even when None, to clear it back to "no browse action") - unlike the
         # fields above, there's no separate signal for "leave this unchanged" here.
         values["browser_kind"] = browser_kind

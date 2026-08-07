@@ -86,20 +86,12 @@ class SqlAlchemyDeviceTypeRepository(DeviceTypeRepository):
 
     async def create_device_type(
         self,
-        type_id: str,
         label: str,
         description: Optional[str],
         fields: Dict[str, Any],
     ) -> Dict[str, Any]:
-        existing = await self._session.execute(
-            select(DeviceType).where(DeviceType.type_id == type_id)
-        )
-        if existing.scalar_one_or_none() is not None:
-            raise APIError(f"DeviceType '{type_id}' already exists", 409)
         await self._raise_if_label_taken(label)
-        dt = DeviceType(
-            type_id=type_id, label=label, description=description, fields=fields or {}
-        )
+        dt = DeviceType(label=label, description=description, fields=fields or {})
         self._session.add(dt)
         try:
             await self._session.commit()

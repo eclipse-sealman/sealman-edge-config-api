@@ -6,7 +6,7 @@ from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Device
 from db.repos.endpoint import EndpointRepository
 from db.session import get_repository
-from db.merge import patch_fields, patch_data
+from db.merge import patch_fields
 from routers.schemas import FieldDefinition
 from routers.endpoint.schemas import (
     EndpointTypeResponse,
@@ -78,11 +78,9 @@ async def create_endpoint_type(
 ) -> EndpointTypeResponse:
     try:
         result = await repo.create_endpoint_type(
-            type_id=body.type_id,
             label=body.label,
             description=body.description,
             fields={k: v.model_dump(exclude_none=True) for k, v in body.fields.items()},
-            mapping=body.mapping,
         )
         return EndpointTypeResponse.model_validate(result)
     except APIError as exc:
@@ -110,17 +108,13 @@ async def update_endpoint_type(
         else None
     )
     try:
-        if field_patch is not None or body.mapping is not None:
+        if field_patch is not None:
             current = await repo.get_endpoint_type(type_id)
             if current is None:
                 raise HTTPException(
                     status_code=404, detail=f"EndpointType '{type_id}' not found"
                 )
-            merged_fields = (
-                patch_fields(current["fields"], field_patch)
-                if field_patch is not None
-                else current["fields"]
-            )
+            merged_fields = patch_fields(current["fields"], field_patch)
             for field_key, field_dict in merged_fields.items():
                 try:
                     FieldDefinition.model_validate(field_dict)
@@ -128,19 +122,11 @@ async def update_endpoint_type(
                     raise HTTPException(
                         status_code=422, detail=f"Invalid field '{field_key}': {exc}"
                     )
-            merged_mapping = patch_data(current["mapping"], body.mapping or {})
-            unknown = set(merged_mapping) - set(merged_fields)
-            if unknown:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"mapping references unknown field(s): {sorted(unknown)}",
-                )
         result = await repo.update_endpoint_type(
             type_id=type_id,
             label=body.label,
             description=body.description,
             fields=field_patch,
-            mapping=body.mapping,
         )
     except APIError as exc:
         _handle_api_error(exc)

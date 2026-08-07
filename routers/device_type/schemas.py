@@ -5,7 +5,6 @@ from routers.schemas import FieldDefinition, FieldDefinitionUpdate
 
 
 class DeviceTypeCreate(BaseModel):
-    type_id: str
     label: str
     description: Optional[str] = None
     fields: Dict[str, FieldDefinition] = {}

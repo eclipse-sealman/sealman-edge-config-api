@@ -12,7 +12,6 @@ class DeviceTypeRepository(ABC):
     @abstractmethod
     async def create_device_type(
         self,
-        type_id: str,
         label: str,
         description: Optional[str],
         fields: Dict[str, Any],

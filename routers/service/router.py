@@ -6,7 +6,7 @@ from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Device
 from db.repos.service import ServiceRepository
 from db.session import get_repository
-from db.merge import patch_fields, patch_data
+from db.merge import patch_fields
 from routers.schemas import FieldDefinition
 from routers.service.schemas import (
     ServiceTypeResponse,
@@ -76,11 +76,9 @@ async def create_service_type(
 ) -> ServiceTypeResponse:
     try:
         result = await repo.create_service_type(
-            type_id=body.type_id,
             label=body.label,
             description=body.description,
             fields={k: v.model_dump(exclude_none=True) for k, v in body.fields.items()},
-            mapping=body.mapping,
             browser_kind=body.browser_kind,
         )
         return ServiceTypeResponse.model_validate(result)
@@ -109,17 +107,13 @@ async def update_service_type(
         else None
     )
     try:
-        if field_patch is not None or body.mapping is not None:
+        if field_patch is not None:
             current = await repo.get_service_type(type_id)
             if current is None:
                 raise HTTPException(
                     status_code=404, detail=f"ServiceType '{type_id}' not found"
                 )
-            merged_fields = (
-                patch_fields(current["fields"], field_patch)
-                if field_patch is not None
-                else current["fields"]
-            )
+            merged_fields = patch_fields(current["fields"], field_patch)
             for field_key, field_dict in merged_fields.items():
                 try:
                     FieldDefinition.model_validate(field_dict)
@@ -127,19 +121,11 @@ async def update_service_type(
                     raise HTTPException(
                         status_code=422, detail=f"Invalid field '{field_key}': {exc}"
                     )
-            merged_mapping = patch_data(current["mapping"], body.mapping or {})
-            unknown = set(merged_mapping) - set(merged_fields)
-            if unknown:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"mapping references unknown field(s): {sorted(unknown)}",
-                )
         result = await repo.update_service_type(
             type_id=type_id,
             label=body.label,
             description=body.description,
             fields=field_patch,
-            mapping=body.mapping,
             browser_kind=body.browser_kind,
         )
     except APIError as exc:
