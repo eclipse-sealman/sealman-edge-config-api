@@ -17,18 +17,20 @@ from exceptions import APIError
 # Every endpoint type automatically gets these fields - rather than letting an admin manually
 # define/toggle them (see routers/endpoint/schemas.py's reserved-field checks, which reject any
 # client-supplied field with a mismatched type at these keys):
-# - "ip": required, non-changeable, mapped to the "ip" role for network discovery.
-# - "name": required, but changeable (unlike "ip") so admins can rename an endpoint after it's
-#   created - e.g. to tell apart two endpoints of the same type on one device. Defaults to
-#   "Unnamed" so auto-created endpoints (see post_network_overview.py) always get a value, the
-#   same way any other field's `default` is picked up by `_build_instance_data` there.
+# - "ip": required, mapped to the "ip" role for network discovery. Changeable - it's only ever
+#   locked in the UI while assigning a type to a host actually detected on the network (see
+#   AssignEndpointDialog.tsx's `lockedFieldKey`), not as a hard, permanent-after-save rule here.
+# - "name": required and changeable, so admins can rename an endpoint after it's created - e.g.
+#   to tell apart two endpoints of the same type on one device. Defaults to "Unnamed" so
+#   auto-created endpoints (see post_network_overview.py) always get a value, the same way any
+#   other field's `default` is picked up by `_build_instance_data` there.
 IP_FIELD_KEY = "ip"
 NAME_FIELD_KEY = "name"
 _IP_FIELD_DEFINITION: Dict[str, Any] = {
     "type": "string",
     "label": "IP Address",
     "required": True,
-    "changeable": False,
+    "changeable": True,
     "ui": "input",
 }
 _NAME_FIELD_DEFINITION: Dict[str, Any] = {
@@ -41,7 +43,7 @@ _NAME_FIELD_DEFINITION: Dict[str, Any] = {
 }
 _RESERVED_FIELD_DEFAULTS = {IP_FIELD_KEY: _IP_FIELD_DEFINITION, NAME_FIELD_KEY: _NAME_FIELD_DEFINITION}
 _RESERVED_FIELD_OVERRIDES = {
-    IP_FIELD_KEY: {"type": "string", "required": True, "changeable": False},
+    IP_FIELD_KEY: {"type": "string", "required": True, "changeable": True},
     NAME_FIELD_KEY: {"type": "string", "required": True, "changeable": True},
 }
 

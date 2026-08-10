@@ -73,7 +73,7 @@ _INSERT_SQL = text(
                 'type', 'integer',
                 'label', 'Port',
                 'required', true,
-                'changeable', false,
+                'changeable', true,
                 'show_in_list', false,
                 'ui', 'number',
                 'default', :port
@@ -91,8 +91,8 @@ _DELETE_SQL = text("DELETE FROM service_types WHERE type_id = :type_id")
 def upgrade() -> None:
     conn = op.get_bind()
     # Every service type always has this built-in "port" field (see
-    # db/sqlalchemy/service.py:_PORT_FIELD_DEFINITION) - required, non-changeable, mapped to the
-    # "port" role, seeded here with this type's well-known default port.
+    # db/sqlalchemy/service.py:_PORT_FIELD_DEFINITION) - required, mapped to the "port" role,
+    # seeded here with this type's well-known default port.
     for service_type in _SERVICE_TYPES:
         conn.execute(_INSERT_SQL, service_type)
 
