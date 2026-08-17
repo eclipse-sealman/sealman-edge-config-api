@@ -8,7 +8,10 @@ from .schemas import NetworkScan, NetworkDiscover, NetworkOverview, NetworkRange
 from common_schemas import DirectMethod
 from routers.network_discovery.routes.post_network_discover2 import post_network_discover2 as _post_network_discover2
 from routers.network_discovery.routes.get_network_topology import get_network_topology as _get_network_topology
-from routers.network_discovery.routes.post_network_overview import build_network_overview as _build_network_overview
+from routers.network_discovery.routes.post_network_overview import (
+    build_network_overview as _build_network_overview,
+    build_last_known_network_overview as _build_last_known_network_overview,
+)
 from routers.network_discovery.routes.get_network_scan_ports import get_network_scan_ports as _get_network_scan_ports
 from routers.network_discovery.routes.get_network_scan_range import get_network_scan_range as _get_network_scan_range
 from db.repos.endpoint import EndpointRepository
@@ -42,6 +45,16 @@ async def post_network_overview(device: str, scan: NetworkScan,
                                  host_status_repo: HostStatusRepository = Depends(get_repository(HostStatusRepository)),
                                  _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _build_network_overview(device, scan, endpoint_repo, service_repo, host_status_repo)
+
+
+@network_discovery.get("/{device}/network/last-known", tags=["Network"],
+                       response_model=NetworkOverview)
+async def get_network_last_known(device: str,
+                                  endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
+                                  service_repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+                                  host_status_repo: HostStatusRepository = Depends(get_repository(HostStatusRepository)),
+                                  _ = Depends(ABACPermissionCheck(Device.READ))):
+    return await _build_last_known_network_overview(device, endpoint_repo, service_repo, host_status_repo)
 
 
 @network_discovery.get("/{device}/network/scan-ports", tags=["Network"],
