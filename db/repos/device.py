@@ -17,6 +17,13 @@ class DeviceRepository(ABC):
         pass
 
     @abstractmethod
+    async def get_device_joined_snapshot(
+        self,
+        device_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        pass
+
+    @abstractmethod
     async def get_device_metadata(
         self,
         device_id: str,

@@ -106,3 +106,29 @@ class ModuleDeploymentStatus(BaseModel):
     targeted: bool = False
     applied: bool = False
     success: bool = False
+
+
+class DeviceDetailConnectionStatus(BaseModel):
+    deviceStatus: Literal["Connected", "Disconnected", "Unknown"]
+    iotEdgeRuntime: str
+    iotHub: str
+    sems: str
+    vpn: str
+
+
+class DeviceDetailResponse(BaseModel):
+    deviceId: str
+    connectionStatus: DeviceDetailConnectionStatus
+    deviceMetadata: Dict[str, DeviceMetadataEntry]
+    enabled: Optional[bool] = None
+    hardwareVersion: Optional[str] = None
+    firmwareVersion: Optional[str] = None
+    updateFirmware: Optional[bool] = None
+    lastSeenAt: Optional[str] = None
+    template: Optional[str] = None
+    cellular: bool = False
+    createdAt: Optional[datetime] = None
+    updatedAt: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

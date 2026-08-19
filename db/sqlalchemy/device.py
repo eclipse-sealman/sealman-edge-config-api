@@ -67,6 +67,41 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         result = await self._session.execute(stmt)
         return [dict(row) for row in result.mappings().all()]
 
+
+    async def get_device_joined_snapshot(self, device_id: str) -> Optional[Dict[str, Any]]:
+        stmt = text(
+            """
+            select
+                d.device_id,
+                d.type_id,
+                d.device_data,
+                d.created_at,
+                d.updated_at,
+                vds.connection_state,
+                vds.cached_at as state_snapshot_cached_at
+            from devices d
+            left join view_device_snapshot vds on d.device_id = vds.device_id
+            where d.device_id = :device_id
+            """
+        )
+        result = await self._session.execute(stmt, {"device_id": device_id})
+        row = result.mappings().one_or_none()
+        if row is None:
+            return None
+
+        device_type = await self._get_device_type_or_raise(row["type_id"])
+        effective_fields = await self._effective_fields_for(device_type)
+        resolved = resolve_fields(row["device_data"] or {}, effective_fields)
+
+        return {
+            "device_id": row["device_id"],
+            "type_id": row["type_id"],
+            "device_status": row["connection_state"],
+            "device_metadata": resolved,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
     async def _get_device_type_or_raise(self, type_id: str) -> DeviceType:
         result = await self._session.execute(
             select(DeviceType).where(DeviceType.type_id == type_id)
