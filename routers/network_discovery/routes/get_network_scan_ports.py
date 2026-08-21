@@ -2,6 +2,7 @@ from typing import List
 
 from db.repos.endpoint import EndpointRepository
 from db.repos.service import ServiceRepository
+from db.repos.scan_ports import ScanPortsRepository
 from routers.network_discovery.mapping_helpers import role_field_key, resolved_value
 
 
@@ -9,23 +10,16 @@ async def get_network_scan_ports(
     device: str,
     endpoint_repo: EndpointRepository,
     service_repo: ServiceRepository,
+    scan_ports_repo: ScanPortsRepository,
 ) -> List[int]:
-    service_types = await service_repo.get_service_types()
+    # The global baseline (every service type's default port, at minimum - see
+    # routers/service/router.py:create_service_type) plus whatever extra ports have been added
+    # specifically for this device (Overview page's "Scan Network" dialog) - both persisted
+    # tables, editable independently of any single service type/device from now on.
+    ports = set(await scan_ports_repo.get_default_ports())
+    ports.update(await scan_ports_repo.get_device_ports(device))
 
-    ports = set()
-    for service_type in service_types:
-        port_field = role_field_key(service_type["fields"], service_type["mapping"], "port")
-        if port_field is None:
-            continue
-        default_port = (service_type["fields"].get(port_field) or {}).get("default")
-        if default_port is None:
-            continue
-        try:
-            ports.add(int(default_port))
-        except (TypeError, ValueError):
-            continue
-
-    service_types_by_id = {st["type_id"]: st for st in service_types}
+    service_types_by_id = {st["type_id"]: st for st in await service_repo.get_service_types()}
     endpoints = await endpoint_repo.get_endpoints(device_id=device)
     for endpoint in endpoints:
         services = await service_repo.get_services(endpoint_id=endpoint["endpoint_id"])

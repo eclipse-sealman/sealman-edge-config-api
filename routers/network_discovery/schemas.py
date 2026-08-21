@@ -12,6 +12,17 @@ class NetworkDiscover(BaseModel):
     subnetMask: IPv4SubnetInt
 
 
+class DeviceScanPortsAdd(BaseModel):
+    """Extra ports to persist for a device, e.g. from the Overview page's "Scan Network"
+    dialog - scanned automatically going forward, on top of the global default ports."""
+    ports: List[int]
+
+
+class DefaultScanPortCreate(BaseModel):
+    """A port to add to the global list scanned on every device at minimum."""
+    port: int
+
+
 class PortStatus(BaseModel):
     status: Literal["online", "offline", "unknown"]
     lastStatusChange: str | None = None

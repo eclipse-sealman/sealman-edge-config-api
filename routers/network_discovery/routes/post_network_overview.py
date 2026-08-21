@@ -1,3 +1,4 @@
+import ipaddress
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -97,6 +98,76 @@ async def _build_last_known_endpoint(
         ip=ip_str,
         status=previous_host[0] if previous_host else "offline",
         lastStatusChange=(previous_host[1] if previous_host else now).isoformat(),
+        source="configured",
+        endpoint_id=endpoint_id,
+        type_id=configured_endpoint["type_id"],
+        type_label=configured_endpoint["type_label"],
+        type_description=configured_endpoint["type_description"],
+        endpoint_data=configured_endpoint["endpoint_data"],
+        ports=mapped_ports,
+    )
+
+
+async def _build_confirmed_offline_endpoint(
+    ip_str: str,
+    configured_endpoint: Dict[str, Any],
+    service_types: Dict[str, Dict[str, Any]],
+    service_repo: ServiceRepository,
+    previous_host_statuses: Dict[str, Tuple[str, datetime]],
+    previous_port_statuses: Dict[Tuple[str, int], Tuple[str, datetime]],
+    new_host_statuses: Dict[str, Tuple[str, datetime]],
+    new_port_statuses: Dict[Tuple[str, int], Tuple[str, datetime]],
+    now: datetime,
+) -> MappedEndpoint:
+    """
+    Maps a configured endpoint whose IP fell within *this* scan's target range/subnet but simply
+    wasn't reported back - the scanner only ever reports hosts it actually finds (alive, with at
+    least one open port), it never lists misses explicitly. That makes "absent from
+    `scan.scanResults`" ambiguous between "wasn't covered by this scan at all" (handled by
+    `_build_last_known_endpoint`, which preserves whatever was last persisted) and "was covered,
+    but is genuinely gone now". This function handles the latter: since the scan really did cover
+    this IP, its absence is confirmed offline, so - unlike `_build_last_known_endpoint` - this
+    actually persists "offline" (into `new_host_statuses`/`new_port_statuses`), advancing
+    `lastStatusChange` the first time it flips, instead of leaving the previous status in place
+    forever.
+    """
+    endpoint_id = configured_endpoint["endpoint_id"]
+    configured_services = await service_repo.get_services(endpoint_id=endpoint_id)
+
+    mapped_ports: List[MappedPort] = []
+    for service in configured_services:
+        service_type = service_types.get(service["type_id"])
+        if service_type is None:
+            continue
+        port_field = role_field_key(service_type["fields"], service_type["mapping"], "port")
+        port_value = resolved_value(service["service_data"], port_field)
+        if port_value is None:
+            continue
+        try:
+            port_num = int(port_value)
+        except (TypeError, ValueError):
+            continue
+        port_changed_at = _resolve_status_change(previous_port_statuses.get((ip_str, port_num)), "offline", now)
+        new_port_statuses[(ip_str, port_num)] = ("offline", port_changed_at)
+        mapped_ports.append(MappedPort(
+            port=port_num,
+            status="offline",
+            lastStatusChange=port_changed_at.isoformat(),
+            source="configured",
+            service_id=service["service_id"],
+            type_id=service["type_id"],
+            type_label=service["type_label"],
+            type_description=service["type_description"],
+            service_data=service["service_data"],
+            browser_kind=service_type["browser_kind"],
+        ))
+
+    host_changed_at = _resolve_status_change(previous_host_statuses.get(ip_str), "offline", now)
+    new_host_statuses[ip_str] = ("offline", host_changed_at)
+    return MappedEndpoint(
+        ip=ip_str,
+        status="offline",
+        lastStatusChange=host_changed_at.isoformat(),
         source="configured",
         endpoint_id=endpoint_id,
         type_id=configured_endpoint["type_id"],
@@ -350,6 +421,9 @@ async def build_network_overview(
                     ))
                 continue
 
+            # A port that isn't backed by any configured/default service is only ever reported
+            # here while it's actually online (the scanner only ever reports open ports) - so it's
+            # always something worth noticing/assigning, never stale noise.
             mapped_ports.append(MappedPort(
                 port=port_num,
                 status=port_status.status,
@@ -357,20 +431,33 @@ async def build_network_overview(
                 source="unidentified",
             ))
 
-        # A configured service whose port wasn't part of *this* scan's port list (e.g. it was
-        # only just added and the caller's port list hasn't caught up yet) would otherwise vanish
-        # from the response entirely instead of just not being confirmed online - fall back to its
-        # last known persisted status/timestamp instead of dropping it.
+        # A configured (assigned) service whose port didn't come back online this cycle needs to
+        # distinguish two cases:
+        #  - Its port WAS part of this scan's requested port list (`scan.scanDefinition.ports`),
+        #    so the host really was checked for it and it simply isn't open anymore - confirmed
+        #    offline, persisted, exactly like a host that vanishes entirely. Once assigned, a
+        #    service is only ever removed again by deleting it - never by just not showing up.
+        #  - Its port wasn't part of this scan's port list at all (e.g. it was only just assigned
+        #    and the caller's port list hasn't caught up yet) - fall back to whatever was last
+        #    persisted instead of asserting anything about its current state.
         scanned_port_nums = {mapped_port.port for mapped_port in mapped_ports}
+        scanned_port_scope = set(scan.scanDefinition.ports)
         for port_num, configured_service in configured_services_by_port.items():
             if port_num in scanned_port_nums:
                 continue
             service_type = service_types.get(configured_service["type_id"])
-            previous = previous_port_statuses.get((ip_str, port_num))
+            if port_num in scanned_port_scope:
+                port_changed_at = _resolve_status_change(previous_port_statuses.get((ip_str, port_num)), "offline", now)
+                new_port_statuses[(ip_str, port_num)] = ("offline", port_changed_at)
+                status, changed_at = "offline", port_changed_at
+            else:
+                previous = previous_port_statuses.get((ip_str, port_num))
+                status = previous[0] if previous else "offline"
+                changed_at = previous[1] if previous else now
             mapped_ports.append(MappedPort(
                 port=port_num,
-                status=previous[0] if previous else "offline",
-                lastStatusChange=(previous[1] if previous else now).isoformat(),
+                status=status,
+                lastStatusChange=changed_at.isoformat(),
                 source="configured",
                 service_id=configured_service["service_id"],
                 type_id=configured_service["type_id"],
@@ -393,15 +480,32 @@ async def build_network_overview(
             ports=mapped_ports,
         ))
 
-    # A configured endpoint whose host wasn't part of *this* scan at all (outside the scanned
-    # range/IP list, or simply unreachable) would otherwise disappear from the response entirely
-    # instead of showing as offline - fall back to its last known persisted status/timestamp. Its
-    # host/port statuses are deliberately left out of `new_host_statuses`/`new_port_statuses`
-    # since it genuinely wasn't probed this cycle, so the persisted "last known" state is left
-    # untouched rather than being reset.
+    # A configured endpoint whose IP is missing from `scan.scanResults` falls into one of two
+    # cases, which need different handling:
+    #  - Its IP was within the range this scan actually covered (`scan.scanDefinition`), but the
+    #    scanner simply didn't find it - the scanner only ever reports hosts it actually finds,
+    #    it never lists misses explicitly. That absence is a confirmed "gone now", so persist
+    #    offline for the host and its ports (`_build_confirmed_offline_endpoint`).
+    #  - Its IP was outside that range entirely (e.g. a manually-assigned endpoint on a different
+    #    subnet, or simply not part of this particular scan cycle) - it genuinely wasn't probed at
+    #    all, so fall back to its last known persisted status/timestamp, left untouched
+    #    (`_build_last_known_endpoint`), rather than wrongly declaring it offline.
     scanned_ips = {str(host.ip) for host in scan.scanResults}
+    try:
+        scanned_network: Optional[ipaddress.IPv4Network] = ipaddress.IPv4Network(
+            f"{scan.scanDefinition.networkDefinition}/{scan.scanDefinition.subnetMask}", strict=False
+        )
+    except ValueError:
+        scanned_network = None
+
     for ip_str, configured_endpoint in configured_endpoints_by_ip.items():
         if ip_str in scanned_ips:
+            continue
+        if scanned_network is not None and ipaddress.IPv4Address(ip_str) in scanned_network:
+            mapped_endpoints.append(await _build_confirmed_offline_endpoint(
+                ip_str, configured_endpoint, service_types, service_repo,
+                previous_host_statuses, previous_port_statuses, new_host_statuses, new_port_statuses, now,
+            ))
             continue
         mapped_endpoints.append(await _build_last_known_endpoint(
             ip_str, configured_endpoint, service_types, service_repo, previous_host_statuses, previous_port_statuses, now,

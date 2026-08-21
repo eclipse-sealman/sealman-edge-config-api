@@ -5,6 +5,7 @@ from exceptions import APIError
 from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Device
 from db.repos.service import ServiceRepository
+from db.repos.scan_ports import ScanPortsRepository
 from db.session import get_repository
 from db.merge import patch_fields
 from routers.schemas import FieldDefinition
@@ -15,6 +16,7 @@ from routers.service.schemas import (
     ServiceTypeCreate,
     ServiceTypeUpdate,
     ServiceUpdate,
+    PORT_FIELD_KEY,
 )
 
 services = APIRouter()
@@ -72,6 +74,7 @@ async def get_service_type(
 async def create_service_type(
     body: ServiceTypeCreate,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    scan_ports_repo: ScanPortsRepository = Depends(get_repository(ScanPortsRepository)),
     _auth=_write,
 ) -> ServiceTypeResponse:
     try:
@@ -81,6 +84,15 @@ async def create_service_type(
             fields={k: v.model_dump(exclude_none=True) for k, v in body.fields.items()},
             browser_kind=body.browser_kind,
         )
+        # A new type's default port (if any) is also always scanned on every device at minimum,
+        # same as every pre-existing type's default port already is - see
+        # get_network_scan_ports.py and default_scan_ports.py's seed migration.
+        port_field = body.fields.get(PORT_FIELD_KEY)
+        if port_field is not None and port_field.default is not None:
+            try:
+                await scan_ports_repo.add_default_port(int(port_field.default))
+            except (TypeError, ValueError):
+                pass
         return ServiceTypeResponse.model_validate(result)
     except APIError as exc:
         _handle_api_error(exc)
