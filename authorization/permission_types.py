@@ -34,10 +34,13 @@ class Device:
     MODULE_TWIN_CONFIG_WRITE = "device.module_twin_config.write"
     NETWORK_DISCOVER = "device.network.discover"
     LINE_WRITE = "device.line.write"
+    ENDPOINT_READ = "device.endpoint.read"
+    ENDPOINT_WRITE = "device.endpoint.write"
 
     ReadPermissions = [
         READ,
         PASSWORD_READ,
+        ENDPOINT_READ,
     ]
 
     EditPermissions = [
@@ -50,6 +53,7 @@ class Device:
         LINE_WRITE,
         PASSWORD_WRITE,
         SMARTEMS_TEMPLATE_APPLY,
+        ENDPOINT_WRITE,
     ]
 
     _is_global = False
@@ -65,6 +69,8 @@ class Device:
         MODULE_TWIN_CONFIG_WRITE: "Update device module twin configuration",
         NETWORK_DISCOVER: "Run device network discovery",
         LINE_WRITE: "Update device line settings",
+        ENDPOINT_READ: "Read device endpoints, services and their types",
+        ENDPOINT_WRITE: "Create, update or delete device endpoints, services and their types",
     }
 
 

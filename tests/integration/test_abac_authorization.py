@@ -53,6 +53,16 @@ def _repo(interface, session: AsyncSession):
     return cls(session)
 
 
+# The 'default' device type requires these fields; tests only care about
+# scope-matching keys (e.g. "region"), so fill in placeholders for the rest.
+_DEFAULT_TYPE_REQUIRED_FIELDS = {
+    "description": "test device",
+    "countryCode": "XX",
+    "city": "Test City",
+    "geoLocation": "0,0",
+}
+
+
 @dataclass
 class AbacWorld:
     """
@@ -171,7 +181,8 @@ class AbacFixtures:
             w.teams[name] = r["id"]
 
         for device_id, meta in (devices or {}).items():
-            await self._devices.create_device(device_id=device_id, metadata=meta)
+            full_meta = {**_DEFAULT_TYPE_REQUIRED_FIELDS, **meta}
+            await self._devices.create_device(device_id=device_id, metadata=full_meta)
             w.devices[device_id] = meta
 
         return w

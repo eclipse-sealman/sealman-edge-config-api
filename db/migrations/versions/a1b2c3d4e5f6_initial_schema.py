@@ -20,9 +20,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.create_table(
-        "platform",
-        sa.Column("name", sa.Text(), primary_key=True, nullable=False),
-        sa.Column("platform_meta", JSONB(), nullable=False),
+        "device_types",
+        sa.Column("type_id", sa.Text(), primary_key=True, nullable=False),
+        sa.Column("label", sa.Text(), nullable=False),
+        sa.Column("description", sa.Text(), nullable=True),
+        sa.Column("fields", JSONB(), nullable=False),
         sa.Column(
             "created_at",
             sa.TIMESTAMP(timezone=True),
@@ -35,12 +37,14 @@ def upgrade() -> None:
             server_default=sa.text("NOW()"),
             nullable=False,
         ),
+        sa.UniqueConstraint("label", name="uq_device_types_label"),
     )
 
     op.create_table(
         "devices",
         sa.Column("device_id", sa.Text(), primary_key=True, nullable=False),
-        sa.Column("device_meta", JSONB(), nullable=False),
+        sa.Column("type_id", sa.Text(), nullable=False),
+        sa.Column("device_data", JSONB(), nullable=False),
         sa.Column(
             "created_at",
             sa.TIMESTAMP(timezone=True),
@@ -53,6 +57,26 @@ def upgrade() -> None:
             server_default=sa.text("NOW()"),
             nullable=False,
         ),
+        sa.ForeignKeyConstraint(["type_id"], ["device_types.type_id"]),
+    )
+
+    # Seed the 'default' device type, carrying over the site/location metadata
+    # keys devices have always used, now as proper field definitions.
+    op.execute(
+        """
+        INSERT INTO device_types (type_id, label, description, fields)
+        VALUES (
+            'default',
+            'Default',
+            'Default device type for devices without a more specific type',
+            '{
+                "description": {"type": "string", "label": "Description", "required": true},
+                "countryCode": {"type": "string", "label": "Country Code", "required": true},
+                "city": {"type": "string", "label": "City", "required": true},
+                "geoLocation": {"type": "string", "label": "Geo Location", "required": true}
+            }'::jsonb
+        )
+        """
     )
 
     # UNLOGGED: skips WAL writes for better write performance; data is lost on crash.
@@ -105,21 +129,11 @@ def upgrade() -> None:
         """
     )
 
-    op.execute(
-        """
-        CREATE TRIGGER platform_updated_at
-        BEFORE UPDATE ON platform
-        FOR EACH ROW
-        EXECUTE FUNCTION update_updated_at_column()
-        """
-    )
-
 
 def downgrade() -> None:
-    op.execute("DROP TRIGGER IF EXISTS platform_updated_at ON platform")
     op.execute("DROP TRIGGER IF EXISTS devices_updated_at ON devices")
     op.execute("DROP FUNCTION IF EXISTS update_updated_at_column()")
     op.execute("DROP VIEW IF EXISTS view_device_snapshot")
     op.drop_table("device_snapshot_cache")
     op.drop_table("devices")
-    op.drop_table("platform")
+    op.drop_table("device_types")

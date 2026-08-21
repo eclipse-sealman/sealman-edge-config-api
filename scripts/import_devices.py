@@ -13,7 +13,8 @@ IoT Hub → PostgreSQL Device Importer
 Reads all IoT Edge devices from Azure IoT Hub and upserts them into PostgreSQL database.
 
 Merge strategy (idempotent):
-  - Device does not exist in DB → INSERT with all IoT Hub tags as device_meta.
+  - Device does not exist in DB → INSERT with all IoT Hub tags as device_data,
+    typed as the 'default' device type.
   - Device already exists in DB → MERGE metadata: new tags are added, but tags
     already present in the DB are not overwritten or removed.
     Running the script multiple times with the same IoT Hub data always
@@ -201,18 +202,20 @@ def fetch_iot_edge_devices(sas_token: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 # ON CONFLICT merge strategy:
-#   EXCLUDED.device_meta  – the new tags coming from IoT Hub
-#   devices.device_meta   – the tags already stored in the DB
+#   EXCLUDED.device_data  – the new tags coming from IoT Hub
+#   devices.device_data   – the tags already stored in the DB
 #
 # The || operator merges two jsonb objects; the RIGHT-HAND side wins when a
-# key exists in both.  By putting `devices.device_meta` on the right we
+# key exists in both.  By putting `devices.device_data` on the right we
 # ensure existing DB values always take precedence over incoming IoT Hub
 # values, while new keys are still added.
+DEFAULT_DEVICE_TYPE_ID = "default"
+
 UPSERT_SQL = """
-    INSERT INTO devices (device_id, device_meta)
-    VALUES (%(device_id)s, %(device_meta)s::jsonb)
+    INSERT INTO devices (device_id, type_id, device_data)
+    VALUES (%(device_id)s, %(type_id)s, %(device_data)s::jsonb)
     ON CONFLICT (device_id) DO UPDATE
-        SET device_meta = EXCLUDED.device_meta || devices.device_meta
+        SET device_data = EXCLUDED.device_data || devices.device_data
 """
 
 EXISTS_SQL = "SELECT 1 FROM devices WHERE device_id = %(device_id)s"
@@ -220,22 +223,22 @@ EXISTS_SQL = "SELECT 1 FROM devices WHERE device_id = %(device_id)s"
 
 def fetch_allowed_meta_keys(pg_conn_str: str) -> set[str]:
     """
-    Read the key names defined in platform_meta for the 'default' platform row.
-    Only IoT Hub tag keys that appear here will be written into device_meta.
+    Read the field names defined for the 'default' device type.
+    Only IoT Hub tag keys that appear here will be written into device_data.
     """
-    logger.info("Reading allowed meta keys from platform table…")
+    logger.info("Reading allowed meta keys from device_types table…")
     with psycopg.connect(pg_conn_str) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT platform_meta FROM platform WHERE name = %s",
-                ("default",),
+                "SELECT fields FROM device_types WHERE type_id = %s",
+                (DEFAULT_DEVICE_TYPE_ID,),
             )
             row = cur.fetchone()
 
     if not row or row[0] is None:
         raise RuntimeError(
-            "No 'default' row found in the platform table, "
-            "or its platform_meta column is NULL."
+            f"No '{DEFAULT_DEVICE_TYPE_ID}' row found in the device_types table, "
+            "or its fields column is NULL."
         )
 
     # psycopg3 deserialises JSONB → dict automatically.
@@ -247,8 +250,9 @@ def fetch_allowed_meta_keys(pg_conn_str: str) -> set[str]:
 def upsert_devices(pg_conn_str: str, devices: list[dict], allowed_keys: set[str]) -> None:
     """Upsert all devices into the PostgreSQL `devices` table.
 
-    Only tag keys present in *allowed_keys* (sourced from platform_meta) are
-    written to device_meta; all other IoT Hub tags are silently dropped.
+    Only tag keys present in *allowed_keys* (sourced from the 'default' device
+    type's fields) are written to device_data; all other IoT Hub tags are
+    silently dropped. Imported devices are always typed as 'default'.
     """
     if not devices:
         logger.info("No devices to import.")
@@ -263,18 +267,22 @@ def upsert_devices(pg_conn_str: str, devices: list[dict], allowed_keys: set[str]
             for dev in devices:
                 device_id: str = dev["device_id"]
 
-                # Keep only the keys that are defined in platform_meta.
+                # Keep only the keys that are defined for the default device type.
                 raw_tags: dict = dev["tags"]
                 filtered_tags = {k: v for k, v in raw_tags.items() if k in allowed_keys}
                 dropped = raw_tags.keys() - allowed_keys
                 if dropped:
                     logger.debug(
-                        "  [%s] dropped %d tag(s) not in platform_meta: %s",
+                        "  [%s] dropped %d tag(s) not in the default device type: %s",
                         device_id, len(dropped), sorted(dropped),
                     )
 
                 meta_json: str = json.dumps(filtered_tags)
-                params = {"device_id": device_id, "device_meta": meta_json}
+                params = {
+                    "device_id": device_id,
+                    "type_id": DEFAULT_DEVICE_TYPE_ID,
+                    "device_data": meta_json,
+                }
 
                 # Determine whether the row exists so we can log accurately.
                 cur.execute(EXISTS_SQL, {"device_id": device_id})

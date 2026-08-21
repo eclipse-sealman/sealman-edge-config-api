@@ -1,17 +1,19 @@
 from datetime import datetime
 from enum import Enum
 from pydantic import BaseModel, RootModel
-from typing import Any, Union, Literal, List, Dict
+from typing import Any, Optional, Union, Literal, List, Dict
+from routers.schemas import FieldDefinition
 
 class DeviceMetadataEntry(BaseModel):
     value: Any
-    source: Literal["platform", "device"]
-    
+    field: Optional[FieldDefinition] = None
+
     class Config:
         from_attributes = True
 
 class DeviceMetadataResponse(BaseModel):
     deviceId: str
+    typeId: str
     deviceMetadata: Dict[str, DeviceMetadataEntry]
     createdAt: datetime | None = None
     updatedAt: datetime | None = None

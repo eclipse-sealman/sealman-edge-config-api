@@ -290,8 +290,11 @@ async def _config_template_setup(token: str) -> None:
     _log.info("Looking up device type '%s'…", BOOTSTRAP_SEMS_DEVICE_TYPE)
     dt = await _find_one("/web/api/devicetype/list", "name", BOOTSTRAP_SEMS_DEVICE_TYPE, token)
     if dt is None:
-        _log.error("Device type '%s' not found in SEMS — skipping config/template setup", BOOTSTRAP_SEMS_DEVICE_TYPE)
-        return
+        raise RuntimeError(
+            f"Device type '{BOOTSTRAP_SEMS_DEVICE_TYPE}' not found in SEMS "
+            "(BOOTSTRAP_SEMS_DEVICE_TYPE) — cannot create the sealman config/template "
+            f"without it. The '{BOOTSTRAP_SEMS_TEMPLATE_NAME}' template was NOT initialized."
+        )
     device_type_id: int = dt["id"]
     _log.info("Device type '%s' found (id=%d)", BOOTSTRAP_SEMS_DEVICE_TYPE, device_type_id)
 
@@ -349,5 +352,7 @@ async def bootstrap_sems() -> None:
 
     except Exception as ex:
         _log.error("Bootstrap encountered an unexpected error — continuing startup: %s", ex, exc_info=True)
+        _log.warning("═══ SEMS Bootstrap — done WITH ERRORS (see above) ═══")
+        return
 
     _log.info("═══ SEMS Bootstrap — done ═══")

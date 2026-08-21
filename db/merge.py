@@ -1,0 +1,142 @@
+from typing import Any, Dict, Optional, Protocol, runtime_checkable
+
+from exceptions import ValidationError
+from field_validation import validate_value
+
+
+@runtime_checkable
+class TypedEntity(Protocol):
+    fields: Dict[str, Any]
+    label: str
+    description: Optional[str]
+
+
+def resolve_fields(
+    instance_data: Dict[str, Any],
+    type_fields: Dict[str, Any],
+) -> Dict[str, Any]:
+    resolved: Dict[str, Any] = {}
+    for field_key, field_def in type_fields.items():
+        value = instance_data.get(field_key)
+        if value is None:
+            value = field_def.get("default")
+        resolved[field_key] = {
+            "value": value,
+            "field": field_def,
+        }
+    for data_key, data_value in instance_data.items():
+        if data_key not in type_fields:
+            resolved[data_key] = {"value": data_value, "field": None}
+    return resolved
+
+
+def merge_type_fields(
+    base_fields: Dict[str, Any],
+    override_fields: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merges two field-definition dicts, with `override_fields`' definitions taking precedence
+    on key collisions. Used to make a device type inherit another type's field schema (e.g. the
+    default type's required fields) while still letting it redefine any of those keys itself.
+    """
+    return {**base_fields, **override_fields}
+
+
+def validate_instance_data(
+    data: Dict[str, Any],
+    type_fields: Dict[str, Any],
+) -> None:
+    """Validate submitted endpoint_data/service_data against its type's field definitions.
+
+    Raises ValidationError (422) on the first violation: missing required field,
+    wrong data type, failed validation rule, or a value outside `options`.
+    """
+    for field_key, field_def in type_fields.items():
+        value = data.get(field_key)
+        if value is None:
+            if field_def.get("required"):
+                raise ValidationError(f"'{field_key}' is required", 422)
+            continue
+        try:
+            validate_value(field_key, value, field_def)
+        except ValueError as exc:
+            raise ValidationError(str(exc), 422)
+
+
+def reject_non_changeable_updates(
+    current_data: Dict[str, Any],
+    data_patch: Dict[str, Any],
+    type_fields: Dict[str, Any],
+) -> None:
+    """Raises ValidationError if the patch tries to set a different value for a field whose
+    definition has `changeable: false` and which already has a value (e.g. a scanned IP
+    address that must not be hand-edited once discovered).
+    """
+    for field_key, new_value in data_patch.items():
+        field_def = type_fields.get(field_key)
+        if field_def is None or field_def.get("changeable", True):
+            continue
+        current_value = current_data.get(field_key)
+        if current_value is not None and new_value != current_value:
+            raise ValidationError(f"'{field_key}' is not changeable once set", 422)
+
+
+def patch_fields(
+    current_fields: Dict[str, Any],
+    field_patches: Dict[str, Any],
+) -> Dict[str, Any]:
+    result = dict(current_fields)
+    for field_key, field_patch in field_patches.items():
+        if field_patch is None:
+            result.pop(field_key, None)
+        else:
+            existing = dict(result.get(field_key, {}))
+            existing.update({k: v for k, v in field_patch.items() if v is not None})
+            result[field_key] = existing
+    return result
+
+
+def patch_data(
+    current_data: Dict[str, Any],
+    data_patch: Dict[str, Any],
+) -> Dict[str, Any]:
+    result = dict(current_data)
+    for key, value in data_patch.items():
+        if value is None:
+            result.pop(key, None)
+        else:
+            result[key] = value
+    return result
+
+
+class BlueprintResolver:
+    _ENTITY_ID_FIELD: str
+    _PARENT_ID_FIELD: Optional[str] = None
+
+    def _serialize_type(self, entity_type: Any) -> Dict[str, Any]:
+        return {
+            "type_id": entity_type.type_id,
+            "label": entity_type.label,
+            "description": entity_type.description,
+            "fields": entity_type.fields or {},
+            "mapping": entity_type.mapping or {},
+            "created_at": entity_type.created_at,
+            "updated_at": entity_type.updated_at,
+        }
+
+    def _serialize_resolved(self, entity: Any, entity_type: Any) -> Dict[str, Any]:
+        data_field = self._ENTITY_ID_FIELD.replace("_id", "_data")
+        result = {
+            self._ENTITY_ID_FIELD: getattr(entity, self._ENTITY_ID_FIELD),
+            "type_id": entity.type_id,
+            "type_label": entity_type.label,
+            "type_description": entity_type.description,
+            data_field: resolve_fields(
+                getattr(entity, data_field) or {},
+                entity_type.fields or {},
+            ),
+            "created_at": entity.created_at,
+            "updated_at": entity.updated_at,
+        }
+        if self._PARENT_ID_FIELD:
+            result[self._PARENT_ID_FIELD] = getattr(entity, self._PARENT_ID_FIELD)
+        return result

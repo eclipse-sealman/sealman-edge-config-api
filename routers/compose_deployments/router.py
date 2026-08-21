@@ -15,6 +15,7 @@ from .schemas import (
 )
 from .lp_compose_builder import LPComposeBuilder
 
+
 def _platform_read():
     return True
 
@@ -65,7 +66,7 @@ async def create_or_update_deployment(
 
     created = await repository.create_or_update(
         name=name,
-        request=req.dict(),
+        request=req.model_dump(),
         content=compose,
         description=req.description,
         landing_page=False,
@@ -95,6 +96,7 @@ async def delete_deployment(
         )
 
     return {"message": f"{name} deleted successfully"}
+
 
 active_deployment = BaseAPIRouter(
     prefix="/active-deployment",

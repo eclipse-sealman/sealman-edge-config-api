@@ -20,15 +20,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.add_column(
-        "platform",
+        "platform_config",
         sa.Column("endpoint_types", JSONB(), nullable=False, server_default="[]"),
     )
     op.add_column(
-        "platform",
+        "platform_config",
         sa.Column("service_ports", JSONB(), nullable=False, server_default="[]"),
     )
     op.add_column(
-        "platform",
+        "platform_config",
         sa.Column("selected_templates", JSONB(), nullable=False, server_default="[]"),
     )
 

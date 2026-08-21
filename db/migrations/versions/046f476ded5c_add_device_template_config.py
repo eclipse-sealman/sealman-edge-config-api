@@ -20,16 +20,27 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "platform",
+    op.create_table(
+        "platform_config",
+        sa.Column("name", sa.Text(), primary_key=True, nullable=False),
+        sa.Column("device_template_config", JSONB(), nullable=False, server_default="{}"),
         sa.Column(
-            "device_template_config",
-            JSONB(),
+            "created_at",
+            sa.TIMESTAMP(timezone=True),
+            server_default=sa.text("NOW()"),
             nullable=False,
-            server_default="{}",
+        ),
+        sa.Column(
+            "updated_at",
+            sa.TIMESTAMP(timezone=True),
+            server_default=sa.text("NOW()"),
+            nullable=False,
         ),
     )
- 
- 
+    op.execute(
+        "INSERT INTO platform_config (name, device_template_config) VALUES ('default', '{}'::jsonb)"
+    )
+
+
 def downgrade() -> None:
-    op.drop_column("platform", "device_template_config")
+    op.drop_table("platform_config")

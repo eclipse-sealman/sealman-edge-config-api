@@ -22,11 +22,11 @@ module_config = BaseAPIRouter()
 # POST Endpoints - Write Operations  
 # ============================================================
 
-@module_config.post("/{device}/twin/config/seal-app-opcua-client", tags=["Module Configuration"])
+@module_config.post("/{device}/twin/config/seal-module-opcua-client", tags=["Module Configuration"])
 async def post_module_twin_config_opcua(device: str,
                                         request: OpcuaClientModuleConfigV1,
                                         _ = Depends(ABACPermissionCheck(Device.MODULE_TWIN_CONFIG_WRITE))):
-    return await _post_module_twin_config(device, "seal-app-opcua-client", request)
+    return await _post_module_twin_config(device, "seal-module-opcua-client", request)
 
 @module_config.post("/{device}/twin/config/seal-app-net-discover", tags=["Module Configuration"])
 async def post_module_twin_config_discover(device: str, request: NetworkDiscoverModuleConfigV1,
@@ -49,11 +49,11 @@ async def get_net_discover_twin_config(device: str,
                                  _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _get_module_twin_config(device, "seal-app-net-discover")
 
-@module_config.get("/{device}/twin/config/seal-app-opcua-client", response_model=Union[OpcuaClientModuleConfigV1, None], response_model_exclude_none=True,
+@module_config.get("/{device}/twin/config/seal-module-opcua-client", response_model=Union[OpcuaClientModuleConfigV1, None], response_model_exclude_none=True,
                    tags=["Module Configuration"])
 async def get_opcua_client_twin_config(device: str,
                                  _ = Depends(ABACPermissionCheck(Device.READ))):
-    return await _get_module_twin_config(device, "seal-app-opcua-client")
+    return await _get_module_twin_config(device, "seal-module-opcua-client")
 
 @module_config.get("/{device}/twin/config/{module}", response_model=Union[GetModuleTwinResponse, None],
                    tags=["Module Configuration"])

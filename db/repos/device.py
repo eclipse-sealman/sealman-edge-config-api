@@ -20,8 +20,13 @@ class DeviceRepository(ABC):
     async def get_device_metadata(
         self,
         device_id: str,
-        platform_name: str = "default",
     ) -> Optional[Dict[str, Any]]:
+        pass
+
+    @abstractmethod
+    async def get_devices_metadata(
+        self,
+    ) -> List[Dict[str, Any]]:
         pass
 
     @abstractmethod
@@ -29,39 +34,13 @@ class DeviceRepository(ABC):
         self,
         device_id: str,
         metadata: Dict[str, Any],
-        platform_name: str = "default",
     ) -> Optional[Dict[str, Any]]:
-        pass
-
-    @abstractmethod
-    async def get_platform_meta_keys(
-        self,
-        platform_name: str = "default",
-    ) -> Dict[str, Any]:
-        pass
-
-    @abstractmethod
-    async def add_platform_meta_key(
-        self,
-        key: str,
-        options: Dict[str, Any],
-        platform_name: str = "default",
-    ) -> Dict[str, Any]:
-        pass
-
-    @abstractmethod
-    async def delete_platform_meta_key(
-        self,
-        key: str,
-        platform_name: str = "default",
-    ) -> Dict[str, Any]:
         pass
 
     @abstractmethod
     async def get_device_ids_by_metadata_filters(
         self,
         metadata_filters: Dict[str, Optional[str]],
-        platform_name: str = "default",
     ) -> List[str]:
         pass
 
@@ -84,7 +63,8 @@ class DeviceRepository(ABC):
     async def create_device(
         self,
         device_id: str,
-        metadata: Dict[str, Any]
+        metadata: Dict[str, Any],
+        type_id: str = "default",
     ) -> Dict[str, Any]:
         pass
 
@@ -100,65 +80,5 @@ class DeviceRepository(ABC):
         self,
         device_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Returns raw device_meta JSONB for scope evaluation, or None if device not found."""
-        pass
-
-    @abstractmethod   
-    async def get_device_template_config(
-        self,
-        platform_name: str = "default",
-    ) -> Dict[str, Any]:
-        pass
-
-    @abstractmethod
-    async def update_device_template_config(
-        self,
-        config: Dict[str, Any],
-        platform_name: str = "default",
-    ) -> Dict[str, Any]:
-        pass
-
-    @abstractmethod
-    async def get_endpoint_types(
-        self,
-        platform_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-        pass
-
-    @abstractmethod
-    async def save_endpoint_types(
-        self,
-        types: List[Dict[str, Any]],
-        platform_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-        pass
-
-    @abstractmethod
-    async def get_service_ports(
-        self,
-        platform_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-        pass
-
-    @abstractmethod
-    async def save_service_ports(
-        self,
-        ports: List[Dict[str, Any]],
-        platform_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-        pass
-
-    @abstractmethod
-    async def get_selected_templates(
-        self,
-        platform_name: str = "default",
-    ) -> List[str]:
-        pass
-
-    @abstractmethod
-    async def save_selected_templates(
-        self,
-        templates: List[str],
-        platform_name: str = "default",
-    ) -> List[str]:
+        """Returns raw device_data JSONB for scope evaluation, or None if device not found."""
         pass

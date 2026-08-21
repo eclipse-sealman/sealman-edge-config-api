@@ -5,9 +5,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.device import Device, DeviceSnapshotCache
-from db.models.platform import PlatformSettings
+from db.models.device_type import DeviceType
 from db.registry import register_repository
 from db.repos.device import DeviceRepository
+from db.merge import resolve_fields, validate_instance_data, patch_data, merge_type_fields
 from exceptions import APIError
 
 
@@ -53,7 +54,8 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
             """
             select
                 d.device_id,
-                d.device_meta,
+                d.type_id,
+                d.device_data,
                 d.created_at,
                 d.updated_at,
                 vds.connection_state,
@@ -65,46 +67,31 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         result = await self._session.execute(stmt)
         return [dict(row) for row in result.mappings().all()]
 
-    @staticmethod
-    def _merge_metadata(
-        platform_meta: Dict[str, Any],
-        device_meta: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        merged: Dict[str, Any] = {}
-
-        for key in platform_meta.keys():
-            if key in device_meta:
-                merged[key] = {
-                    "value": device_meta[key],
-                    "source": "platform",
-                }
-            else:
-                merged[key] = {
-                    "value": None,
-                    "source": "platform",
-                }
-
-        for key, value in device_meta.items():
-            if key not in platform_meta:
-                merged[key] = {
-                    "value": value,
-                    "source": "device",
-                }
-
-        return merged
-
-    async def _get_platform(self, platform_name: str):
+    async def _get_device_type_or_raise(self, type_id: str) -> DeviceType:
         result = await self._session.execute(
-            select(PlatformSettings).where(PlatformSettings.name == platform_name)
+            select(DeviceType).where(DeviceType.type_id == type_id)
         )
-        platform = result.scalar_one_or_none()
+        dt = result.scalar_one_or_none()
+        if dt is None:
+            raise APIError(f"DeviceType '{type_id}' not found", 404)
+        return dt
 
-        if not platform:
-            raise ValueError(f"Platform '{platform_name}' not found")
+    async def _get_default_type_fields(self) -> Dict[str, Any]:
+        result = await self._session.execute(
+            select(DeviceType).where(DeviceType.type_id == "default")
+        )
+        dt = result.scalar_one_or_none()
+        return dt.fields or {} if dt else {}
 
-        return platform
+    async def _effective_fields_for(self, device_type: DeviceType) -> Dict[str, Any]:
+        """The default type's required fields apply to every device type, so a non-default
+        type's effective schema is the default type's fields with its own overlaid on top."""
+        if device_type.type_id == "default":
+            return device_type.fields or {}
+        default_fields = await self._get_default_type_fields()
+        return merge_type_fields(default_fields, device_type.fields or {})
 
-    async def _get_device(self, device_id: str):
+    async def _get_device(self, device_id: str) -> Optional[Device]:
         result = await self._session.execute(
             select(Device).where(Device.device_id == device_id)
         )
@@ -113,30 +100,65 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
     async def get_device_metadata(
         self,
         device_id: str,
-        platform_name: str = "default",
     ) -> Optional[Dict[str, Any]]:
 
         device = await self._get_device(device_id)
         if not device:
             return None
 
-        platform_meta = await self.get_platform_meta_keys()
-        device_meta = device.device_meta or {}
-
-        merged = self._merge_metadata(platform_meta, device_meta)
+        device_type = await self._get_device_type_or_raise(device.type_id)
+        effective_fields = await self._effective_fields_for(device_type)
 
         return {
             "device_id": device.device_id,
-            "device_metadata": merged,
+            "type_id": device.type_id,
+            "device_metadata": resolve_fields(
+                device.device_data or {}, effective_fields
+            ),
             "created_at": device.created_at,
             "updated_at": device.updated_at,
         }
+
+    async def get_devices_metadata(
+        self,
+    ) -> List[Dict[str, Any]]:
+
+        types_result = await self._session.execute(select(DeviceType))
+        raw_fields_by_type = {dt.type_id: dt.fields or {} for dt in types_result.scalars().all()}
+        default_fields = raw_fields_by_type.get("default", {})
+        fields_by_type = {
+            type_id: (
+                fields if type_id == "default" else merge_type_fields(default_fields, fields)
+            )
+            for type_id, fields in raw_fields_by_type.items()
+        }
+
+        devices = await self.get_devices_joined_snapshot()
+
+        response: List[Dict[str, Any]] = []
+
+        for device in devices:
+            device_data = device.get("device_data") or {}
+            type_fields = fields_by_type.get(device.get("type_id"), {})
+            resolved = resolve_fields(device_data, type_fields)
+
+            response.append(
+                {
+                    "device_id": device.get("device_id"),
+                    "type_id": device.get("type_id"),
+                    "device_status": device.get("connection_state"),
+                    "device_metadata": resolved,
+                    "created_at": device.get("created_at"),
+                    "updated_at": device.get("updated_at"),
+                }
+            )
+
+        return response
 
     async def update_device_metadata(
         self,
         device_id: str,
         metadata: Dict[str, Any],
-        platform_name: str = "default",
     ) -> Optional[Dict[str, Any]]:
 
         if not isinstance(metadata, dict):
@@ -146,78 +168,36 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         if not device:
             return None
 
-        current_meta = dict(device.device_meta or {})
-        for key, value in metadata.items():
-            if value is None:
-                current_meta.pop(key, None)
-            else:
-                current_meta[key] = value
+        device_type = await self._get_device_type_or_raise(device.type_id)
+        merged_data = patch_data(device.device_data or {}, metadata)
+        effective_fields = await self._effective_fields_for(device_type)
+        validate_instance_data(merged_data, effective_fields)
 
         stmt = (
             update(Device)
             .where(Device.device_id == device_id)
-            .values(device_meta=current_meta)
+            .values(device_data=merged_data)
         )
 
         await self._session.execute(stmt)
         await self._session.commit()
 
-        return await self.get_device_metadata(
-            device_id=device_id,
-            platform_name=platform_name,
-        )
-
-    # -------------------- Platform Metadata Keys --------------------
-
-    async def get_platform_meta_keys(
-        self,
-        platform_name: str = "default",
-    ) -> Dict[str, Any]:
-        platform = await self._get_platform(platform_name)
-        return platform.platform_meta or {}
-
-    async def add_platform_meta_key(
-        self,
-        key: str,
-        options: Dict[str, Any],
-        platform_name: str = "default",
-    ) -> Dict[str, Any]:
-        platform = await self._get_platform(platform_name)
-        current_meta = dict(platform.platform_meta or {})
-
-        if key in current_meta:
-            raise APIError(f"Metadata key '{key}' already exists", 409)
-
-        current_meta[key] = {
-            "prepopulate": options.get("prepopulate", False),
-            "allowAddition": options.get("allowAddition", False),
-        }
-
-        stmt = (
-            update(PlatformSettings)
-            .where(PlatformSettings.name == platform_name)
-            .values(platform_meta=current_meta)
-        )
-        await self._session.execute(stmt)
-        await self._session.commit()
-
-        return current_meta
+        return await self.get_device_metadata(device_id=device_id)
 
     async def get_device_ids_by_metadata_filters(
         self,
         metadata_filters: Dict[str, Optional[str]],
-        platform_name: str = "default",
     ) -> List[str]:
         if not metadata_filters:
             return []
 
         conditions = []
         for key, expected_value in metadata_filters.items():
-            meta_text = Device.device_meta[key].astext
+            meta_text = Device.device_data[key].astext
 
             if expected_value is None:
                 # key-only filter: key exists and value is neither empty nor whitespace-only
-                conditions.append(Device.device_meta.has_key(key))
+                conditions.append(Device.device_data.has_key(key))
                 conditions.append(func.btrim(func.coalesce(meta_text, "")) != "")
             else:
                 conditions.append(meta_text == expected_value)
@@ -227,42 +207,26 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         )
         return list(result.scalars().all())
 
-    async def delete_platform_meta_key(
-        self,
-        key: str,
-        platform_name: str = "default",
-    ) -> Dict[str, Any]:
-        platform = await self._get_platform(platform_name)
-        current_meta = dict(platform.platform_meta or {})
-
-        if key not in current_meta:
-            raise APIError(f"Metadata key '{key}' not found", 404)
-
-        del current_meta[key]
-
-        stmt = (
-            update(PlatformSettings)
-            .where(PlatformSettings.name == platform_name)
-            .values(platform_meta=current_meta)
-        )
-        await self._session.execute(stmt)
-        await self._session.commit()
-
-        return current_meta
-
     async def device_exists(self, device_id: str) -> bool:
         device = await self._get_device(device_id)
         return device is not None
 
-    async def create_device(self, device_id: str, metadata: Dict[str, Any]):
-        device = Device(device_id=device_id, device_meta=metadata or {})
+    async def create_device(
+        self, device_id: str, metadata: Dict[str, Any], type_id: str = "default"
+    ):
+        device_type = await self._get_device_type_or_raise(type_id)
+        effective_fields = await self._effective_fields_for(device_type)
+        validate_instance_data(metadata or {}, effective_fields)
+
+        device = Device(device_id=device_id, type_id=type_id, device_data=metadata or {})
         self._session.add(device)
         await self._session.commit()
         await self._session.refresh(device)
 
         return {
             "device_id": device.device_id,
-            "device_meta": device.device_meta,
+            "type_id": device.type_id,
+            "device_data": device.device_data,
             "created_at": device.created_at,
             "updated_at": device.updated_at,
         }
@@ -278,7 +242,8 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         return [
             {
                 "device_id": device.device_id,
-                "device_meta": device.device_meta or {},
+                "type_id": device.type_id,
+                "device_data": device.device_data or {},
             }
             for device in devices
         ]
@@ -287,103 +252,4 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         device = await self._get_device(device_id)
         if device is None:
             return None
-        return dict(cast(Dict[str, Any], device.device_meta) or {})
-
-
-    # -------------------- Device Template Config --------------------
-
-    async def get_device_template_config(
-        self,
-        platform_name: str = "default",
-    ) -> Dict[str, Any]:
-        platform = await self._get_platform(platform_name)
-        return platform.device_template_config or {}
-
-    async def update_device_template_config(
-        self,
-        config: Dict[str, Any],
-        platform_name: str = "default",
-    ) -> Dict[str, Any]:
-        platform = await self._get_platform(platform_name)
-        current = dict(platform.device_template_config or {})
-        current.update(config)
-
-        stmt = (
-            update(PlatformSettings)
-            .where(PlatformSettings.name == platform_name)
-            .values(device_template_config=current)
-        )
-        await self._session.execute(stmt)
-        await self._session.commit()
-
-        return current
-
-
-    # -------------------- Endpoint Types --------------------
-
-    async def get_endpoint_types(
-        self,
-        platform_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-        platform = await self._get_platform(platform_name)
-        return platform.endpoint_types or []
-
-    async def save_endpoint_types(
-        self,
-        types: List[Dict[str, Any]],
-        platform_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-        stmt = (
-            update(PlatformSettings)
-            .where(PlatformSettings.name == platform_name)
-            .values(endpoint_types=types)
-        )
-        await self._session.execute(stmt)
-        await self._session.commit()
-        return types
-
-    # -------------------- Service Ports --------------------
-
-    async def get_service_ports(
-        self,
-        platform_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-        platform = await self._get_platform(platform_name)
-        return platform.service_ports or []
-
-    async def save_service_ports(
-        self,
-        ports: List[Dict[str, Any]],
-        platform_name: str = "default",
-    ) -> List[Dict[str, Any]]:
-        stmt = (
-            update(PlatformSettings)
-            .where(PlatformSettings.name == platform_name)
-            .values(service_ports=ports)
-        )
-        await self._session.execute(stmt)
-        await self._session.commit()
-        return ports
-
-    # -------------------- Selected Templates --------------------
-
-    async def get_selected_templates(
-        self,
-        platform_name: str = "default",
-    ) -> List[str]:
-        platform = await self._get_platform(platform_name)
-        return platform.selected_templates or []
-
-    async def save_selected_templates(
-        self,
-        templates: List[str],
-        platform_name: str = "default",
-    ) -> List[str]:
-        stmt = (
-            update(PlatformSettings)
-            .where(PlatformSettings.name == platform_name)
-            .values(selected_templates=templates)
-        )
-        await self._session.execute(stmt)
-        await self._session.commit()
-        return templates
+        return dict(cast(Dict[str, Any], device.device_data) or {})

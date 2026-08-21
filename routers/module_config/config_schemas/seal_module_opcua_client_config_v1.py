@@ -5,6 +5,7 @@ MQTT_ENDPOINT_REGEX = r"^mqtt://.+:\d+$"
 OPCUA_ENDPOINT_REGEX = r"^opc\.tcp://.+:\d+$"
 MESSAGE_FORMATS = Literal["csi:1.0"]
 
+
 class AnonymousCredentialsSchema(BaseModel):
     type: Literal["Anonymous"]
 
@@ -95,7 +96,10 @@ class ClientConfigurationSchema(BaseModel):
     rootCrls: List[str] | None = None
     sessions: Dict[str, SessionConfigurationSchema]
 
+
 class OpcuaClientModuleConfigV1(BaseModel):
     schemaVersion: Literal["1.0"]
-    mqttEndpoint: Annotated[str, StringConstraints(pattern=MQTT_ENDPOINT_REGEX)] | None = None
+    mqttEndpoint: (
+        Annotated[str, StringConstraints(pattern=MQTT_ENDPOINT_REGEX)] | None
+    ) = None
     clients: Dict[str, ClientConfigurationSchema]

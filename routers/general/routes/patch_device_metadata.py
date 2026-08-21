@@ -16,6 +16,7 @@ async def patch_device_metadata(device, metadata: Dict[str, Any], repo: DeviceRe
         )
     return DeviceMetadataResponse(
         deviceId=result["device_id"],
+        typeId=result["type_id"],
         deviceMetadata=result["device_metadata"],
         createdAt=result["created_at"],
         updatedAt=result["updated_at"]

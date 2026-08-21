@@ -3,6 +3,7 @@ import logging
 from smart_ems import SmartEMS
 from exceptions import APIError, IoTBackendAPIError
 from db.repos.device import DeviceRepository
+from db.repos.device_template import DeviceTemplateRepository
 import asyncio
 from smart_ems import generate_resp_from_device_info
 from routers.devices.routes.get_devices import populate_cache_from_iot_hub_query
@@ -18,9 +19,11 @@ async def create_device(
     device_id: str,
     body: dict,
     repo: DeviceRepository,
+    template_repo: DeviceTemplateRepository,
 ):
     auth_type = body.get("authType")
     metadata = body.get("meta", {})
+    type_id = body.get("type_id") or "default"
     registration_id_generated = body.get("registration_id_generated", "").strip()
     if not registration_id_generated:
         # Frontend should always send this, but fall back to device_id as safe default
@@ -39,7 +42,7 @@ async def create_device(
 
     try:
         # 2. INSERT DB
-        device = await repo.create_device(device_id, metadata)
+        device = await repo.create_device(device_id, metadata, type_id=type_id)
         created_in_db = True
 
         # 3. REGISTER IN IoTHub
@@ -80,7 +83,7 @@ async def create_device(
         sems_device = await SmartEMS.get_device_by_serial(device_id, require_template=False)
 
         # Start with infrastructure constants from env.
-        variables_to_set = await repo.get_device_template_config()
+        variables_to_set = dict(await template_repo.get_template_variables())
         # Add per-device variables (user input + derived).
         variables_to_set["registration_id_generated"] = registration_id_generated
         # Ensure device_connection_string is always set from IoTHub key material.

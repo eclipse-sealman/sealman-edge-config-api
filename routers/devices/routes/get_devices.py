@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from typing import Any, Callable, Dict, Optional
+from typing import Callable, Dict, Optional
 
 from starlette.datastructures import QueryParams
 
@@ -14,19 +14,6 @@ from helper import get_iothub_auth_headers
 
 logger = logging.getLogger("EdgeConfigAPI")
 _META_DEEP_OBJECT_RE = re.compile(r"^meta\[(.*)]$")
-
-
-def _merge_metadata(platform_meta: Dict[str, Any], device_meta: Dict[str, Any]) -> Dict[str, Any]:
-    merged: Dict[str, Any] = {}
-    for key in platform_meta.keys():
-        if key in device_meta:
-            merged[key] = {"value": device_meta[key], "source": "platform"}
-        else:
-            merged[key] = {"value": None, "source": "platform"}
-    for key, value in device_meta.items():
-        if key not in platform_meta:
-            merged[key] = {"value": value, "source": "device"}
-    return merged
 
 
 def _extract_metadata_filters(query_params: QueryParams | None) -> Dict[str, Optional[str]]:
@@ -69,8 +56,7 @@ async def get_devices(
         if not matching_device_ids:
             return []
 
-    devices = await repo.get_devices_joined_snapshot()
-    platform_meta = await repo.get_platform_meta_keys()
+    devices = await repo.get_devices_metadata()
 
     devices_output = []
 
@@ -80,22 +66,24 @@ async def get_devices(
         if matching_device_ids is not None and device_id not in matching_device_ids:
             continue
 
-        # ABAC scope filter against raw device_meta
-        device_meta = device.get("device_meta") or {}
-        if not filter_device(device_meta):
+        resolved_metadata = device.get("device_metadata") or {}
+        # ABAC scope filter against raw metadata values (derived from the resolved fields)
+        raw_metadata = {key: entry.get("value") for key, entry in resolved_metadata.items()}
+        if not filter_device(raw_metadata):
             continue
 
         dev_output = {}
         dev_output["deviceId"] = device_id
+        dev_output["typeId"] = device.get("type_id")
         dev_output.setdefault("lastSeenInRange", False)
-        device_status = device.get("connection_state", "Unknown") or "Unknown"
+        device_status = device.get("device_status", "Unknown") or "Unknown"
         dev_output.setdefault("deviceStatus", device_status)
         dev_output.setdefault("iotEdgeRuntime", device_status)
         dev_output.setdefault("iotHub", "Unknown")
         dev_output.setdefault("sems", "Unknown")
         dev_output.setdefault("vpn", "Unknown")
 
-        dev_output["deviceMetadata"] = _merge_metadata(platform_meta, device_meta)
+        dev_output["deviceMetadata"] = resolved_metadata
 
         dev_output["createdAt"] = device.get("created_at", None)
         dev_output["updatedAt"] = device.get("updated_at", None)
@@ -158,18 +146,24 @@ async def populate_cache_from_iot_hub_query(repo: DeviceRepository):
 
     # Override deviceStatus with $edgeHub module connectionState, which reflects
     # the actual live connection for IoT Edge devices (device-level connectionState
-    # is always Disconnected for Edge devices).
+    # is always Disconnected for Edge devices). If this query fails, bail out of the
+    # whole cache refresh instead of persisting the device-level fallback - that
+    # fallback is *always* "Disconnected" for Edge devices, so writing it would
+    # wholesale-overwrite the entire snapshot with incorrect offline statuses for
+    # every device until the next successful cycle.
     try:
         edgehub_map = await get_device_map_edgehub()
-        for device in devices:
-            edgehub_state = edgehub_map.get(device["deviceName"])
-            if edgehub_state is not None:
-                device["deviceStatus"] = edgehub_state
     except Exception as e:
         logger.warning(
-            "Could not fetch $edgeHub connection states, falling back to device-level connectionState: %s",
+            "Could not fetch $edgeHub connection states, skipping this cache refresh cycle: %s",
             e,
         )
+        return
+
+    for device in devices:
+        edgehub_state = edgehub_map.get(device["deviceName"])
+        if edgehub_state is not None:
+            device["deviceStatus"] = edgehub_state
 
     await repo.upsert_device_snapshot(devices)
     logger.info("Device cache populated successfully with %d devices", len(devices))

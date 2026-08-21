@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 
 
 # ---------- Templates ----------
@@ -18,57 +18,11 @@ class SelectedTemplatesRequest(BaseModel):
     templates: List[str]
 
 
-# ---------- Device Endpoint Types ----------
+# ---------- Device Template Variables ----------
 
-class EndpointType(BaseModel):
-    name: str
-    description: Optional[str] = None
-    defaultIP: Optional[str] = None
+class TemplateVariableListResponse(BaseModel):
+    variables: Dict[str, str]
 
 
-class EndpointTypeList(BaseModel):
-    types: List[EndpointType]
-
-
-class EndpointTypeUpdateRequest(BaseModel):
-    types: List[EndpointType]
-
-
-# ---------- Services ----------
-
-class ServiceConfig(BaseModel):
-    deviceEndpointServiceName: str
-    description: Optional[str] = None
-    defaultPort: Optional[str] = None
-
-
-class ServiceListResponse(BaseModel):
-    services: List[ServiceConfig]
-
-
-class ServiceUpdateRequest(BaseModel):
-    services: List[ServiceConfig]
-
-
-# ---------- Platform Metadata Keys ----------
-
-class MetadataKeyOptions(BaseModel):
-    prepopulate: bool
-    allowAddition: bool
-
-
-class AddMetadataKeyRequest(BaseModel):
-    key: Dict[str, MetadataKeyOptions]
-
-
-class MetadataKeysResponse(BaseModel):
-    keys: List[Dict[str, MetadataKeyOptions]]
-
-
-# ---------- Device Template Config ----------
-
-class DeviceTemplateConfigResponse(BaseModel):
-    config: Dict[str, Any]
-
-class UpdateDeviceTemplateConfigRequest(BaseModel):
-    config: Dict[str, Any]
+class SetTemplateVariableRequest(BaseModel):
+    value: str

@@ -2,7 +2,10 @@ import asyncio
 import logging
 from typing import Set
 from fastapi import FastAPI, Request, HTTPException, Security
-from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
+from fastapi.openapi.docs import (
+    get_swagger_ui_html,
+    get_swagger_ui_oauth2_redirect_html,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -17,7 +20,7 @@ from constants import (
     ROOT_PATH,
     ALLOW_STARTUP_WITHOUT_OIDC,
     BOOTSTRAP_ENABLED,
-    ENABLE_DOCS
+    ENABLE_DOCS,
 )
 
 from db.repos.device import DeviceRepository
@@ -26,7 +29,9 @@ from db.session import AsyncSessionLocal, get_repository
 from db.migration import run_migrations
 from periodic_task import create_periodic_task
 from routers.devices.routes.get_devices import populate_cache_from_iot_hub_query
-from routers.smart_ems.password_renewal_task_processor import process_password_renewal_tasks
+from routers.smart_ems.password_renewal_task_processor import (
+    process_password_renewal_tasks,
+)
 from smart_ems import init_smart_ems
 from bootstrap import bootstrap_sems, bootstrap_iothub_base_deployment
 from authorization.sync_permissions import sync_permissions_to_db
@@ -42,6 +47,9 @@ from routers.lines.router import lines
 from routers.platform_configuration.router import platform_config
 from routers.compose_deployments.router import compose_deployment, active_deployment
 from routers.devices.router import devices
+from routers.endpoint.router import endpoints
+from routers.service.router import services
+from routers.device_type.router import device_types
 
 # logger config
 logger = logging.getLogger("EdgeConfigAPI")
@@ -56,6 +64,7 @@ if not logger.handlers:
 logger.info(f"Edge-Config-API ({VERSION})")
 background_tasks: Set[asyncio.Task] = set()
 
+
 async def populate_cache_from_iot_hub_query_wrapper():
     async with AsyncSessionLocal() as session:
         repo_factory = get_repository(DeviceRepository)
@@ -64,7 +73,7 @@ async def populate_cache_from_iot_hub_query_wrapper():
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_: FastAPI):
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, run_migrations)
 
@@ -91,26 +100,34 @@ async def lifespan(app: FastAPI):
 
     sems_token_refresh = asyncio.create_task(init_smart_ems())
 
-    background_tasks.add(asyncio.create_task(create_periodic_task(
-        func=populate_cache_from_iot_hub_query_wrapper,
-        interval=DEVICE_CACHE_INTERVAL,
-    )))
+    background_tasks.add(
+        asyncio.create_task(
+            create_periodic_task(
+                func=populate_cache_from_iot_hub_query_wrapper,
+                interval=DEVICE_CACHE_INTERVAL,
+            )
+        )
+    )
 
-    background_tasks.add(asyncio.create_task(create_periodic_task(
-        func=process_password_renewal_tasks,
-        interval=(30 * 60),  # every 30 minutes,
-        initial_delay=60  # initial delay of 1 minute
-    )))
-    
+    background_tasks.add(
+        asyncio.create_task(
+            create_periodic_task(
+                func=process_password_renewal_tasks,
+                interval=(30 * 60),  # every 30 minutes,
+                initial_delay=60,  # initial delay of 1 minute
+            )
+        )
+    )
+
     yield
-    
+
     if jwks_refresh_task is not None:
         jwks_refresh_task.cancel()
     sems_token_refresh.cancel()
 
     for task in background_tasks:
         task.cancel()
-    
+
     if background_tasks:
         await asyncio.gather(*background_tasks, return_exceptions=True)
 
@@ -126,14 +143,14 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
     openapi_url="/openapi.json",
-    swagger_ui_oauth2_redirect_url='/docs/oauth2-redirect',
+    swagger_ui_oauth2_redirect_url="/docs/oauth2-redirect",
     swagger_ui_init_oauth={
-        'usePkceWithAuthorizationCodeGrant': True,
-        'clientId': SWAGGER_CLIENT_ID,
+        "usePkceWithAuthorizationCodeGrant": True,
+        "clientId": SWAGGER_CLIENT_ID,
     },
 )
 
-allowed_origins=[]
+allowed_origins = []
 if CORS_ALLOWED_ORIGINS is not None:
     allowed_origins.extend(CORS_ALLOWED_ORIGINS.split(","))
 
@@ -144,7 +161,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"]
+    expose_headers=["*"],
 )
 
 
@@ -158,6 +175,7 @@ async def add_path_to_audit_trail_log(request: Request, call_next):
     response = await call_next(request)
     return response
 
+
 # mount statics
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -165,6 +183,9 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(auth)
 app.include_router(general)
 app.include_router(compose_deployment)
+app.include_router(endpoints)
+app.include_router(services)
+app.include_router(device_types)
 app.include_router(active_deployment)
 app.include_router(module_config)
 app.include_router(smart_ems)
@@ -176,7 +197,7 @@ app.include_router(devices)
 
 
 # Register docs routes as plain Starlette routes so they bypass the global JWT dependency
-async def _swagger_ui(req: Request):
+async def _swagger_ui(_: Request):
     root = ROOT_PATH or ""
     return get_swagger_ui_html(
         openapi_url=f"{root}/openapi.json",
@@ -187,8 +208,10 @@ async def _swagger_ui(req: Request):
         swagger_ui_parameters=app.swagger_ui_parameters,
     )
 
-async def _swagger_redirect(req: Request):
+
+async def _swagger_redirect(_: Request):
     return get_swagger_ui_oauth2_redirect_html()
+
 
 if ENABLE_DOCS:
     app.add_route("/docs", _swagger_ui, include_in_schema=False)
@@ -197,7 +220,7 @@ if ENABLE_DOCS:
 
 # exception handlers
 @app.exception_handler(APIError)
-async def handle_api_error(request: Request, ex: APIError):
+async def handle_api_error(_: Request, ex: APIError):
     logger.error(f"APIError: [{ex}]")
     return JSONResponse(
         status_code=ex.status_code,
@@ -206,33 +229,25 @@ async def handle_api_error(request: Request, ex: APIError):
 
 
 @app.exception_handler(HTTPException)
-async def handle_http_exception(request: Request, ex: HTTPException):
+async def handle_http_exception(_: Request, ex: HTTPException):
     logger.error(f"HTTPException: [{ex}]")
-    return JSONResponse(
-        status_code=ex.status_code,
-        content={"message": f"{ex.detail}"}
-    )
+    return JSONResponse(status_code=ex.status_code, content={"message": f"{ex.detail}"})
 
 
 @app.exception_handler(RequestValidationError)
-async def handle_fast_api_req_validation_error(request: Request, ex: RequestValidationError):
+async def handle_fast_api_req_validation_error(_: Request, ex: RequestValidationError):
     logger.error(f"RequestValidationError: [{ex}]")
-    return JSONResponse(
-        status_code=400,
-        content={"message": ex.body}
-    )
+    return JSONResponse(status_code=400, content={"message": ex.body})
 
 
 @app.exception_handler(Exception)
-async def handle(request: Request, ex):
+async def handle(_: Request, ex):
     logger.error(f"Unhandled exception: [{ex}]")
-    return JSONResponse(
-        status_code=500,
-        content={"message": str(ex)}
-    )
+    return JSONResponse(status_code=500, content={"message": str(ex)})
 
 
 # startup with uvicorn if the script executed correctly
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="localhost", port=int(5000))
