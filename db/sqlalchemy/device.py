@@ -67,7 +67,6 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         result = await self._session.execute(stmt)
         return [dict(row) for row in result.mappings().all()]
 
-
     async def get_device_joined_snapshot(self, device_id: str) -> Optional[Dict[str, Any]]:
         stmt = text(
             """

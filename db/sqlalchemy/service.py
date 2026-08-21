@@ -10,16 +10,18 @@ from db.repos.service import ServiceRepository
 from db.merge import BlueprintResolver, patch_data, patch_fields, validate_instance_data
 from exceptions import APIError
 
-# Every service type automatically gets this field - required, non-changeable, mapped to the
-# "port" role - rather than letting an admin manually pick/toggle which field plays that role
-# (see routers/service/schemas.py's PORT_FIELD_KEY, which rejects any client-supplied field at
-# this key).
+# Every service type automatically gets this field - required, mapped to the "port" role -
+# rather than letting an admin manually pick/toggle which field plays that role (see
+# routers/service/schemas.py's PORT_FIELD_KEY, which rejects any client-supplied field at this
+# key). Changeable - it's only ever locked in the UI while assigning a type to a port actually
+# detected on the network (see AssignServiceDialog.tsx's `lockedFieldKey`), not as a hard,
+# permanent-after-save rule here.
 PORT_FIELD_KEY = "port"
 _PORT_FIELD_DEFINITION: Dict[str, Any] = {
     "type": "integer",
     "label": "Port",
     "required": True,
-    "changeable": False,
+    "changeable": True,
     "ui": "number",
 }
 
@@ -79,7 +81,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
             **(fields.get(PORT_FIELD_KEY) or {}),
             "type": "integer",
             "required": True,
-            "changeable": False,
+            "changeable": True,
         }
         all_fields = {**(fields or {}), PORT_FIELD_KEY: port_field}
         st = ServiceType(
@@ -133,7 +135,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
                 **current_port,
                 "type": "integer",
                 "required": True,
-                "changeable": False,
+                "changeable": True,
             }
             values["fields"] = merged_fields
         # Always applied (even when None, to clear it back to "no browse action") - unlike the

@@ -146,18 +146,24 @@ async def populate_cache_from_iot_hub_query(repo: DeviceRepository):
 
     # Override deviceStatus with $edgeHub module connectionState, which reflects
     # the actual live connection for IoT Edge devices (device-level connectionState
-    # is always Disconnected for Edge devices).
+    # is always Disconnected for Edge devices). If this query fails, bail out of the
+    # whole cache refresh instead of persisting the device-level fallback - that
+    # fallback is *always* "Disconnected" for Edge devices, so writing it would
+    # wholesale-overwrite the entire snapshot with incorrect offline statuses for
+    # every device until the next successful cycle.
     try:
         edgehub_map = await get_device_map_edgehub()
-        for device in devices:
-            edgehub_state = edgehub_map.get(device["deviceName"])
-            if edgehub_state is not None:
-                device["deviceStatus"] = edgehub_state
     except Exception as e:
         logger.warning(
-            "Could not fetch $edgeHub connection states, falling back to device-level connectionState: %s",
+            "Could not fetch $edgeHub connection states, skipping this cache refresh cycle: %s",
             e,
         )
+        return
+
+    for device in devices:
+        edgehub_state = edgehub_map.get(device["deviceName"])
+        if edgehub_state is not None:
+            device["deviceStatus"] = edgehub_state
 
     await repo.upsert_device_snapshot(devices)
     logger.info("Device cache populated successfully with %d devices", len(devices))
