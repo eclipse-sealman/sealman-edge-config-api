@@ -43,3 +43,25 @@ def get_smart_ems_device_data(smart_ems_device: dict):
     }
 
     return resp
+
+
+def get_smart_ems_device_summary(smart_ems_device: dict) -> dict:
+    cellular = any(
+        var_obj.get("representation") == "cellular"
+        for var_obj in smart_ems_device.get("variables") or []
+    )
+
+    template_name = "not assigned"
+    template_exists = smart_ems_device.get("template") is not None
+    template = smart_ems_device["template"].get("productionTemplate") if template_exists else None
+    if template is not None:
+        template_name = template.get("representation")
+
+    return {
+        "enabled": smart_ems_device.get("enabled"),
+        "hardwareVersion": smart_ems_device.get("hardwareVersion", "unknown"),
+        "firmwareVersion": smart_ems_device.get("firmwareVersion1", "unknown"),
+        "updateFirmware": smart_ems_device.get("reinstallFirmware1"),
+        "template": template_name,
+        "cellular": cellular,
+    }
