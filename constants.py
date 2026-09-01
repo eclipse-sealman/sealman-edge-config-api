@@ -113,6 +113,16 @@ BOOTSTRAP_IOTHUB_TARGET_CONDITION = os.getenv(
 )
 BOOTSTRAP_IOTHUB_PRIORITY = int(os.getenv("BOOTSTRAP_IOTHUB_PRIORITY", "99"))
 
+# Extension system - internal (service-to-service) and field-ingress
+# (device -> micro-service) API-key-authenticated side apps, each served on
+# their own port so they are never reachable from the same network path as
+# the public, JWT-authenticated app.
+EXTENSIONS_ENABLED = os.getenv("EXTENSIONS_ENABLED", "true").lower() == "true"
+EXTENSIONS_INTERNAL_API_HOST = os.getenv("EXTENSIONS_INTERNAL_API_HOST", "0.0.0.0")
+EXTENSIONS_INTERNAL_API_PORT = int(os.getenv("EXTENSIONS_INTERNAL_API_PORT", "8500"))
+EXTENSIONS_FIELD_API_HOST = os.getenv("EXTENSIONS_FIELD_API_HOST", "0.0.0.0")
+EXTENSIONS_FIELD_API_PORT = int(os.getenv("EXTENSIONS_FIELD_API_PORT", "8600"))
+
 # Maps SEMS variable name → value from environment.
 EDGE_AGENT_IMAGE = os.getenv("EDGE_AGENT_IMAGE", "")
 EDGE_HUB_IMAGE = os.getenv("EDGE_HUB_IMAGE", "")

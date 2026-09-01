@@ -5,7 +5,7 @@ from fastapi import Depends, HTTPException, Query
 
 from auth import validate_jwt
 from authorization.abac_permission_check import ABACPermissionCheck, evaluate_permission
-from authorization.permission_types import Device, Platform
+from authorization.permission_types import Device, Extension, Platform
 from db.repos.action import ActionRepository
 from db.repos.device import DeviceRepository
 from db.repos.scope import ScopeRepository
@@ -278,7 +278,9 @@ async def get_platform_permissions(
 
     permissions = [
         permission
-        for permission in Platform.ReadPermissions + Platform.EditPermissions
+        for permission in dict.fromkeys(
+            Platform.ReadPermissions + Platform.EditPermissions + Extension.ReadPermissions + Extension.EditPermissions
+        )
         if evaluate_permission(permission, user_data)
     ]
 

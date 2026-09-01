@@ -119,7 +119,12 @@ class ABACPermissionCheck:
         user_repo: UserRepository = Depends(get_repository(UserRepository)),
         device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
     ) -> ABACPermissionCheckResult:
-        device_id = request.path_params.get(self.device_path) if self.device_path else None
+        device_id = None
+        if self.device_path:
+            # Path params first (the vast majority of routes), falling back to a
+            # query param of the same name - used by dynamically registered
+            # extension routes whose scope parameter is declared as query-based.
+            device_id = request.path_params.get(self.device_path) or request.query_params.get(self.device_path)
         user_id = auth_context.get("oid") or auth_context.get("sub")
         user_name = get_current_user(auth_context)
 

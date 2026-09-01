@@ -21,7 +21,9 @@ from constants import (
     ALLOW_STARTUP_WITHOUT_OIDC,
     BOOTSTRAP_ENABLED,
     ENABLE_DOCS,
+    EXTENSIONS_ENABLED,
 )
+from extensions import hydrate_all_routes, setup_extensions, start_side_servers
 
 from db.repos.device import DeviceRepository
 from exceptions import APIError
@@ -73,11 +75,16 @@ async def populate_cache_from_iot_hub_query_wrapper():
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, run_migrations)
 
     await sync_permissions_to_db()
+
+    if EXTENSIONS_ENABLED:
+        internal_app, field_app = setup_extensions(app)
+        await hydrate_all_routes(app, internal_app, field_app)
+        background_tasks.update(start_side_servers(internal_app, field_app))
 
     jwks_refresh_task = None
 
