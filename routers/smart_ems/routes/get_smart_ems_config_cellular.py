@@ -1,58 +1,37 @@
+import json
+from helper import DeviceInfo
 from smart_ems import SmartEMS
-from exceptions import UnmatchedDependency, SEMSError
-from constants import LAN_EDGE_TEMPLATE_VERSIONS
-
-
-def extract_device_variables(device_info):
-    variables = []
-    for var in device_info.get("variables"):
-        variables.append(
-            {
-                "name": var.get("name"),
-                "variableValue": var.get("variableValue")
-             }
-        )
-    return variables
 
 
 async def get_smart_ems_config_cellular(device: str):
-    device_info = await SmartEMS.get_device_by_serial(device)
-    device_id = device_info["id"]
-    device_template = device_info["template"]["representation"]
-    enabled_flag = device_info["enabled"]
-    device_variables = extract_device_variables(device_info)
+    device_by_serial = await SmartEMS.get_device_by_serial(device)
+    device_info = DeviceInfo(device_by_serial)
 
-    cellular = False
+    device_info.check_eligibility()
 
-    # check enabled status
-    if not enabled_flag:
-        raise UnmatchedDependency("the device needs to be enabled in smart-ems for this function", status_code=400)
-
-    # check for supported template
-    if device_template not in LAN_EDGE_TEMPLATE_VERSIONS:
-        raise UnmatchedDependency(f"this function is only supported by devices using the <{LAN_EDGE_TEMPLATE_VERSIONS}>"
-                                  f" template. Currently <{device_template}> is in use", status_code=400)
+    interface = {}
 
     # check if device is capable of cellular
-    for device_var in device_variables:
-        if device_var["name"] == "cellular" and device_var["variableValue"] == "true":
-            cellular = True
-            break
-
-    resp = {
-        "cellular": cellular,
-        "interface": {}
-    }
+    cellular = device_info.get_variable_value("cellular", False) == "true"
 
     if cellular:
-        config = await SmartEMS.device_config_download(device_id)
-        network = config.get("network")
-        if network is None:
-            raise SEMSError(f"template <{device_template}> has invalid content "
-                            f"-> cannot find any network configuration",
-                            status_code=400)
-        for interface in network:
-            if "cellular" in interface:
-                resp["interface"].update(network[interface])
+        cellular_settings_raw = device_info.get_variable_value("cellular_settings")
+        try:
+            cellular_settings = json.loads(cellular_settings_raw)
+            interface = {
+                "apn": cellular_settings.get("apn", ""),
+                "pin": cellular_settings.get("pin", ""),
+                "access_number": cellular_settings.get("access_number", ""),
+                "auth_method": cellular_settings.get("auth_method", ""),
+                "username": cellular_settings.get("username", ""),
+                "password": cellular_settings.get("password", ""),
+                "state": cellular_settings.get("state", "off"),
+            }
+        except (TypeError, ValueError, AttributeError):
+            cellular = False
 
-    return resp
+    return {
+        "cellular": cellular,
+        "interface": interface,
+    }
+

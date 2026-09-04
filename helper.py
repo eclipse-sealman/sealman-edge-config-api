@@ -3,6 +3,7 @@ import ipaddress
 import os
 from typing import List
 import re
+from enum import Enum
 import aiofiles
 import logging
 from azure.identity import WorkloadIdentityCredential
@@ -95,8 +96,15 @@ class TemplateVariable:
         return {"name": self.name, "variableValue": self.value}
 
 
+class TemplateVariableType(str, Enum):
+    STRING = "string"
+    JSON_OBJECT = "jsonObject"
+    BOOLEAN = "boolean"
+    FLOAT = "float"
+    INTEGER = "integer"
+
 class TemplateVariables:
-    _template_variables: List[TemplateVariable]
+    _template_variables: List[dict]
 
     def __init__(self):
         self._template_variables = []
@@ -104,24 +112,33 @@ class TemplateVariables:
     def clear(self):
         self._template_variables.clear()
 
-    def add(self, name, value):
+    def add(self, name, value, variable_type: TemplateVariableType = TemplateVariableType.STRING):
         if isinstance(value, bool):
             value = str(value).lower()
         if value is None:
             value = "null"
-        self._template_variables.append(
-            {"name": str(name), "variableValue": str(value)})
+        variable = {"name": str(name), "variableValue": str(value)}
+        if variable_type != TemplateVariableType.STRING:
+            variable["type"] = variable_type.value
+        self._template_variables.append(variable)
 
     def add_variables(self, variables):
+        if not variables:
+            return
         for var in variables:
-            self.add(var.get("name"), var.get("variableValue"))
+            raw_type = var.get("type", TemplateVariableType.STRING)
+            if isinstance(raw_type, TemplateVariableType):
+                variable_type = raw_type
+            else:
+                try:
+                    variable_type = TemplateVariableType(str(raw_type))
+                except ValueError:
+                    variable_type = TemplateVariableType.STRING
+            self.add(var.get("name"), var.get("variableValue"), variable_type)
 
     def add_from_dict(self, variables_dict):
         for name in variables_dict:
             self.add(name, variables_dict[name])
-            
-    def convert_to_dict(self):
-        return {var["name"]: var["variableValue"] for var in self._template_variables}
 
     def get(self):
         return self._template_variables
@@ -134,7 +151,6 @@ class DeviceInfo:
         self._device_info = device_info
         self._device_variables = TemplateVariables()
         self._device_variables.add_variables(device_info.get("variables"))
-        self._device_variables_dict = self._device_variables.convert_to_dict()
 
     def is_sems_enabled(self) -> bool:
         return self._device_info["enabled"]
@@ -160,9 +176,32 @@ class DeviceInfo:
                 status_code=400
             )
 
-    def get_device_variables_dict(self):
-        return self._device_variables_dict
-    
+    def upsert_variable(self, name: str, value: str, variable_type: TemplateVariableType) -> None:
+        variables = self.get_device_variables()
+        for variable in variables:
+            if variable.get("name") == name:
+                variable["variableValue"] = value
+                variable["variableType"] = variable_type.value
+                return
+
+        variables.append(
+            {
+                "name": name,
+                "variableValue": value,
+                "variableType": variable_type.value,
+            }
+        )
+
+    def get_variable_value(self, name: str, default: str = "") -> str:
+        for variable in self.get_device_variables():
+            if variable.get("name") == name:
+                value = variable.get("variableValue")
+                return default if value is None else str(value)
+        return default
+
+    def get_device_variables(self):
+        return self._device_info.get("variables", [])
+
     def get(self):
         return self._device_info
 

@@ -3,6 +3,18 @@ from exceptions import UnmatchedDependency, SEMSError
 from constants import LAN_EDGE_TEMPLATE_VERSIONS
 
 
+def _normalize_network_value(value):
+    if isinstance(value, list):
+        if not value:
+            return None
+        value = value[0]
+
+    if value in ("", None):
+        return None
+
+    return value
+
+
 async def get_smart_ems_lan(device: str):
     # read current device info
     device_info = await SmartEMS.get_device_by_serial(device)
@@ -32,29 +44,10 @@ async def get_smart_ems_lan(device: str):
 
             dhcp = network[lan_interface]["dhcp"]
 
-            ip = network[lan_interface]["ip"]
-            if isinstance(ip, list):
-                ip = ip[0]
-            if ip == "":
-                ip = None
-
-            subnet = network[lan_interface]["subnet"]
-            if isinstance(subnet, list):
-                subnet = subnet[0]
-            if subnet == "":
-                subnet = None
-
-            gw = network[lan_interface]["gateway"]
-            if isinstance(gw, list):
-                gw = gw[0]
-            if gw == "":
-                gw = None
-
-            dns = network[lan_interface].get("dns")
-            if isinstance(dns, list):
-                dns = dns[0]
-            if dns == "":
-                dns = None
+            ip = _normalize_network_value(network[lan_interface].get("ip"))
+            subnet = _normalize_network_value(network[lan_interface].get("subnet"))
+            gw = _normalize_network_value(network[lan_interface].get("gateway"))
+            dns = _normalize_network_value(network[lan_interface].get("dns"))
 
             interface_config.update({lan_interface: {}})
 

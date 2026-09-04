@@ -11,7 +11,8 @@ def get_smart_ems_device_data(smart_ems_device: dict):
     for var_obj in smart_ems_device.get("variables"):
         variables.append({
             "toString": var_obj["representation"],
-            "variableValue": var_obj["variableValue"]
+            "variableType": var_obj["variableType"],
+            "variableValue": var_obj["variableValue"],
         })
 
     template_name = "not assigned"
