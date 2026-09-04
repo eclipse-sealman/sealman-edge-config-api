@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, Text, TIMESTAMP, func
+from sqlalchemy import Boolean, Column, ForeignKey, ForeignKeyConstraint, Text, TIMESTAMP, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from db.base import Base
@@ -9,19 +9,37 @@ from db.base import Base
 class Extension(Base):
     """A registered API extension (an external micro-service and/or IoT Edge
     module) contributed to the platform without touching the core API.
-
-    ``upstreams`` is a JSON map of upstream-key -> {type: "http"|"iotedge",
-    base_url|module_name: ...}, mirroring the extension-controller concept from
-    ec-api-postgres-example.
     """
 
     __tablename__ = "extensions"
 
     name = Column(Text, primary_key=True)
-    upstreams = Column(JSONB, nullable=False, default=dict)
     description = Column(Text, nullable=False, default="")
     internal_key_hash = Column(Text, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ExtensionUpstream(Base):
+    """A transport target bundled by an extension.
+
+    * ``http``    - a REST micro-service reached at ``base_url``.
+    * ``iotedge`` - an Azure IoT Edge module (``module_name``) reached through
+      the IoT Hub direct-method / module-twin REST API.
+    """
+
+    __tablename__ = "extension_upstreams"
+
+    extension_name = Column(Text, ForeignKey("extensions.name", ondelete="CASCADE"), primary_key=True)
+    key = Column(Text, primary_key=True)
+    type = Column(Text, nullable=False)  # http | iotedge
+    base_url = Column(Text, nullable=True)
+    module_name = Column(Text, nullable=True)
+    expected_version = Column(Text, nullable=True)
+    health_path = Column(Text, nullable=True)
+    version_field = Column(Text, nullable=True)
+    version_source = Column(Text, nullable=True)
+    twin_version_property = Column(Text, nullable=True)
+    health_method = Column(Text, nullable=True)
 
 
 class ExtensionRoute(Base):
@@ -31,10 +49,17 @@ class ExtensionRoute(Base):
     """
 
     __tablename__ = "extension_routes"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["extension_name", "upstream_name"],
+            ["extension_upstreams.extension_name", "extension_upstreams.key"],
+            ondelete="CASCADE",
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     extension_name = Column(Text, ForeignKey("extensions.name", ondelete="CASCADE"), nullable=False, index=True)
-    upstream = Column(Text, nullable=False)
+    upstream_name = Column(Text, nullable=False)
     path = Column(Text, nullable=False)
     method = Column(Text, nullable=False, default="GET")
 
@@ -57,6 +82,14 @@ class ExtensionRoute(Base):
 
     summary = Column(Text, nullable=True)
     description = Column(Text, nullable=True)
+
+    @property
+    def upstream(self) -> str:
+        return self.upstream_name
+
+    @upstream.setter
+    def upstream(self, value: str) -> None:
+        self.upstream_name = value
 
 
 class ExtensionAction(Base):
@@ -81,3 +114,4 @@ class ExtensionDeviceKey(Base):
     module_id = Column(Text, nullable=True)
     key_hash = Column(Text, nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+

@@ -344,7 +344,7 @@ def _runtime_from_dict(extension_name: str, r: dict) -> RouteRuntime:
         scoped=bool(r.get("scoped")),
         transport=r.get("transport") or "http",
         visibility=r.get("visibility") or "public",
-        upstream=r.get("upstream"),
+        upstream=r.get("upstream_name") or r.get("upstream"),
         base_url=r.get("base_url"),
         upstream_path=r.get("upstream_path"),
         module_name=r.get("module_name"),
@@ -378,7 +378,8 @@ def add_routes_from_specs(
     """Mount every route just registered for ``extension_name`` on the app
     matching its visibility, resolving the transport from ``upstreams``."""
     for r in routes:
-        up = upstreams.get(r["upstream"]) or {}
+        up_key = r.get("upstream_name") or r.get("upstream")
+        up = upstreams.get(up_key) or {}
         enriched = dict(r)
         enriched["transport"] = up.get("type", "http")
         enriched["base_url"] = up.get("base_url")

@@ -36,6 +36,39 @@ class UpstreamSpec(BaseModel):
         None, description="IoT Edge module id to address (required for type 'iotedge')."
     )
 
+    # --- health / version verification --------------------------------------
+    expected_version: Optional[str] = Field(
+        None,
+        description="Version requirement the deployed upstream must satisfy, as a "
+        "PEP 440 / semver-style specifier, e.g. '>=1.2.0,<2.0.0'.",
+    )
+    # http
+    health_path: Optional[str] = Field(
+        None, description="[http] Health endpoint path (default '/health')."
+    )
+    version_field: Optional[str] = Field(
+        None,
+        description="[http] Dotted field in the health response holding the "
+        "running version (default 'version').",
+    )
+    # iotedge
+    version_source: Optional[Literal["image_tag", "twin_reported"]] = Field(
+        None,
+        description="[iotedge] Where to read the deployed version: from the "
+        "container image tag reported by $edgeAgent ('image_tag', default) or "
+        "from a module-twin reported property ('twin_reported').",
+    )
+    twin_version_property: Optional[str] = Field(
+        None,
+        description="[iotedge] Reported-property name holding the version when "
+        "version_source='twin_reported' (default 'version').",
+    )
+    health_method: Optional[str] = Field(
+        None,
+        description="[iotedge] Optional direct-method name used as a liveness "
+        "probe during a health check.",
+    )
+
 
 class QueryParamSpec(BaseModel):
     """A query parameter that should be documented (and validated) on a route."""
@@ -145,9 +178,22 @@ class RouteSpec(BaseModel):
         description="Declared request body as a JSON Schema object. When set, "
         "/docs shows the schema and the incoming body is validated against it.",
     )
+    body_schema_ref: Optional[str] = Field(
+        None,
+        description="Path to a JSON Schema file relative to schema directory. "
+        "Mutually exclusive with 'body'.",
+    )
 
     summary: Optional[str] = None
     description: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check_body_ref_exclusive(self) -> "RouteSpec":
+        if self.body is not None and self.body_schema_ref:
+            raise ValueError(
+                "RouteSpec: 'body' and 'body_schema_ref' are mutually exclusive"
+            )
+        return self
 
 
 class ExtensionRegistration(BaseModel):

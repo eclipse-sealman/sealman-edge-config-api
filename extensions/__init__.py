@@ -9,6 +9,18 @@ routes exposed through this API on three channels -
 See ``extensions.registry`` for registration/validation business logic and
 ``extensions.runtime`` for how a persisted route becomes a live FastAPI route.
 """
+from . import health, openapi, proxy, registry, runtime, schemas, security
 from .setup import hydrate_all_routes, setup_extensions, start_side_servers
 
-__all__ = ["setup_extensions", "hydrate_all_routes", "start_side_servers"]
+__all__ = [
+    "setup_extensions",
+    "hydrate_all_routes",
+    "start_side_servers",
+    "health",
+    "openapi",
+    "proxy",
+    "registry",
+    "runtime",
+    "schemas",
+    "security",
+]

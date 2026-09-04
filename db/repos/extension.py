@@ -29,6 +29,15 @@ class ExtensionRepository(ABC):
     async def delete_extension(self, name: str) -> bool:
         pass
 
+    # --- upstreams -----------------------------------------------------
+    @abstractmethod
+    async def list_upstreams(self, extension_name: str) -> List[dict[str, Any]]:
+        pass
+
+    @abstractmethod
+    async def get_upstream(self, extension_name: str, key: str) -> Optional[dict[str, Any]]:
+        pass
+
     # --- routes ----------------------------------------------------------
     @abstractmethod
     async def add_route(self, extension_name: str, route: dict[str, Any]) -> None:

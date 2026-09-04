@@ -7,7 +7,9 @@ Route dispatch/mounting lives in :mod:`extensions.runtime`; this module only
 owns persistence + validation, mirroring how ``db/repos`` + router modules are
 layered elsewhere in this codebase.
 """
+import json
 import re
+from pathlib import Path
 from typing import Any, Optional
 
 import jsonschema
@@ -20,6 +22,46 @@ from .schemas import ExtensionRegistration
 from .security import generate_key, hash_key, keys_match
 
 _PATH_PARAM_RE = re.compile(r"{([^}]+)}")
+
+SCHEMA_REF_BASE_DIR = (
+    Path(__file__).resolve().parent.parent / "extension_services"
+).resolve()
+
+
+def resolve_body_schema_ref(ref: str, route_desc: str) -> dict:
+    """Load a JSON Schema file referenced by RouteSpec.body_schema_ref.
+
+    ref is a relative path inside extension_services/. Absolute paths and ..
+    segments are rejected.
+    """
+    ref_path = Path(ref)
+    if ref_path.is_absolute() or ".." in ref_path.parts:
+        raise ValueError(
+            f"Route '{route_desc}' body_schema_ref '{ref}' must be a relative "
+            "path inside 'extension_services/' (no absolute paths, no '..')"
+        )
+    path = (SCHEMA_REF_BASE_DIR / ref_path).resolve()
+    try:
+        path.relative_to(SCHEMA_REF_BASE_DIR)
+    except ValueError:
+        raise ValueError(
+            f"Route '{route_desc}' body_schema_ref '{ref}' escapes 'extension_services/'"
+        )
+    if not path.is_file():
+        raise ValueError(
+            f"Route '{route_desc}' body_schema_ref '{ref}' does not exist (looked for '{path}')"
+        )
+    try:
+        schema = json.loads(path.read_text())
+    except json.JSONDecodeError as ex:
+        raise ValueError(
+            f"Route '{route_desc}' body_schema_ref '{ref}' is not valid JSON: {ex}"
+        )
+    if not isinstance(schema, dict):
+        raise ValueError(
+            f"Route '{route_desc}' body_schema_ref '{ref}' must contain a JSON Schema object"
+        )
+    return schema
 
 
 async def register_extension(
@@ -46,7 +88,7 @@ async def register_extension(
         if up.type == "iotedge" and not up.module_name:
             raise ValueError(f"Upstream '{key}' is type 'iotedge' but has no 'module_name'")
 
-    resolved: list[tuple[Any, str]] = []
+    resolved: list[tuple[Any, str, Optional[dict]]] = []
     for r in payload.routes:
         up = payload.upstreams.get(r.upstream)
         if up is None:
@@ -77,12 +119,16 @@ async def register_extension(
                 "(edge module -> micro-service)"
             )
 
+        body = r.body
+        if r.body_schema_ref:
+            body = resolve_body_schema_ref(r.body_schema_ref, f"{method} {r.path}")
+
         if transport == "http":
             if not r.upstream_path:
                 raise ValueError(f"http route '{method} {r.path}' requires 'upstream_path'")
             if r.iotedge:
                 raise ValueError(f"http route '{method} {r.path}' must not set 'iotedge'")
-            if r.body and method in ("GET", "DELETE"):
+            if body and method in ("GET", "DELETE"):
                 raise ValueError(
                     f"Route '{method} {r.path}' declares a body but '{method}' requests carry none"
                 )
@@ -93,17 +139,17 @@ async def register_extension(
                     "(operation + method_name for 'direct_method')"
                 )
 
-        if r.body is not None:
-            if not isinstance(r.body, dict):
+        if body is not None:
+            if not isinstance(body, dict):
                 raise ValueError(f"Route '{method} {r.path}' body must be a JSON Schema object")
             try:
-                jsonschema.Draft202012Validator.check_schema(r.body)
+                jsonschema.Draft202012Validator.check_schema(body)
             except jsonschema.SchemaError as ex:
                 raise ValueError(
                     f"Route '{method} {r.path}' has an invalid body JSON Schema: {ex.message}"
                 )
 
-        resolved.append((r, method))
+        resolved.append((r, method, body))
 
     has_internal = any(r.visibility == "internal" for r in payload.routes)
     internal_key = generate_key() if has_internal else None
@@ -128,9 +174,10 @@ async def register_extension(
                 await role_repo.add_actions_to_role(role["id"], new_actions)
 
     added_routes = []
-    for r, method in resolved:
+    for r, method, body in resolved:
         route_dict = {
             "upstream": r.upstream,
+            "upstream_name": r.upstream,
             "path": r.path,
             "method": method,
             "upstream_path": r.upstream_path,
@@ -142,7 +189,7 @@ async def register_extension(
             "scope_param": r.scope_param,
             "scope_in": r.scope_in,
             "query_params": [q.model_dump() for q in r.query_params],
-            "body": r.body,
+            "body": body,
             "summary": r.summary,
             "description": r.description,
         }

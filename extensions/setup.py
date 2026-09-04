@@ -13,6 +13,7 @@ complexity of a second threading model.
 """
 import asyncio
 import logging
+from typing import Optional
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
@@ -33,7 +34,7 @@ from db.repos.role import RoleRepository
 from db.session import get_repository
 from exceptions import APIError
 
-from . import registry, runtime
+from . import health, registry, runtime
 from .schemas import DeviceKeyRequest, ExtensionRegistration
 
 logger = logging.getLogger("EdgeConfigAPI")
@@ -102,6 +103,15 @@ def _build_management_router(public_app: FastAPI, internal_app: FastAPI, field_a
             raise HTTPException(status_code=404, detail=f"Extension '{name}' not found")
         ext["routes"] = await extension_repo.list_routes(name)
         return ext
+
+    @router.get("/{name}/health", dependencies=[manage])
+    async def get_extension_health(
+        name: str,
+        device_id: Optional[str] = None,
+        extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
+    ):
+        """Aggregate health/version status of the extension's upstreams."""
+        return await health.extension_health(extension_repo, name, device_id)
 
     @router.post("", status_code=201, dependencies=[manage])
     async def register_extension(

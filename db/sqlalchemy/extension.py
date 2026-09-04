@@ -5,20 +5,41 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.action import Action
-from db.models.extension import Extension, ExtensionAction, ExtensionDeviceKey, ExtensionRoute
+from db.models.extension import (
+    Extension,
+    ExtensionAction,
+    ExtensionDeviceKey,
+    ExtensionRoute,
+    ExtensionUpstream,
+)
 from db.registry import register_repository
 from db.repos.extension import ExtensionRepository
 
 
 class ExtensionMapper:
     @staticmethod
-    def extension_to_dict(ext: Extension) -> dict[str, Any]:
+    def extension_to_dict(ext: Extension, upstreams: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         return {
             "name": ext.name,
-            "upstreams": ext.upstreams or {},
+            "upstreams": upstreams or {},
             "description": ext.description or "",
             "internal_key_hash": ext.internal_key_hash,
             "created_at": str(ext.created_at) if ext.created_at else None,
+        }
+
+    @staticmethod
+    def upstream_to_dict(up: ExtensionUpstream) -> dict[str, Any]:
+        return {
+            "key": up.key,
+            "type": up.type,
+            "base_url": up.base_url,
+            "module_name": up.module_name,
+            "expected_version": up.expected_version,
+            "health_path": up.health_path,
+            "version_field": up.version_field,
+            "version_source": up.version_source,
+            "twin_version_property": up.twin_version_property,
+            "health_method": up.health_method,
         }
 
     @staticmethod
@@ -26,7 +47,8 @@ class ExtensionMapper:
         return {
             "id": str(route.id),
             "extension_name": route.extension_name,
-            "upstream": route.upstream,
+            "upstream": route.upstream_name,
+            "upstream_name": route.upstream_name,
             "path": route.path,
             "method": route.method,
             "upstream_path": route.upstream_path,
@@ -51,13 +73,35 @@ class SqlAlchemyExtensionRepository(ExtensionRepository):
 
     # --- extensions ------------------------------------------------------
     async def list_extensions(self) -> List[dict[str, Any]]:
-        result = await self._session.execute(select(Extension).order_by(Extension.name))
-        return [ExtensionMapper.extension_to_dict(e) for e in result.scalars().all()]
+        ext_result = await self._session.execute(select(Extension).order_by(Extension.name))
+        extensions = ext_result.scalars().all()
+        if not extensions:
+            return []
+
+        ups_result = await self._session.execute(select(ExtensionUpstream))
+        ups_by_ext: dict[str, dict[str, Any]] = {}
+        for up in ups_result.scalars().all():
+            ups_by_ext.setdefault(up.extension_name, {})[up.key] = ExtensionMapper.upstream_to_dict(up)
+
+        return [
+            ExtensionMapper.extension_to_dict(e, ups_by_ext.get(e.name, {}))
+            for e in extensions
+        ]
 
     async def get_extension(self, name: str) -> Optional[dict[str, Any]]:
         result = await self._session.execute(select(Extension).where(Extension.name == name))
         ext = result.scalar_one_or_none()
-        return ExtensionMapper.extension_to_dict(ext) if ext else None
+        if not ext:
+            return None
+
+        ups_result = await self._session.execute(
+            select(ExtensionUpstream).where(ExtensionUpstream.extension_name == name)
+        )
+        upstreams = {
+            up.key: ExtensionMapper.upstream_to_dict(up)
+            for up in ups_result.scalars().all()
+        }
+        return ExtensionMapper.extension_to_dict(ext, upstreams)
 
     async def create_extension(
         self, name: str, upstreams: dict, description: str, internal_key_hash: Optional[str]
@@ -67,23 +111,63 @@ class SqlAlchemyExtensionRepository(ExtensionRepository):
             raise ValueError(f"Extension '{name}' is already registered")
 
         ext = Extension(
-            name=name, upstreams=upstreams, description=description, internal_key_hash=internal_key_hash
+            name=name, description=description, internal_key_hash=internal_key_hash
         )
         self._session.add(ext)
+
+        ups_dict = {}
+        for key, u in upstreams.items():
+            u_data = u if isinstance(u, dict) else u.model_dump()
+            up_obj = ExtensionUpstream(
+                extension_name=name,
+                key=key,
+                type=u_data.get("type", "http"),
+                base_url=u_data.get("base_url"),
+                module_name=u_data.get("module_name"),
+                expected_version=u_data.get("expected_version"),
+                health_path=u_data.get("health_path"),
+                version_field=u_data.get("version_field"),
+                version_source=u_data.get("version_source"),
+                twin_version_property=u_data.get("twin_version_property"),
+                health_method=u_data.get("health_method"),
+            )
+            self._session.add(up_obj)
+            ups_dict[key] = ExtensionMapper.upstream_to_dict(up_obj)
+
         await self._session.commit()
-        return ExtensionMapper.extension_to_dict(ext)
+        return ExtensionMapper.extension_to_dict(ext, ups_dict)
 
     async def delete_extension(self, name: str) -> bool:
         result = await self._session.execute(delete(Extension).where(Extension.name == name))
         await self._session.commit()
         return result.rowcount > 0
 
+    # --- upstreams ---------------------------------------------------------
+    async def list_upstreams(self, extension_name: str) -> List[dict[str, Any]]:
+        result = await self._session.execute(
+            select(ExtensionUpstream)
+            .where(ExtensionUpstream.extension_name == extension_name)
+            .order_by(ExtensionUpstream.key)
+        )
+        return [ExtensionMapper.upstream_to_dict(u) for u in result.scalars().all()]
+
+    async def get_upstream(self, extension_name: str, key: str) -> Optional[dict[str, Any]]:
+        result = await self._session.execute(
+            select(ExtensionUpstream).where(
+                ExtensionUpstream.extension_name == extension_name,
+                ExtensionUpstream.key == key,
+            )
+        )
+        up = result.scalar_one_or_none()
+        return ExtensionMapper.upstream_to_dict(up) if up else None
+
     # --- routes ------------------------------------------------------------
     async def add_route(self, extension_name: str, route: dict[str, Any]) -> None:
+        upstream_name = route.get("upstream_name") or route.get("upstream")
         self._session.add(
             ExtensionRoute(
                 extension_name=extension_name,
-                upstream=route["upstream"],
+                upstream_name=upstream_name,
                 path=route["path"],
                 method=route["method"],
                 upstream_path=route.get("upstream_path"),
@@ -95,7 +179,7 @@ class SqlAlchemyExtensionRepository(ExtensionRepository):
                 scope_param=route.get("scope_param") or "device_id",
                 scope_in=route.get("scope_in") or "query",
                 query_params=route.get("query_params") or [],
-                body_schema=route.get("body"),
+                body_schema=route.get("body") if "body" in route else route.get("body_schema"),
                 summary=route.get("summary"),
                 description=route.get("description"),
             )
@@ -112,17 +196,31 @@ class SqlAlchemyExtensionRepository(ExtensionRepository):
 
     async def all_routes(self) -> List[dict[str, Any]]:
         result = await self._session.execute(
-            select(ExtensionRoute, Extension.upstreams)
-            .join(Extension, Extension.name == ExtensionRoute.extension_name)
+            select(ExtensionRoute, ExtensionUpstream)
+            .outerjoin(
+                ExtensionUpstream,
+                (ExtensionUpstream.extension_name == ExtensionRoute.extension_name)
+                & (ExtensionUpstream.key == ExtensionRoute.upstream_name),
+            )
             .order_by(ExtensionRoute.extension_name, ExtensionRoute.path)
         )
         routes = []
-        for route, upstreams in result.all():
+        for route, upstream in result.all():
             data = ExtensionMapper.route_to_dict(route)
-            up = (upstreams or {}).get(route.upstream) or {}
-            data["transport"] = up.get("type", "http")
-            data["base_url"] = up.get("base_url")
-            data["module_name"] = up.get("module_name")
+            if upstream:
+                data["transport"] = upstream.type
+                data["base_url"] = upstream.base_url
+                data["module_name"] = upstream.module_name
+                data["expected_version"] = upstream.expected_version
+                data["health_path"] = upstream.health_path
+                data["version_field"] = upstream.version_field
+                data["version_source"] = upstream.version_source
+                data["twin_version_property"] = upstream.twin_version_property
+                data["health_method"] = upstream.health_method
+            else:
+                data["transport"] = "http"
+                data["base_url"] = None
+                data["module_name"] = None
             routes.append(data)
         return routes
 
