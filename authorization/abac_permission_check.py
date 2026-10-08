@@ -108,9 +108,10 @@ def evaluate_permission(
 
 
 class ABACPermissionCheck:
-    def __init__(self, permission: str, device_path: str = "device"):
+    def __init__(self, permission: str, device_path: str = "device", device_in: str = "path"):
         self.permission = permission
         self.device_path = device_path
+        self.device_in = device_in
 
     async def __call__(
         self,
@@ -119,7 +120,12 @@ class ABACPermissionCheck:
         user_repo: UserRepository = Depends(get_repository(UserRepository)),
         device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
     ) -> ABACPermissionCheckResult:
-        device_id = request.path_params.get(self.device_path) if self.device_path else None
+        device_id = None
+        if self.device_path:
+            if self.device_in == "query":
+                device_id = request.query_params.get(self.device_path)
+            else:
+                device_id = request.path_params.get(self.device_path)
         user_id = auth_context.get("oid") or auth_context.get("sub")
         user_name = get_current_user(auth_context)
 

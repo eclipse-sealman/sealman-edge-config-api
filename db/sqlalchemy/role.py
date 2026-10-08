@@ -10,6 +10,7 @@ from db.models.role import Role, role_actions
 from db.models.team import Team, team_assigned_roles
 from db.registry import register_repository
 from db.repos.role import RoleRepository
+from db.transaction import commit_session
 
 
 class RoleMapper:
@@ -173,7 +174,7 @@ class SqlAlchemyRoleRepository(RoleRepository):
                 role_actions.c.action_name == action_name,
             )
         )
-        await self._session.commit()
+        await commit_session(self._session)
 
         refreshed_role = await self._fetch_role(role_id)
         if refreshed_role is None:

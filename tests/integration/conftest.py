@@ -38,7 +38,6 @@ import warnings
 
 import httpx
 import pytest
-from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from testcontainers.postgres import PostgresContainer
@@ -126,24 +125,19 @@ async def db_session(
     Yield an AsyncSession whose outer connection transaction is rolled back
     after the test, restoring the DB to a clean state.
 
-    A SAVEPOINT is kept alive at all times so repository-level commits only
-    release savepoints (they never commit the outer transaction).
+    ``join_transaction_mode="create_savepoint"`` makes repository-level commits
+    release session-owned savepoints without committing the outer transaction.
     """
     engine = create_async_engine(postgres_container, poolclass=NullPool)
 
     conn = await engine.connect()
     outer = await conn.begin()  # outer transaction – rolled back on teardown
 
-    session = AsyncSession(bind=conn, expire_on_commit=False)
-    await session.begin_nested()  # initial SAVEPOINT
-
-    @event.listens_for(session.sync_session, "after_transaction_end")
-    def _restart_savepoint(sess, transaction):
-        # After a SAVEPOINT is released (by session.commit()) or rolled back,
-        # re-open a new one so the *next* commit also hits a savepoint rather
-        # than the outer transaction.
-        if transaction.nested and not transaction._parent.nested:
-            sess.begin_nested()
+    session = AsyncSession(
+        bind=conn,
+        expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
+    )
 
     try:
         yield session
