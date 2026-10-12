@@ -10,12 +10,13 @@ from db.models.action import Action
 from db.models.extension import (
     Extension,
     ExtensionAction,
+    ExtensionModuleSchema,
     ExtensionRoute,
     ExtensionUpstream,
 )
 from db.models.role import role_actions
 from db.registry import register_repository
-from db.repos.extension import ExtensionActionConflictError, ExtensionRepository
+from db.repos.extension import ExtensionActionConflictError, ExtensionModuleConflictError, ExtensionRepository
 from db.transaction import atomic_session, commit_session, release_read_transaction
 
 
@@ -57,6 +58,19 @@ class ExtensionMapper:
         return result
 
     @staticmethod
+    def module_schema_to_dict(row: ExtensionModuleSchema) -> Dict[str, Any]:
+        return {
+            "id": str(row.id),
+            "module_id": row.module_id,
+            "purpose": row.purpose,
+            "upstream": row.upstream,
+            "schema_ref": row.schema_ref,
+            "schema": row.schema,
+            "version": row.version,
+            "resolved_at": row.resolved_at,
+        }
+
+    @staticmethod
     def route_to_dict(route: ExtensionRoute, upstream_key: str) -> Dict[str, Any]:
         return {
             "id": str(route.id),
@@ -74,6 +88,8 @@ class ExtensionMapper:
             "example": route.example,
             "validation_mode": route.validation_mode,
             "body_ref": bool(route.body_ref),
+            "response_ref": bool(route.response_ref),
+            "response_schema": route.response_schema,
             "required_action": route.required_action,
             "scoped": bool(route.scoped),
             "scope_param": route.scope_param,
@@ -214,6 +230,8 @@ class SqlAlchemyExtensionRepository(ExtensionRepository):
                     example=route.get("example"),
                     validation_mode=route.get("validation_mode"),
                     body_ref=bool(route.get("body_ref")),
+                    response_ref=bool(route.get("response_ref")),
+                    response_schema=route.get("response_schema"),
                     required_action=route.get("required_action"),
                     scoped=bool(route.get("scoped")),
                     scope_param=route.get("scope_param") or "device_id",
@@ -254,6 +272,61 @@ class SqlAlchemyExtensionRepository(ExtensionRepository):
         route.validation_mode = validation_mode
         route.body = body
         await commit_session(self._session)
+
+    async def update_route_response_schema(self, route_id: str, response_schema: Optional[Dict[str, Any]]) -> None:
+        result = await self._session.execute(select(ExtensionRoute).where(ExtensionRoute.id == route_id))
+        route = result.scalar_one_or_none()
+        if route is None:
+            return
+        route.response_schema = response_schema
+        await commit_session(self._session)
+
+    # --- module schemas ----------------------------------------------------
+    async def list_module_schemas(self, name: str) -> List[Dict[str, Any]]:
+        extension_id = await self._get_extension_id(name)
+        if extension_id is None:
+            return []
+        result = await self._session.execute(
+            select(ExtensionModuleSchema)
+            .where(ExtensionModuleSchema.extension_id == extension_id)
+            .order_by(ExtensionModuleSchema.module_id, ExtensionModuleSchema.purpose)
+        )
+        return [ExtensionMapper.module_schema_to_dict(row) for row in result.scalars().all()]
+
+    async def replace_module_schemas(self, name: str, rows: List[Dict[str, Any]]) -> None:
+        extension_id = await self._get_extension_id(name)
+        if extension_id is None:
+            raise ValueError(f"Extension '{name}' does not exist")
+
+        await self._session.execute(
+            delete(ExtensionModuleSchema).where(ExtensionModuleSchema.extension_id == extension_id)
+        )
+        for row in rows:
+            self._session.add(
+                ExtensionModuleSchema(
+                    extension_id=extension_id,
+                    module_id=row["module_id"],
+                    purpose=row["purpose"],
+                    upstream=row["upstream"],
+                    schema_ref=row["schema_ref"],
+                    schema=row["schema"],
+                    version=row["version"],
+                    resolved_at=row["resolved_at"],
+                )
+            )
+        try:
+            await commit_session(self._session)
+        except IntegrityError as exc:
+            raise ExtensionModuleConflictError("One or more module IDs are already claimed by another extension") from exc
+
+    async def get_module_schema_owner(self, module_id: str) -> Optional[str]:
+        result = await self._session.execute(
+            select(Extension.name)
+            .join(ExtensionModuleSchema, ExtensionModuleSchema.extension_id == Extension.id)
+            .where(ExtensionModuleSchema.module_id == module_id)
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def record_upstream_health(
         self, upstream_id: str, status: str, detail: Optional[str], checked_at: datetime

@@ -2,7 +2,7 @@
 
 Input validation shapes only. Field-level cross-references (e.g. a route's `upstream` key 
 must exist in `upstreams`, `iotedge` must be present iff the referenced upstream is `type: "iotedge"`,
-`body_ref` requiring an `http` upstream) are manifest-wide business rules validated by
+`body_ref`/`response_ref` requiring an `http` upstream) are manifest-wide business rules validated by
 registry.py, not enforced here.
 """
 
@@ -154,6 +154,9 @@ class RouteSpec(ManifestModel):
     # `{base_url}/openapi.json` instead of being declared here (`upstream_declared` /
     # `unreachable_ref` validation_mode, see `RouteDetail`).
     body_ref: bool = False
+    # If true, the response schema for `status_code` is fetched from the upstream's OpenAPI
+    # document and published in this API's OpenAPI (documentation only, never validated).
+    response_ref: bool = False
     visibility: Literal["public", "internal"] = "public"
     required_action: Optional[str] = None
     scoped: bool = False
@@ -187,6 +190,15 @@ class RouteSpec(ManifestModel):
         return value
 
 
+class ModuleSchemaSpec(ManifestModel):
+    """Module configuration and optional reported-response contracts, each a local
+    `#/components/schemas/...` reference in the OpenAPI document of `upstream`."""
+
+    upstream: str
+    schema_ref: str
+    reported_schema_ref: Optional[str] = None
+
+
 class ExtensionRegistration(ManifestModel):
     # Required, no default: a missing or unrecognized value (anything but the literal
     # `1`) is rejected outright, mirroring $edgeAgent's own
@@ -198,6 +210,8 @@ class ExtensionRegistration(ManifestModel):
     upstreams: Dict[str, UpstreamSpec]
     actions: List[ActionSpec] = Field(default_factory=list)
     routes: List[RouteSpec]
+    # Keyed by exact IoT Hub module ID. Optional, so manifests without it keep working.
+    module_schemas: Dict[str, ModuleSchemaSpec] = Field(default_factory=dict)
 
 
 class RouteDetail(RouteSpec):

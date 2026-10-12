@@ -395,3 +395,78 @@ async def test_dispatch_filters_response_headers_and_preserves_repeats(monkeypat
     assert response.headers.getlist("vary") == ["Accept-Encoding", "Origin"]
     for denied in ("etag", "connection", "set-cookie", "server", "date", "x-custom"):
         assert denied not in response.headers
+
+
+def _openapi_with_components(schemas: dict) -> dict:
+    return {"openapi": "3.1.0", "paths": {}, "components": {"schemas": schemas}}
+
+
+def test_self_contained_schema_embeds_nested_closure_once_and_keeps_recursion():
+    document = _openapi_with_components(
+        {
+            "Root": {
+                "type": "object",
+                "properties": {"child": {"$ref": "#/components/schemas/Child"}, "self": {"$ref": "#/components/schemas/Root"}},
+            },
+            "Child": {"type": "object", "properties": {"leaf": {"$ref": "#/components/schemas/Leaf"}}},
+            "Leaf": {"type": "string"},
+            "Unrelated": {"type": "integer"},
+        }
+    )
+
+    resolved = http_upstream.self_contained_schema(document, {"$ref": "#/components/schemas/Root"})
+
+    assert resolved["$ref"] == "#/components/schemas/Root"
+    assert set(resolved["components"]["schemas"]) == {"Root", "Child", "Leaf"}
+    assert resolved["components"]["schemas"]["Root"] == document["components"]["schemas"]["Root"]
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "https://elsewhere.example/schema.json#/Thing",
+        "#/components/parameters/Thing",
+        "#/$defs/Thing",
+        "#/components/schemas/Missing",
+        "#/components/schemas/Child/properties/leaf",
+    ],
+)
+def test_self_contained_schema_rejects_external_and_unresolved_references(ref):
+    document = _openapi_with_components(
+        {"Root": {"type": "object", "properties": {"bad": {"$ref": ref}}}, "Child": {"type": "string"}}
+    )
+
+    with pytest.raises(http_upstream.SchemaResolutionError):
+        http_upstream.self_contained_schema(document, {"$ref": "#/components/schemas/Root"})
+
+
+def test_self_contained_schema_rejects_a_missing_root_component():
+    with pytest.raises(http_upstream.SchemaResolutionError, match="Unresolved component 'Nope'"):
+        http_upstream.self_contained_schema(_openapi_with_components({}), {"$ref": "#/components/schemas/Nope"})
+
+
+def test_self_contained_schema_of_inline_root_without_references_adds_no_components():
+    assert http_upstream.self_contained_schema({}, {"type": "object"}) == {"type": "object"}
+
+
+def test_response_schema_from_document_resolves_status_code_response():
+    document = {
+        "paths": {
+            "/items": {
+                "get": {
+                    "responses": {
+                        "200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Items"}}}},
+                        "404": {"description": "missing"},
+                    }
+                }
+            }
+        },
+        "components": {"schemas": {"Items": {"type": "array", "items": {"$ref": "#/components/schemas/Item"}}, "Item": {"type": "string"}}},
+    }
+
+    schema = http_upstream.response_schema_from_document(document, "/items", "GET", 200)
+
+    assert schema["$ref"] == "#/components/schemas/Items"
+    assert set(schema["components"]["schemas"]) == {"Items", "Item"}
+    assert http_upstream.response_schema_from_document(document, "/items", "GET", 404) is None
+    assert http_upstream.response_schema_from_document(None, "/items", "GET", 200) is None

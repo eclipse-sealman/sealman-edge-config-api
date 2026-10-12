@@ -6,7 +6,7 @@ business rules (RBAC enrollment, key issuance, lifecycle) in extensions/registry
 
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, Text, TIMESTAMP, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, Column, ForeignKey, Integer, Text, TIMESTAMP, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from db.base import Base
@@ -89,6 +89,8 @@ class ExtensionRoute(Base):
     example = Column(JSONB, nullable=True)
     validation_mode = Column(Text, nullable=True)  # declared | upstream_declared | unreachable_ref | none
     body_ref = Column(Boolean, nullable=False, default=False)  # True: body is fetched from the upstream's own OpenAPI doc, not authored here
+    response_ref = Column(Boolean, nullable=False, default=False)  # True: response schema is fetched from the upstream's OpenAPI doc (documentation only)
+    response_schema = Column(JSONB, nullable=True)  # self-contained snapshot of the response schema when response_ref is set
 
     required_action = Column(Text, ForeignKey("actions.name"), nullable=True)
     scoped = Column(Boolean, nullable=False, default=False)
@@ -114,3 +116,26 @@ class ExtensionAction(Base):
 
     action_name = Column(Text, ForeignKey("actions.name", ondelete="CASCADE"), primary_key=True)
     extension_id = Column(UUID(as_uuid=True), ForeignKey("extensions.id", ondelete="CASCADE"), primary_key=True)
+
+
+class ExtensionModuleSchema(Base):
+    """One resolved module schema snapshot: the configuration or reported-response
+    contract of an exact IoT Hub module ID. `schema` is self-contained (see
+    extensions/upstreams/http.py::self_contained_schema). Module IDs are unique per
+    purpose across all extensions, so a second claim cannot be persisted."""
+
+    __tablename__ = "extension_module_schemas"
+    __table_args__ = (
+        UniqueConstraint("module_id", "purpose", name="uq_extension_module_schemas_module_purpose"),
+        CheckConstraint("purpose IN ('configuration', 'reported')", name="ck_extension_module_schemas_purpose"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    extension_id = Column(UUID(as_uuid=True), ForeignKey("extensions.id", ondelete="CASCADE"), nullable=False, index=True)
+    module_id = Column(Text, nullable=False)
+    purpose = Column(Text, nullable=False)  # configuration | reported
+    upstream = Column(Text, nullable=False)  # manifest key of the http upstream the schema was resolved from
+    schema_ref = Column(Text, nullable=False)  # local component reference, e.g. #/components/schemas/Name
+    schema = Column(JSONB, nullable=False)
+    version = Column(Text, nullable=False)  # SHA-256 of the snapshot plus resolved_at
+    resolved_at = Column(TIMESTAMP(timezone=True), nullable=False)

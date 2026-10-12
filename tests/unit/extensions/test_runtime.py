@@ -96,3 +96,40 @@ async def test_internal_key_dependency_authenticates_and_audits(monkeypatch, key
 
     assert logged and logged[0][0] == expected_user
     assert "internal GET /widgets/x" in logged[0][1]
+
+
+def test_response_schema_is_documented_with_resolvable_hoisted_components():
+    public, internal = FastAPI(), FastAPI()
+    runtime.install_openapi_components(public)
+    response_schema = {
+        "$ref": "#/components/schemas/Items",
+        "components": {
+            "schemas": {
+                "Items": {"type": "array", "items": {"$ref": "#/components/schemas/Item"}},
+                "Item": {"type": "object", "properties": {"parent": {"$ref": "#/components/schemas/Items"}}},
+            }
+        },
+    }
+    _mount(public, internal, "widgets", [_route("0f1e2d3c-4b5a-4968-8778-6a5b4c3d2e1f", "/w", response_schema=response_schema)])
+
+    openapi = public.openapi()
+
+    schema = openapi["paths"]["/w"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    prefix = "ext_0f1e2d3c4b5a496887786a5b4c3d2e1f_"
+    assert schema == {"$ref": f"#/components/schemas/{prefix}Items"}
+    hoisted = openapi["components"]["schemas"]
+    assert set(hoisted) >= {f"{prefix}Items", f"{prefix}Item"}
+    assert hoisted[f"{prefix}Item"]["properties"]["parent"] == {"$ref": f"#/components/schemas/{prefix}Items"}
+    assert hoisted[f"{prefix}Items"]["items"] == {"$ref": f"#/components/schemas/{prefix}Item"}
+
+
+def test_unmounting_a_response_route_removes_its_components_from_openapi():
+    public, internal = FastAPI(), FastAPI()
+    runtime.install_openapi_components(public)
+    response_schema = {"$ref": "#/components/schemas/A", "components": {"schemas": {"A": {"type": "string"}}}}
+    _mount(public, internal, "widgets", [_route("r1", "/w", response_schema=response_schema)])
+    assert any(name.endswith("_A") for name in public.openapi()["components"]["schemas"])
+
+    runtime.publish_routes(public, internal, "widgets", None)
+
+    assert not [name for name in public.openapi().get("components", {}).get("schemas", {}) if name.endswith("_A")]

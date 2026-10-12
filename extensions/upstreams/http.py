@@ -222,3 +222,71 @@ def body_schema_from_document(document: Optional[dict], upstream_path: str, meth
         logger.info(f"OpenAPI document declares no JSON body for {method} {upstream_path}: {exc}")
         return None
 
+
+class SchemaResolutionError(ValueError):
+    """A schema references something other than a resolvable local component."""
+
+
+COMPONENT_REF_PREFIX = "#/components/schemas/"
+
+
+def component_name(ref: Any) -> str:
+    """The component name of a local `#/components/schemas/...` reference, JSON-pointer unescaped."""
+    if not isinstance(ref, str) or not ref.startswith(COMPONENT_REF_PREFIX):
+        raise SchemaResolutionError(f"Unsupported reference {ref!r}: only local '{COMPONENT_REF_PREFIX}' references resolve")
+    name = ref[len(COMPONENT_REF_PREFIX):].replace("~1", "/").replace("~0", "~")
+    if not name or "/" in name:
+        raise SchemaResolutionError(f"Unsupported reference {ref!r}: component names must not contain '/'")
+    return name
+
+
+def self_contained_schema(document: dict, root: dict) -> dict:
+    """Returns `root` plus the transitive closure of the local components it references,
+    as one self-contained JSON Schema document. Each component is embedded once under
+    `components.schemas`, so recursive models still resolve (`body_validation` never
+    fetches remote refs). Raises SchemaResolutionError for external, non-component or
+    unresolved references."""
+    components = document.get("components")
+    schemas = components.get("schemas") if isinstance(components, dict) else None
+    schemas = schemas if isinstance(schemas, dict) else {}
+
+    closure: Dict[str, Any] = {}
+    pending: List[Any] = [root]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, list):
+            pending.extend(node)
+        elif isinstance(node, dict):
+            for key, value in node.items():
+                if key != "$ref":
+                    pending.append(value)
+                    continue
+                name = component_name(value)
+                if name in closure:
+                    continue
+                component = schemas.get(name)
+                if not isinstance(component, dict):
+                    raise SchemaResolutionError(f"Unresolved component '{name}'")
+                closure[name] = component
+                pending.append(component)
+
+    resolved = dict(root)
+    if closure:
+        resolved["components"] = {"schemas": closure}
+    return resolved
+
+
+def response_schema_from_document(
+    document: Optional[dict], upstream_path: str, method: str, status_code: int
+) -> Optional[dict]:
+    """Returns a route's self-contained JSON response schema for `status_code`, or None if
+    the document is missing, does not declare a JSON response, or has unresolvable refs."""
+    if document is None:
+        return None
+    try:
+        operation = document["paths"][upstream_path][method.lower()]
+        root = operation["responses"][str(status_code)]["content"]["application/json"]["schema"]
+        return self_contained_schema(document, root)
+    except (KeyError, TypeError, AttributeError, SchemaResolutionError) as exc:
+        logger.info(f"OpenAPI document declares no resolvable JSON response for {method} {upstream_path} {status_code}: {exc}")
+        return None

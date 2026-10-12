@@ -26,6 +26,7 @@ from db.repos.role import RoleRepository
 from db.session import AsyncSessionLocal, get_repository
 from exceptions import APIError
 from routers.base_api_router import BaseAPIRouter
+from routers.module_config.registry import ModuleSchemaConflictError, module_schema_registry
 
 from . import registry, runtime
 from .schemas import (
@@ -150,9 +151,10 @@ def _build_management_router() -> BaseAPIRouter:
             # New route ids only exist after the commit, so this build cannot precede it.
             try:
                 built = await _build_persisted_routes(extension_repo, name)
+                await _activate_module_schemas(extension_repo, name)
             except Exception as exc:
                 logger.exception(f"Replaced extension '{name}' could not be mounted; disabling it")
-                runtime.publish_routes(_public_app, internal_app, name, None)
+                _unmount_extension(name)
                 await registry.disable_extension(extension_repo, name)
                 raise APIError(f"Extension '{name}' was saved but could not be mounted and was disabled: {exc}", 500)
             runtime.publish_routes(_public_app, internal_app, name, built)
@@ -175,7 +177,7 @@ def _build_management_router() -> BaseAPIRouter:
     ) -> None:
         async with _extension_locks[name]:
             await registry.deregister_extension(extension_repo, role_repo, name)
-            runtime.publish_routes(_public_app, internal_app, name, None)
+            _unmount_extension(name)
 
     @router.post(
         "/{name}/enable",
@@ -193,6 +195,7 @@ def _build_management_router() -> BaseAPIRouter:
         extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
     ) -> ExtensionDetail:
         async with _extension_locks[name]:
+            await registry.check_module_schema_ownership(extension_repo, name)
             # Refetch before mount so a previously unreachable body_ref can flip to
             # upstream_declared without a process restart. See registry.refresh_extension_ref_schemas.
             await registry.refresh_extension_ref_schemas(extension_repo, name)
@@ -201,6 +204,7 @@ def _build_management_router() -> BaseAPIRouter:
             except Exception as exc:
                 logger.exception(f"Extension '{name}' could not be mounted; it stays disabled")
                 raise APIError(f"Extension '{name}' could not be mounted: {exc}", 500)
+            await _activate_module_schemas(extension_repo, name)
             detail = await registry.enable_extension(extension_repo, name)
             runtime.publish_routes(_public_app, internal_app, name, built)
             return detail
@@ -218,7 +222,7 @@ def _build_management_router() -> BaseAPIRouter:
     ) -> ExtensionDetail:
         async with _extension_locks[name]:
             detail = await registry.disable_extension(extension_repo, name)
-            runtime.publish_routes(_public_app, internal_app, name, None)
+            _unmount_extension(name)
             return detail
 
     @router.post(
@@ -272,11 +276,38 @@ async def _build_persisted_routes(extension_repo: ExtensionRepository, name: str
     return runtime.build_routes(_public_app, internal_app, name, upstreams, routes)
 
 
+def _unmount_extension(name: str) -> None:
+    """Removes `name`'s live routes and its active module schemas (disable, deregister)."""
+    runtime.publish_routes(_public_app, internal_app, name, None)
+    module_schema_registry.replace_extension_entries(name, [], [])
+
+
+async def _activate_module_schemas(extension_repo: ExtensionRepository, name: str) -> None:
+    """Replaces `name`'s active module schemas with its persisted valid snapshots. A claim
+    held by another extension is a conflict (409), and nothing changes."""
+    schemas, unavailable = await registry.load_module_schema_entries(extension_repo, name)
+    try:
+        module_schema_registry.replace_extension_entries(name, schemas, unavailable)
+    except ModuleSchemaConflictError as exc:
+        raise APIError(str(exc), 409) from exc
+
+
+async def _activate_enabled_module_schemas(extension_repo: ExtensionRepository) -> None:
+    for ext in await extension_repo.list_extensions_rows():
+        if not ext.get("enabled"):
+            continue
+        try:
+            await _activate_module_schemas(extension_repo, ext["name"])
+        except Exception:
+            logger.exception(f"Could not activate module schemas for extension '{ext['name']}'")
+
+
 def setup_extensions(app: FastAPI) -> None:
     """Mounts the static /extensions management API onto the public app."""
     global _public_app
     _public_app = app
     app.include_router(_build_management_router())
+    runtime.install_openapi_components(app)
 
 
 async def hydrate_all_routes() -> None:
@@ -294,6 +325,7 @@ async def hydrate_all_routes() -> None:
         except Exception:
             logger.exception("Startup refresh of extension body schemas failed; mounting stored schemas")
             await session.rollback()
+        await _activate_enabled_module_schemas(extension_repo)
         try:
             await runtime.load_all_routes(_public_app, internal_app, extension_repo)
         except Exception:

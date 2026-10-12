@@ -12,15 +12,26 @@ Route mounting is verified by inspecting the live route tables of the two apps
 routes themselves — actual dispatch through a mounted route is covered separately
 in test_extensions_dispatch.py (see extensions/upstreams/http.py, extensions/upstreams/iotedge.py).
 """
+import json
+import threading
+from contextlib import asynccontextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from uuid import uuid4
 
+import httpx
 import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from db.models.action import Action
 from db.models.extension import Extension as ExtensionModel, ExtensionAction
-from extensions.setup import internal_app
+from db.repos.extension import ExtensionRepository
+from db.session import get_repository
+from extensions import registry
+from extensions import setup as extensions_setup
+from extensions.setup import _activate_enabled_module_schemas, _activate_module_schemas, internal_app
+from extensions.upstreams import http as http_upstream
+from routers.module_config.registry import module_schema_registry
 from tests.integration.test_abac_authorization import AbacFixtures
 
 
@@ -520,3 +531,240 @@ class TestExtensionsManagementRoutesAuthorization:
 
         assert (await client.post(f"/extensions/{name}/disable")).status_code == 403
         assert (await client.delete(f"/extensions/{name}")).status_code == 403
+
+
+WIDGET_CONFIG_REF = "#/components/schemas/WidgetConfigV1"
+WIDGET_REPORTED_REF = "#/components/schemas/WidgetReportedV1"
+
+
+def _widget_openapi_document() -> dict:
+    return {
+        "openapi": "3.1.0",
+        "paths": {},
+        "components": {
+            "schemas": {
+                "WidgetConfigV1": {
+                    "type": "object",
+                    "required": ["interval"],
+                    "properties": {"interval": {"type": "integer"}, "unit": {"$ref": "#/components/schemas/Unit"}},
+                },
+                "Unit": {"type": "string", "enum": ["ms", "s"]},
+                "WidgetReportedV1": {"type": "object", "properties": {"config": {"type": "object"}}},
+            }
+        },
+    }
+
+
+class _OpenApiHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format, *args):  # silence default stderr access log
+        pass
+
+    def do_GET(self):
+        document = self.server.document
+        if self.path != "/openapi.json" or document is None:
+            status, body = 404, b"{}"
+        else:
+            status, body = 200, json.dumps(document).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@pytest.fixture
+def openapi_upstream():
+    """A real HTTP upstream serving `server.document` at /openapi.json (None = unreachable)."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _OpenApiHandler)
+    server.document = _widget_openapi_document()
+    server.base_url = f"http://127.0.0.1:{server.server_port}"
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.fixture(autouse=True)
+async def _fresh_http_upstream_client():
+    """See test_extensions_dispatch.py: the shared httpx client must belong to this test's event loop."""
+    previous = http_upstream._client
+    http_upstream._client = httpx.AsyncClient()
+    yield
+    await http_upstream._client.aclose()
+    http_upstream._client = previous
+
+
+def _module_registration(name: str, module_id: str, base_url: str, reported: bool = True) -> dict:
+    registration = _sample_registration(name)
+    registration["upstreams"]["svc"]["base_url"] = base_url
+    module = {"upstream": "svc", "schema_ref": WIDGET_CONFIG_REF}
+    if reported:
+        module["reported_schema_ref"] = WIDGET_REPORTED_REF
+    registration["module_schemas"] = {module_id: module}
+    return registration
+
+
+class TestModuleSchemas:
+    async def test_registration_persists_module_schemas_without_activating_them(self, client, openapi_upstream):
+        name, module_id = _unique_name("module_ext"), _unique_name("widget-module")
+        registration = _module_registration(name, module_id, openapi_upstream.base_url)
+
+        response = await client.post("/extensions", json=registration)
+
+        assert response.status_code == 201
+        assert response.json()["module_schemas"] == registration["module_schemas"]
+        assert module_schema_registry.get(module_id, "configuration") is None
+        assert (await client.get(f"/extensions/{name}")).json()["module_schemas"] == registration["module_schemas"]
+        await client.delete(f"/extensions/{name}")
+
+    async def test_invalid_module_schema_is_rejected_and_nothing_is_saved(self, client, openapi_upstream):
+        name, module_id = _unique_name("bad_module_ext"), _unique_name("widget-module")
+        registration = _module_registration(name, module_id, openapi_upstream.base_url)
+        registration["module_schemas"][module_id]["schema_ref"] = "#/components/schemas/Missing"
+
+        response = await client.post("/extensions", json=registration)
+
+        assert response.status_code == 422
+        assert (await client.get(f"/extensions/{name}")).status_code == 404
+
+    async def test_external_reference_in_module_schema_is_rejected(self, client, openapi_upstream):
+        name, module_id = _unique_name("external_ref_ext"), _unique_name("widget-module")
+        openapi_upstream.document["components"]["schemas"]["WidgetConfigV1"]["properties"]["unit"] = {
+            "$ref": "https://elsewhere.example/unit.json"
+        }
+        registration = _module_registration(name, module_id, openapi_upstream.base_url)
+
+        response = await client.post("/extensions", json=registration)
+
+        assert response.status_code == 422
+        assert (await client.get(f"/extensions/{name}")).status_code == 404
+
+    async def test_unreachable_module_upstream_is_rejected_and_nothing_is_saved(self, client, openapi_upstream):
+        name, module_id = _unique_name("unreachable_module_ext"), _unique_name("widget-module")
+        openapi_upstream.document = None
+        registration = _module_registration(name, module_id, openapi_upstream.base_url)
+
+        response = await client.post("/extensions", json=registration)
+
+        assert response.status_code == 502
+        assert (await client.get(f"/extensions/{name}")).status_code == 404
+
+    async def test_module_id_claimed_by_another_extension_conflicts_even_when_disabled(self, client, openapi_upstream):
+        module_id = _unique_name("shared-module")
+        first, second = _unique_name("owner_a"), _unique_name("owner_b")
+        assert (await client.post("/extensions", json=_module_registration(first, module_id, openapi_upstream.base_url))).status_code == 201
+
+        response = await client.post("/extensions", json=_module_registration(second, module_id, openapi_upstream.base_url))
+
+        assert response.status_code == 409
+        assert f"already claimed by extension '{first}'" in response.json()["message"]
+        assert (await client.get(f"/extensions/{second}")).status_code == 404
+        await client.delete(f"/extensions/{first}")
+
+    async def test_enable_activates_and_disable_or_deregister_removes_module_schemas(self, client, openapi_upstream):
+        name, module_id = _unique_name("lifecycle_module_ext"), _unique_name("widget-module")
+        await client.post("/extensions", json=_module_registration(name, module_id, openapi_upstream.base_url))
+
+        assert (await client.post(f"/extensions/{name}/enable")).status_code == 200
+        configuration = module_schema_registry.get(module_id, "configuration")
+        assert configuration is not None and configuration.extension_name == name
+        assert module_schema_registry.get(module_id, "reported") is not None
+        assert configuration.schema["components"]["schemas"]["Unit"] == {"type": "string", "enum": ["ms", "s"]}
+
+        assert (await client.post(f"/extensions/{name}/disable")).status_code == 200
+        assert module_schema_registry.get(module_id, "configuration") is None
+        assert module_schema_registry.claim_owner(module_id) is None
+
+        assert (await client.post(f"/extensions/{name}/enable")).status_code == 200
+        assert module_schema_registry.get(module_id, "configuration") is not None
+
+        assert (await client.delete(f"/extensions/{name}")).status_code == 204
+        assert module_schema_registry.get(module_id, "configuration") is None
+
+    async def test_replace_without_reported_ref_drops_reported_schema_and_keeps_the_core_route(self, client, openapi_upstream):
+        from main import app as public_app
+
+        name, module_id = _unique_name("drop_reported_ext"), _unique_name("widget-module")
+        await client.post("/extensions", json=_module_registration(name, module_id, openapi_upstream.base_url))
+        await client.post(f"/extensions/{name}/enable")
+        assert module_schema_registry.get(module_id, "reported") is not None
+
+        replacement = _module_registration(name, module_id, openapi_upstream.base_url, reported=False)
+        response = await client.put(f"/extensions/{name}", json=replacement)
+
+        assert response.status_code == 200
+        assert module_schema_registry.get(module_id, "reported") is None
+        assert module_schema_registry.get(module_id, "configuration") is not None
+        assert len(_live_route_names(public_app, name)) == 1
+        await client.delete(f"/extensions/{name}")
+
+    async def test_failed_refresh_on_enable_keeps_the_last_valid_snapshot(self, client, openapi_upstream):
+        name, module_id = _unique_name("refresh_module_ext"), _unique_name("widget-module")
+        await client.post("/extensions", json=_module_registration(name, module_id, openapi_upstream.base_url))
+        await client.post(f"/extensions/{name}/enable")
+        last_valid = module_schema_registry.get(module_id, "configuration").version
+        await client.post(f"/extensions/{name}/disable")
+
+        openapi_upstream.document = None
+        assert (await client.post(f"/extensions/{name}/enable")).status_code == 200
+
+        assert module_schema_registry.get(module_id, "configuration").version == last_valid
+        await client.delete(f"/extensions/{name}")
+
+    async def test_startup_hydration_activates_persisted_module_schemas(self, client, db_session, openapi_upstream):
+        name, module_id = _unique_name("hydrate_module_ext"), _unique_name("widget-module")
+        await client.post("/extensions", json=_module_registration(name, module_id, openapi_upstream.base_url))
+        await client.post(f"/extensions/{name}/enable")
+
+        # Simulate a restarted process: the in-memory registry starts empty.
+        module_schema_registry.replace_extension_entries(name, [], [])
+        extension_repo = get_repository(ExtensionRepository)(db_session)
+        await registry.refresh_ref_schemas(extension_repo)
+        await _activate_enabled_module_schemas(extension_repo)
+
+        assert module_schema_registry.get(module_id, "configuration") is not None
+        assert module_schema_registry.get(module_id, "reported") is not None
+        await client.delete(f"/extensions/{name}")
+
+    async def test_hydrate_all_routes_activates_persisted_module_schemas_at_startup(
+        self, client, db_session, openapi_upstream, monkeypatch
+    ):
+        name, module_id = _unique_name("startup_module_ext"), _unique_name("widget-module")
+        await client.post("/extensions", json=_module_registration(name, module_id, openapi_upstream.base_url))
+        await client.post(f"/extensions/{name}/enable")
+        module_schema_registry.replace_extension_entries(name, [], [])
+
+        # Run the real startup entrypoint against the test's isolated session, not its steps.
+        @asynccontextmanager
+        async def startup_session():
+            yield db_session
+
+        monkeypatch.setattr(extensions_setup, "AsyncSessionLocal", startup_session)
+        await extensions_setup.hydrate_all_routes()
+
+        assert module_schema_registry.get(module_id, "configuration") is not None
+        assert module_schema_registry.get(module_id, "reported") is not None
+        await client.delete(f"/extensions/{name}")
+
+    async def test_enabled_module_with_an_invalid_stored_snapshot_stays_claimed_as_unavailable(self, client, db_session, openapi_upstream):
+        name, module_id = _unique_name("unavailable_module_ext"), _unique_name("widget-module")
+        await client.post("/extensions", json=_module_registration(name, module_id, openapi_upstream.base_url, reported=False))
+        extension_repo = get_repository(ExtensionRepository)(db_session)
+        stored = (await extension_repo.list_module_schemas(name))[0]
+        await extension_repo.replace_module_schemas(
+            name,
+            [{**stored, "schema": {"type": "not-a-type"}}],
+        )
+
+        await _activate_module_schemas(extension_repo, name)
+
+        assert module_schema_registry.get(module_id, "configuration") is None
+        assert module_schema_registry.is_unavailable(module_id)
+        assert module_schema_registry.claim_owner(module_id) == name
+        module_schema_registry.replace_extension_entries(name, [], [])

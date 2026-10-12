@@ -9,7 +9,7 @@ and real upstream dispatch (`http`/`iotedge`, see `extensions/upstreams/`).
 
 import logging
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from starlette.responses import Response
@@ -30,6 +30,7 @@ logger = logging.getLogger("EdgeConfigAPI")
 
 _ROUTE_NAME_PREFIX = "extension_route__"
 _NON_ALNUM_RE = re.compile(r"[^a-zA-Z0-9]+")
+_OPENAPI_COMPONENT_NAME_INVALID_RE = re.compile(r"[^A-Za-z0-9._-]")
 
 _DISPATCHERS: Dict[str, Callable] = {"http": http_upstream.dispatch, "iotedge": iotedge_upstream.dispatch}
 
@@ -110,6 +111,50 @@ def _dispatch_handler(extension_name: str, upstream: Dict[str, Any], route: Dict
     return _handler
 
 
+def _hoist_response_schema(route_id: str, schema: dict) -> Tuple[dict, Dict[str, dict]]:
+    """Splits a route's self-contained response schema into its root and its components.
+    Components are renamed with a prefix unique to the route, so they cannot collide in
+    the API's OpenAPI document; every local reference is rewritten to match."""
+    prefix = f"ext_{route_id.replace('-', '')}_"
+
+    def hoisted_name(name: str) -> str:
+        return prefix + _OPENAPI_COMPONENT_NAME_INVALID_RE.sub("_", name)
+
+    def rewrite(node: Any) -> Any:
+        if isinstance(node, list):
+            return [rewrite(item) for item in node]
+        if isinstance(node, dict):
+            return {
+                key: f"{http_upstream.COMPONENT_REF_PREFIX}{hoisted_name(http_upstream.component_name(value))}"
+                if key == "$ref"
+                else rewrite(value)
+                for key, value in node.items()
+            }
+        return node
+
+    root = rewrite({key: value for key, value in schema.items() if key != "components"})
+    components = schema.get("components", {}).get("schemas", {})
+    return root, {hoisted_name(name): rewrite(component) for name, component in components.items()}
+
+
+def install_openapi_components(app: FastAPI) -> None:
+    """Merges the live extension routes' response components into `app`'s OpenAPI document.
+    FastAPI builds components only from its own models, so they are added after generation.
+    `publish_routes` clears the cached document, so removed routes drop out on the next read."""
+    generate = app.openapi
+
+    def openapi() -> Dict[str, Any]:
+        schema = generate()
+        components: Dict[str, dict] = {}
+        for route in app.router.routes:
+            components.update(getattr(route, "extension_openapi_components", None) or {})
+        if components:
+            schema.setdefault("components", {}).setdefault("schemas", {}).update(components)
+        return schema
+
+    app.openapi = openapi
+
+
 def _app_for_visibility(visibility: str, public_app: FastAPI, internal_app: FastAPI) -> FastAPI:
     apps = {"public": public_app, "internal": internal_app}
     if visibility not in apps:
@@ -181,6 +226,19 @@ def _add_routes_from_specs(
                     },
                 }
             }
+        # `response_ref` documents the upstream's response schema for the route's status code.
+        # Its components are published by install_openapi_components, not by the operation.
+        response_components: Dict[str, dict] = {}
+        if route.get("response_schema"):
+            response_schema, response_components = _hoist_response_schema(route["id"], route["response_schema"])
+            openapi_extra = {
+                **(openapi_extra or {}),
+                "responses": {
+                    str(route.get("status_code") or 200): {
+                        "content": {"application/json": {"schema": response_schema}}
+                    }
+                },
+            }
 
         target_app.add_api_route(
             route["path"],
@@ -200,6 +258,7 @@ def _add_routes_from_specs(
         mounted = target_app.router.routes[-1]
         mounted.extension_name = extension_name
         mounted.extension_route_id = route["id"]
+        mounted.extension_openapi_components = response_components
 
 
 def build_routes(

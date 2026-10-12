@@ -8,6 +8,10 @@ class ExtensionActionConflictError(Exception):
     """An action name is already owned or was claimed concurrently."""
 
 
+class ExtensionModuleConflictError(Exception):
+    """A module ID is already claimed by another extension, or was claimed concurrently."""
+
+
 class ExtensionRepository(ABC):
     """Persistence for the dynamic API extension system (extensions, their upstreams and
     contributed routes, RBAC-action provenance).
@@ -103,6 +107,28 @@ class ExtensionRepository(ABC):
         """Updates one route's `validation_mode`/`body` snapshot in place, used by the
         startup `upstream_declared`/`unreachable_ref` re-fetch, which must not disturb
         any other persisted route field."""
+        pass
+
+    @abstractmethod
+    async def update_route_response_schema(self, route_id: str, response_schema: Optional[Dict[str, Any]]) -> None:
+        """Updates one route's `response_schema` snapshot in place (the `response_ref` refresh)."""
+        pass
+
+    # --- module schemas ----------------------------------------------------
+    @abstractmethod
+    async def list_module_schemas(self, name: str) -> List[Dict[str, Any]]:
+        """Persisted module schema snapshots of `name`, one row per module ID and purpose."""
+        pass
+
+    @abstractmethod
+    async def replace_module_schemas(self, name: str, rows: List[Dict[str, Any]]) -> None:
+        """Atomically replaces every module schema row of `name`. Raises
+        ExtensionModuleConflictError if a module ID is already claimed by another extension."""
+        pass
+
+    @abstractmethod
+    async def get_module_schema_owner(self, module_id: str) -> Optional[str]:
+        """Returns the extension that claims `module_id`, or None if unclaimed."""
         pass
 
     # --- RBAC action provenance -------------------------------------------

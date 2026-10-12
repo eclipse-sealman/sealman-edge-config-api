@@ -14,7 +14,7 @@ from db.session import get_repository
 from extensions import registry
 from extensions.upstreams import http as http_upstream
 from tests.integration.test_extensions_dispatch import _EchoHandler, mock_http_upstream  # noqa: F401
-from tests.integration.test_extensions_management_routes import _unique_name
+from tests.integration.test_extensions_management_routes import _unique_name, openapi_upstream  # noqa: F401
 
 
 @pytest.fixture(autouse=True)
@@ -225,4 +225,105 @@ class TestBodyRefRevalidationOnRestart:
         assert get_response.status_code == 200
         assert get_response.json()["routes"][0]["validation_mode"] == "upstream_declared"
 
+        await client.delete(f"/extensions/{name}")
+
+
+def _items_openapi_document(item_component: str) -> dict:
+    return {
+        "openapi": "3.1.0",
+        "paths": {
+            "/items": {
+                "get": {
+                    "responses": {
+                        "200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ItemList"}}}},
+                    }
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                "ItemList": {"type": "array", "items": {"$ref": f"#/components/schemas/{item_component}"}},
+                "ItemV1": {"type": "object", "properties": {"id": {"type": "string"}}},
+                "ItemV2": {"type": "object", "properties": {"id": {"type": "integer"}}},
+            }
+        },
+    }
+
+
+def _response_ref_registration(name: str, base_url: str) -> dict:
+    return {
+        "schema_version": 1,
+        "name": name,
+        "description": "response_ref test",
+        "upstreams": {"svc": {"type": "http", "base_url": base_url}},
+        "routes": [
+            {
+                "upstream": "svc",
+                "path": f"/{name}/items",
+                "method": "GET",
+                "upstream_path": "/items",
+                "visibility": "public",
+                "response_ref": True,
+            }
+        ],
+    }
+
+
+def _assert_refs_resolve(node, components: dict) -> None:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "$ref":
+                assert value.startswith("#/components/schemas/")
+                assert value.rsplit("/", 1)[-1] in components, value
+            else:
+                _assert_refs_resolve(value, components)
+    elif isinstance(node, list):
+        for item in node:
+            _assert_refs_resolve(item, components)
+
+
+class TestResponseRefDocumentation:
+    async def test_response_ref_publishes_upstream_response_schema_with_resolvable_components(
+        self, client, openapi_upstream
+    ):
+        name = _unique_name("responseref_ext")
+        registration = _response_ref_registration(name, openapi_upstream.base_url)
+        openapi_upstream.document = _items_openapi_document("ItemV1")
+
+        register = await client.post("/extensions", json=registration)
+        assert register.status_code == 201
+        assert register.json()["routes"][0]["response_ref"] is True
+        assert "response_schema" not in register.json()["routes"][0]
+        assert (await client.post(f"/extensions/{name}/enable")).status_code == 200
+
+        openapi = (await client.get("/openapi.json")).json()
+        schema = openapi["paths"][f"/{name}/items"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+        components = openapi["components"]["schemas"]
+        _assert_refs_resolve(schema, components)
+        assert schema["$ref"].rsplit("/", 1)[-1] in components
+        item_refs = [key for key in components if key.endswith("_ItemV1")]
+        assert item_refs and components[item_refs[0]]["properties"] == {"id": {"type": "string"}}
+        await client.delete(f"/extensions/{name}")
+
+    async def test_enable_refreshes_response_schema_and_disable_removes_its_documentation(
+        self, client, openapi_upstream
+    ):
+        name = _unique_name("responseref_refresh_ext")
+        openapi_upstream.document = _items_openapi_document("ItemV1")
+        await client.post("/extensions", json=_response_ref_registration(name, openapi_upstream.base_url))
+        await client.post(f"/extensions/{name}/enable")
+
+        openapi_upstream.document = _items_openapi_document("ItemV2")
+        await client.post(f"/extensions/{name}/disable")
+        await client.post(f"/extensions/{name}/enable")
+
+        openapi = (await client.get("/openapi.json")).json()
+        components = openapi["components"]["schemas"]
+        assert [key for key in components if key.endswith("_ItemV2")]
+        assert not [key for key in components if key.endswith("_ItemV1")]
+        _assert_refs_resolve(openapi["paths"][f"/{name}/items"]["get"], components)
+
+        await client.post(f"/extensions/{name}/disable")
+        openapi = (await client.get("/openapi.json")).json()
+        assert f"/{name}/items" not in openapi["paths"]
         await client.delete(f"/extensions/{name}")
