@@ -751,3 +751,465 @@ class TestGenericOpenApiAlternatives:
         assert restored["paths"][CONFIG_PATH] == expected["paths"][CONFIG_PATH]
         assert restored["paths"][REPORTED_PATH] == expected["paths"][REPORTED_PATH]
         assert len(_alternatives(restored, CONFIG_PATH)) == 3
+
+
+# POST fixtures are separate from WP-2's read fakes and authorization fixtures.
+@pytest.fixture
+async def post_state():
+    from extensions import body_validation
+
+    module_schema_registry._active.clear()
+    module_schema_registry._claims.clear()
+    module_schema_registry._unavailable.clear()
+    body_validation._module_validator_cache.clear()
+    public_app.openapi_schema = None
+    yield
+    module_schema_registry._active.clear()
+    module_schema_registry._claims.clear()
+    module_schema_registry._unavailable.clear()
+    body_validation._module_validator_cache.clear()
+    public_app.openapi_schema = None
+
+
+@pytest.fixture
+def post_writes(monkeypatch):
+    from types import SimpleNamespace
+    from routers.module_config.routes import post_module_twin_config as write_route
+
+    effects = SimpleNamespace(contexts=[], blobs=[], uploads=[], patches=[], upload_error=None, status=200)
+
+    class Context:
+        def __init__(self, *args, **kwargs):
+            effects.contexts.append((args, kwargs))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def get_blob_client(self, name):
+            effects.blobs.append(name)
+            return self
+
+        async def upload_blob(self, data, overwrite):
+            if effects.upload_error:
+                raise effects.upload_error
+            effects.uploads.append((data, overwrite))
+
+    async def patch(url, responses, _json, headers):
+        effects.patches.append((url, _json, headers))
+        responses[url] = _FakeResponse(effects.status, "synthetic hub error")
+
+    monkeypatch.setattr(write_route, "PUBLIC_STORAGE_ACCOUNT_NAME", "teststorage")
+    monkeypatch.setattr(write_route, "BLOB_SAS_TOKEN_MODULE_CONF", "sig=synthetic")
+    monkeypatch.setattr(write_route, "IOT_HUB_NAME", "testhub.invalid")
+    monkeypatch.setattr(write_route, "BlobContainerContext", Context)
+    monkeypatch.setattr(write_route, "get_iothub_auth_headers", lambda: {"Authorization": "synthetic"})
+    monkeypatch.setattr(write_route, "patch_async", patch)
+    return effects
+
+
+def _post_alternatives(document):
+    body = document["paths"][CONFIG_PATH]["post"]["requestBody"]
+    assert body["required"] is True
+    return body["content"]["application/json"]["schema"]["anyOf"]
+
+
+def _assert_no_writes(effects):
+    assert effects.contexts == []
+    assert effects.uploads == []
+    assert effects.patches == []
+
+
+@pytest.mark.usefixtures("post_state")
+class TestGenericPost:
+    async def test_exact_storage_and_twin_targets_and_literal_http_result(
+        self, client, module_upstream, extension_names, post_writes, blob_store, iot_hub, monkeypatch
+    ):
+        from uuid import UUID
+
+        await _enable(client, extension_names, _both_schemas(), module_upstream.base_url)
+        payload = {"interval": 2, "unit": "ms", "nested": {"key": None}, "items": [None], "extra": None}
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("POST validation must not fetch schemas, call direct methods or read cloud data")
+
+        monkeypatch.setattr(http_upstream, "fetch_openapi_document", forbidden)
+        monkeypatch.setattr(http_upstream, "dispatch", forbidden)
+        monkeypatch.setattr(iotedge_upstream, "_direct_method", forbidden)
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=payload)
+
+        assert response.status_code == 200
+        assert response.json() == [payload, 200]
+        assert post_writes.contexts == [(("teststorage", "iotedge-device-twin"), {"sas_token": "sig=synthetic"})]
+        assert post_writes.blobs == [f"{DEVICE}/{MODULE}/current"]
+        assert post_writes.uploads == [(json.dumps(payload, separators=(",", ":")), True)]
+        url, patch, headers = post_writes.patches[0]
+        assert url == f"https://testhub.invalid/twins/{DEVICE}/modules/{MODULE}?api-version=2020-05-31-preview"
+        desired = patch["properties"]["desired"]
+        assert len(desired["configId"]) == 32 and UUID(desired["configId"]).hex == desired["configId"]
+        assert patch == {"properties": {"desired": {
+            "configBlobUrl": f"https://teststorage.blob.core.windows.net/iotedge-device-twin/{DEVICE}/{MODULE}/current?sig=synthetic",
+            "configId": desired["configId"],
+        }}}
+        assert headers == {"Authorization": "synthetic"}
+        assert blob_store.requested == [] and iot_hub.requested == []
+
+    @pytest.mark.parametrize("payload,location,rule", [
+        ({"interval": "secret-password"}, ["interval"], "type"),
+        ({"interval": 0}, ["interval"], "minimum"),
+        ({"interval": 5, "unit": "secret-password"}, ["unit"], "enum"),
+        ({"config": {"status": "OK"}}, [], "required"),
+    ])
+    async def test_invalid_configuration_has_structured_safe_422_and_zero_writes(
+        self, client, module_upstream, extension_names, post_writes, payload, location, rule
+    ):
+        await _enable(client, extension_names, _both_schemas(), module_upstream.base_url)
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=payload)
+        assert response.status_code == 422
+        assert response.json()["errors"][0]["loc"] == location
+        assert response.json()["errors"][0]["rule"] == rule
+        assert "secret-password" not in response.text
+        assert "WidgetConfig" not in response.text
+        _assert_no_writes(post_writes)
+
+    async def test_unknown_module_does_not_use_a_sibling_schema(self, client, module_upstream, extension_names, post_writes):
+        await _enable(client, extension_names, _both_schemas(), module_upstream.base_url)
+        payload = {"interval": "not-an-integer", "keep": None}
+        response = await client.post(f"/{DEVICE}/twin/config/{OTHER_MODULE}", json=payload)
+        assert response.status_code == 200
+        assert response.json() == [payload, 200]
+        assert post_writes.blobs == [f"{DEVICE}/{OTHER_MODULE}/current"]
+
+    @pytest.mark.parametrize("raw", ["[]", "null", "true", "123", '"text"'])
+    async def test_schema_less_non_object_is_a_structured_422(self, client, post_writes, raw):
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", content=raw)
+        assert response.status_code == 422
+        assert response.json()["errors"][0]["rule"] == "type"
+        _assert_no_writes(post_writes)
+
+    @pytest.mark.parametrize("raw", ["", " ", "{", "NaN", "Infinity", "-Infinity", "1e9999", '{"nested":[1e9999]}'])
+    async def test_malformed_or_non_finite_is_a_safe_400(self, client, post_writes, raw):
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", content=raw)
+        assert response.status_code == 400
+        assert response.json() == {"message": "Request body must be valid finite JSON"}
+        _assert_no_writes(post_writes)
+
+    async def test_oversized_body_is_413_without_writes(self, client, post_writes):
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", content=b" " * (1024 * 1024 + 1))
+        assert response.status_code == 413
+        assert response.json() == {"message": "Request body exceeds 1048576 bytes"}
+        _assert_no_writes(post_writes)
+
+    async def test_claimed_unavailable_is_503_before_body_or_writes(
+        self, client, db_session, module_upstream, extension_names, post_writes, monkeypatch
+    ):
+        from extensions import body_validation
+
+        await TestUnavailableModule()._make_unavailable(client, db_session, extension_names, module_upstream)
+
+        async def forbidden(*args):
+            raise AssertionError("unavailable module must not buffer the body")
+
+        monkeypatch.setattr(body_validation, "read_limited_body", forbidden)
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", content="not JSON")
+        assert response.status_code == 503
+        assert response.json() == {"message": UNAVAILABLE_MESSAGE}
+        _assert_no_writes(post_writes)
+
+    async def test_unusable_active_schema_returns_safe_503(
+        self, client, module_upstream, extension_names, post_writes, monkeypatch
+    ):
+        from extensions import body_validation
+
+        await _enable(client, extension_names, _both_schemas(), module_upstream.base_url)
+
+        def broken(*args):
+            raise RuntimeError("raw validator secret")
+
+        monkeypatch.setattr(body_validation, "validate_module_snapshot", broken)
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json={"interval": 2})
+        assert response.status_code == 503
+        assert response.json() == {"message": UNAVAILABLE_MESSAGE}
+        _assert_no_writes(post_writes)
+
+    async def test_nullable_schema_has_no_defaults_coercion_or_null_pruning(
+        self, client, module_upstream, extension_names, post_writes
+    ):
+        module_upstream.document["components"]["schemas"]["WidgetConfigV1"] = {
+            "type": "object", "required": ["required"], "properties": {
+                "required": {"type": ["string", "null"]},
+                "optional": {"type": ["string", "null"]},
+                "defaulted": {"type": "integer", "default": 5},
+            },
+        }
+        await _enable(client, extension_names, _both_schemas(), module_upstream.base_url)
+        for payload in ({"required": None}, {"required": None, "optional": None, "dict": {"null": None}, "items": [None]}):
+            response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=payload)
+            assert response.status_code == 200
+            assert response.json() == [payload, 200]
+            assert json.loads(post_writes.uploads[-1][0]) == payload
+        count = len(post_writes.uploads)
+        for payload in ({}, {"required": None, "defaulted": "5"}):
+            assert (await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=payload)).status_code == 422
+        assert len(post_writes.uploads) == count
+
+    @pytest.mark.parametrize("schema,payload", [
+        ({"type": "array", "items": {"type": ["string", "null"]}}, ["item", None]),
+        ({"type": "null"}, None), ({"type": "string"}, "text"), ({"type": "boolean"}, False),
+    ])
+    async def test_active_declared_root_shape_is_accepted(self, client, module_upstream, extension_names, post_writes, schema, payload):
+        module_upstream.document["components"]["schemas"]["WidgetConfigV1"] = schema
+        await _enable(client, extension_names, _config_only(), module_upstream.base_url)
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", content=json.dumps(payload))
+        assert response.status_code == 200
+        assert response.json() == [payload, 200]
+        assert json.loads(post_writes.uploads[0][0]) == payload
+
+    @pytest.mark.parametrize("failure", ["storage", "sas", "upload", "hub"])
+    async def test_core_error_http_wrappers_and_ordering_are_preserved(self, client, post_writes, monkeypatch, failure):
+        from routers.module_config.routes import post_module_twin_config as write_route
+
+        if failure == "storage":
+            monkeypatch.setattr(write_route, "PUBLIC_STORAGE_ACCOUNT_NAME", "")
+        elif failure == "sas":
+            monkeypatch.setattr(write_route, "BLOB_SAS_TOKEN_MODULE_CONF", "")
+        elif failure == "upload":
+            post_writes.upload_error = RuntimeError("synthetic upload error")
+        else:
+            post_writes.status = 409
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json={})
+        assert response.status_code == {"storage": 500, "sas": 500, "upload": 400, "hub": 409}[failure]
+        assert list(response.json()) == ["message"]
+        assert ("UploadError" if failure == "upload" else "IoTBackendAPIError") in response.json()["message"]
+        assert len(post_writes.uploads) == (1 if failure == "hub" else 0)
+        assert len(post_writes.patches) == (1 if failure == "hub" else 0)
+
+
+@pytest.mark.usefixtures("post_state")
+class TestGenericPostLifecycle:
+    async def test_register_enable_replace_disable_deregister_and_openapi(
+        self, client, db_session, module_upstream, extension_names, post_writes
+    ):
+        from extensions import body_validation
+
+        core = (await client.get("/openapi.json")).json()
+        assert _post_alternatives(core) == [{"type": "object"}]
+        name = _unique_name("module_post_ext")
+        extension_names.append(name)
+        registration = _module_registration(name, module_upstream.base_url, _both_schemas())
+        assert (await client.post("/extensions", json=registration)).status_code == 201
+        assert (await client.get("/openapi.json")).json() == core
+        assert (await client.post(f"/{DEVICE}/twin/config/{MODULE}", json={})).status_code == 200
+        assert (await client.post(f"/extensions/{name}/enable")).status_code == 200
+        version1 = module_schema_registry.get(MODULE, "configuration").version
+        enabled = (await client.get("/openapi.json")).json()
+        assert enabled == (await client.get("/openapi.json")).json()
+        alternatives = _post_alternatives(enabled)
+        assert len(alternatives) == 2
+        root = _resolve(enabled, alternatives[1])
+        assert root["title"] == "WidgetConfigV1" and root["required"] == ["interval"]
+        assert _resolve(enabled, root["properties"]["unit"]) == {"title": "WidgetUnit", "type": "string", "enum": ["ms", "s"]}
+        assert "WidgetReported" not in json.dumps(alternatives)
+        assert "Module_configuration_" not in json.dumps(public_app.openapi_schema)
+        assert (await client.post(f"/{DEVICE}/twin/config/{MODULE}", json={"interval": 2})).status_code == 200
+        assert (MODULE, "configuration", version1) in body_validation._module_validator_cache
+
+        module_upstream.document["components"]["schemas"]["WidgetConfigV1"] = {
+            "title": "WidgetConfigV2", "type": "array", "items": {"type": ["string", "null"]},
+        }
+        assert (await client.put(f"/extensions/{name}", json=registration)).status_code == 200
+        version2 = module_schema_registry.get(MODULE, "configuration").version
+        assert version2 != version1
+        replaced = (await client.get("/openapi.json")).json()
+        assert all(component.get("title") != "WidgetConfigV1" for component in replaced["components"]["schemas"].values())
+        assert "WidgetUnit" not in json.dumps(replaced["components"])
+        assert _resolve(replaced, _post_alternatives(replaced)[1])["title"] == "WidgetConfigV2"
+        assert (await client.post(f"/{DEVICE}/twin/config/{MODULE}", json={"interval": 2})).status_code == 422
+        assert (await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=["new", None])).status_code == 200
+        assert (MODULE, "configuration", version2) in body_validation._module_validator_cache
+        assert (await client.post(f"/extensions/{name}/disable")).status_code == 200
+        assert (await client.get("/openapi.json")).json() == core
+        assert (await client.post(f"/{DEVICE}/twin/config/{MODULE}", content="[]")).status_code == 422
+        assert (await client.post(f"/{DEVICE}/twin/config/{MODULE}", json={"keep": None})).status_code == 200
+        assert (await client.post(f"/extensions/{name}/enable")).status_code == 200
+        assert (await client.delete(f"/extensions/{name}")).status_code == 204
+        assert (await client.get("/openapi.json")).json() == core
+        assert (await client.post(f"/{DEVICE}/twin/config/{MODULE}", json={})).status_code == 200
+        assert len(post_writes.uploads) == 5
+
+    async def test_hydration_refreshes_post_schema_and_removes_stale_alternatives(
+        self, client, db_session, module_upstream, extension_names, post_writes, monkeypatch
+    ):
+        name = await _enable(client, extension_names, _both_schemas(), module_upstream.base_url)
+        before = (await client.get("/openapi.json")).json()
+        assert _resolve(before, _post_alternatives(before)[1])["title"] == "WidgetConfigV1"
+        extensions_setup._unmount_extension(name)
+        assert _post_alternatives((await client.get("/openapi.json")).json()) == [{"type": "object"}]
+        module_upstream.document["components"]["schemas"]["WidgetConfigV1"] = {
+            "title": "HydratedConfig", "type": "object", "required": ["new"], "properties": {"new": {"type": "boolean"}},
+        }
+
+        @asynccontextmanager
+        async def startup_session():
+            yield db_session
+
+        monkeypatch.setattr(extensions_setup, "AsyncSessionLocal", startup_session)
+        await extensions_setup.hydrate_all_routes()
+        document = (await client.get("/openapi.json")).json()
+        assert _resolve(document, _post_alternatives(document)[1])["title"] == "HydratedConfig"
+        assert all(component.get("title") != "WidgetConfigV1" for component in document["components"]["schemas"].values())
+        assert "WidgetUnit" not in json.dumps(document["components"])
+        assert (await client.post(f"/{DEVICE}/twin/config/{MODULE}", json={"interval": 2})).status_code == 422
+        assert (await client.post(f"/{DEVICE}/twin/config/{MODULE}", json={"new": True})).status_code == 200
+        assert len(post_writes.uploads) == 1
+
+
+    async def test_extensions_disabled_skips_hydration_and_uses_object_fallback(
+        self, client, module_upstream, extension_names, post_writes, monkeypatch
+    ):
+        import main
+        from fastapi import FastAPI
+
+        name = await _enable(client, extension_names, _both_schemas(), module_upstream.base_url)
+        # Simulate restart with extensions disabled: persisted snapshots remain, no in-memory activation.
+        extensions_setup._unmount_extension(name)
+        monkeypatch.setattr(main, "EXTENSIONS_ENABLED", False)
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("disabled extensions must not hydrate, start or fetch schemas")
+
+        monkeypatch.setattr(main, "hydrate_all_routes", forbidden)
+        monkeypatch.setattr(main, "start_side_apps", forbidden)
+        monkeypatch.setattr(http_upstream, "fetch_openapi_document", forbidden)
+        disabled_app = FastAPI()
+        main._register_extensions_router(disabled_app)
+        assert not any(route.path.startswith("/extensions") for route in disabled_app.routes)
+        assert await main._start_extensions() == []
+        payload = {"interval": "generic-not-validated", "keep": None}
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=payload)
+        assert response.status_code == 200
+        assert response.json() == [payload, 200]
+        assert json.loads(post_writes.uploads[0][0]) == payload
+        assert (await client.post(f"/{DEVICE}/twin/config/{MODULE}", content="[]")).status_code == 422
+        assert len(post_writes.uploads) == 1
+        assert _post_alternatives((await client.get("/openapi.json")).json()) == [{"type": "object"}]
+
+
+@pytest.mark.usefixtures("post_state")
+class TestGenericPostAuthorization:
+    @pytest.fixture
+    def fake_jwt_user(self):
+        return {"oid": "post-user-oid", "sub": "post-user-oid", "preferred_username": "post@test.com", "name": "Post", "roles": []}
+
+    @pytest.mark.parametrize("action,region,expected", [
+        ("device.read", "EU", 403),
+        ("device.module_twin_config.write", "US", 403),
+        ("device.module_twin_config.write", "EU", 200),
+    ])
+    async def test_real_non_admin_write_role_and_device_scope(self, client, db_session, post_writes, action, region, expected):
+        await AbacFixtures(db_session).setup(
+            users={"post": "post-user-oid"},
+            scopes={"eu": {"attr": {"region": "EU"}, "access_rule": "ALL"}},
+            roles={"role": [action]}, teams={"team": {"scope": "eu", "roles": ["role"], "users": ["post"]}},
+            devices={DEVICE: {"region": region}},
+        )
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json={"keep": None})
+        assert response.status_code == expected
+        if expected == 403:
+            _assert_no_writes(post_writes)
+        else:
+            assert json.loads(post_writes.uploads[0][0]) == {"keep": None}
+
+    @pytest.mark.parametrize("raw", ["not JSON", " " * (1024 * 1024 + 1)])
+    async def test_403_precedes_registry_disclosure_body_parsing_and_helper(
+        self, client, db_session, post_writes, monkeypatch, raw
+    ):
+        from extensions import body_validation
+        from routers.module_config import router
+
+        await AbacFixtures(db_session).setup(
+            users={"post": "post-user-oid"}, roles={"reader": ["device.read"]},
+            teams={"team": {"roles": ["reader"], "users": ["post"]}},
+        )
+        module_schema_registry.replace_extension_entries("unavailable", [], [MODULE])
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("forbidden caller must not access registry, read body or call helper")
+
+        monkeypatch.setattr(module_schema_registry, "is_unavailable", forbidden)
+        monkeypatch.setattr(module_schema_registry, "get", forbidden)
+        monkeypatch.setattr(body_validation, "read_limited_body", forbidden)
+        monkeypatch.setattr(router, "_post_module_twin_config", forbidden)
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", content=raw)
+        assert response.status_code == 403
+        _assert_no_writes(post_writes)
+
+
+@pytest.mark.usefixtures("post_state")
+class TestGenericPostSerializationRepair:
+    @pytest.fixture
+    def fake_jwt_user(self):
+        return {"oid": "repair-writer-oid", "sub": "repair-writer-oid", "preferred_username": "repair@test.com",
+                "name": "Repair Writer", "roles": []}
+
+    @pytest.fixture(autouse=True)
+    async def scoped_writer(self, db_session):
+        await AbacFixtures(db_session).setup(
+            users={"writer": "repair-writer-oid"},
+            scopes={"eu": {"attr": {"region": "EU"}, "access_rule": "ALL"}},
+            roles={"writer": ["device.module_twin_config.write", "extension.register"]},
+            teams={"eu-writers": {"scope": "eu", "roles": ["writer"], "users": ["writer"]}},
+            devices={DEVICE: {"region": "EU"}},
+        )
+
+    @pytest.mark.parametrize("depth", [300, 900])
+    async def test_parser_accepted_deep_json_round_trips_through_real_app(self, client, post_writes, depth):
+        from routers.module_config.payload import parse_module_json
+
+        raw = b'{"x":' + b"[" * depth + b'"leaf"' + b"]" * depth + b"}"
+        payload = parse_module_json(raw)
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", content=raw)
+        assert response.status_code == 200
+        assert response.json() == [payload, 200]
+        assert json.loads(post_writes.uploads[0][0]) == payload
+        assert post_writes.blobs == [f"{DEVICE}/{MODULE}/current"]
+        assert len(post_writes.patches) == 1
+
+    @pytest.mark.parametrize("raw", [
+        b'{"x":"\\ud800"}', b'{"\\ud800":null}', b'{"x":["\\udfff",{"\\ud800":"\\ud800"}]}',
+    ])
+    async def test_accepted_surrogate_keys_and_values_round_trip_through_real_app(self, client, post_writes, raw):
+        payload = json.loads(raw)
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", content=raw)
+        assert response.status_code == 200
+        assert response.json() == [payload, 200]
+        assert json.loads(post_writes.uploads[0][0]) == payload
+        assert post_writes.uploads[0][0].encode("ascii")
+        assert len(post_writes.patches) == 1
+
+    async def test_surrogate_error_location_is_safe_422_without_writes(
+        self, client, module_upstream, extension_names, post_writes
+    ):
+        module_upstream.document["components"]["schemas"]["WidgetConfigV1"] = {
+            "type": "object", "additionalProperties": {"type": "integer"},
+        }
+        await _enable(client, extension_names, _config_only(), module_upstream.base_url)
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", content=b'{"\\ud800":"bad"}')
+        assert response.status_code == 422
+        assert response.json()["errors"] == [
+            {"loc": ["\ud800"], "rule": "type", "msg": "must match the declared type"}
+        ]
+        assert "bad" not in response.text
+        _assert_no_writes(post_writes)
+
+    async def test_sa_prefixed_properties_match_input_blob_and_http(self, client, post_writes):
+        payload = {"_sa_keep": None, "nested": {"_sa_name": "x"}, "_sampleRate": 5,
+                   "items": [{"_sa_item": None}]}
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=payload)
+        assert response.status_code == 200
+        assert response.json() == [payload, 200]
+        assert json.loads(post_writes.uploads[0][0]) == payload
+        assert post_writes.blobs == [f"{DEVICE}/{MODULE}/current"]
+        assert len(post_writes.patches) == 1

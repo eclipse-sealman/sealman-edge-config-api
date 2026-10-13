@@ -4,7 +4,7 @@ import logging
 import re
 from typing import Any, Dict, List, Tuple, Union
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 
 from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Device
@@ -12,6 +12,7 @@ from authorization.permission_types import Device
 from extensions import body_validation
 from routers.base_api_router import BaseAPIRouter
 from routers.module_config.registry import ActiveModuleSchema, module_schema_registry
+from routers.module_config.payload import ModuleConfigPayload, ModuleJSONResponse, invalid_module_payload, parse_module_json
 from routers.module_config.schemas import GetModuleTwinIdentityResponse, GetModuleTwinBinaryResponse, GetModuleTwinResponse, ModuleList, ModuleConfStatus
 from routers.module_config.config_schemas.network_discover_config_v1 import GetNetDiscoverModuleConfigV1, NetworkDiscoverModuleConfigV1
 from routers.module_config.config_schemas.seal_module_opcua_client_config_v1 import OpcuaClientModuleConfigV1
@@ -45,6 +46,45 @@ async def post_module_twin_config_opcua(device: str,
 async def post_module_twin_config_discover(device: str, request: NetworkDiscoverModuleConfigV1,
                                   _ = Depends(ABACPermissionCheck(Device.MODULE_TWIN_CONFIG_WRITE))):
     return await _post_module_twin_config(device, "seal-app-net-discover", request)
+
+@module_config.post(
+    _CONFIG_OPERATION_PATH,
+    tags=["Module Configuration"],
+    description=(
+        "Validates the exact module's current configuration schema at runtime. Without an active "
+        "schema, only JSON objects are accepted. Supplied JSON is persisted without normalization."
+    ),
+    openapi_extra={"requestBody": {"required": True, "content": {
+        "application/json": {"schema": {"anyOf": [{"type": "object"}]}}
+    }}},
+)
+async def post_module_twin_config(device: str, module: str, request: Request,
+                                 _ = Depends(ABACPermissionCheck(Device.MODULE_TWIN_CONFIG_WRITE))):
+    _refuse_unavailable_module(module)
+    raw = await body_validation.read_limited_body(request)
+    # Lifecycle may have changed while awaiting the body. Select only after that await.
+    _refuse_unavailable_module(module)
+    configuration = module_schema_registry.get(module, "configuration")
+    payload = parse_module_json(raw)
+    if configuration is None:
+        if not isinstance(payload, dict):
+            return invalid_module_payload([{"loc": [], "rule": "type"}])
+    else:
+        try:
+            body_validation.check_schema(configuration.schema)
+            for component in configuration.schema.get("components", {}).get("schemas", {}).values():
+                body_validation.check_schema(component)
+            errors = body_validation.validate_module_snapshot(
+                module, configuration.purpose, configuration.version, configuration.schema, payload
+            )
+        except Exception:
+            raise HTTPException(status_code=503, detail=_MODULE_SCHEMA_UNAVAILABLE_MESSAGE)
+        if errors:
+            return invalid_module_payload(errors)
+    request_payload = ModuleConfigPayload(payload)
+    result = await _post_module_twin_config(device, module, request_payload)
+    return ModuleJSONResponse(result)
+
 
 @module_config.post("/{device}/config/status", response_model=ModuleConfStatus,
                     tags=["Module Configuration"])
@@ -117,7 +157,7 @@ async def get_module_twin_identity_reported(device: str, module: str,
 
 
 # ============================================================
-# OpenAPI - generic GET alternatives
+# OpenAPI - generic module schema alternatives
 # ============================================================
 
 _COMPONENT_REF_PREFIX = "#/components/schemas/"
@@ -158,8 +198,8 @@ def _snapshot_alternative(active: ActiveModuleSchema) -> Tuple[dict, Dict[str, d
 
 
 def _publish_generic_alternatives(schema: dict) -> None:
-    """Replaces each generic GET's 200 schema with anyOf: the core response, every active schema of
-    that response's own purpose, and null. A purpose with no active schema keeps the core schema as generated."""
+    """Publishes purpose-specific GET alternatives and POST's object fallback/configuration schemas.
+    Runtime selects by exact module ID; the document describes all current alternatives."""
     operations = (
         (_CONFIG_OPERATION_PATH, "configuration", GetModuleTwinResponse),
         (_REPORTED_OPERATION_PATH, "reported", GetModuleTwinIdentityResponse),
@@ -186,9 +226,21 @@ def _publish_generic_alternatives(schema: dict) -> None:
         }
         schema.setdefault("components", {}).setdefault("schemas", {}).update(components)
 
+    post = schema.get("paths", {}).get(_CONFIG_OPERATION_PATH, {}).get("post")
+    if post is not None:
+        alternatives = [{"type": "object"}]
+        for entry in module_schema_registry.list_active():
+            if entry.purpose == "configuration":
+                root, nested = _snapshot_alternative(entry)
+                alternatives.append(root)
+                schema.setdefault("components", {}).setdefault("schemas", {}).update(nested)
+        post["requestBody"] = {"required": True, "content": {
+            "application/json": {"schema": {"anyOf": alternatives}}
+        }}
+
 
 def install_module_config_openapi(app: FastAPI) -> None:
-    """Publishes active module schemas on the two generic GET operations. It works on a copy of the
+    """Publishes active module schemas on generic GET/POST operations. It works on a copy of the
     generated document, so FastAPI's cached `openapi_schema` is never mutated and each read reflects
     the registry as it is now, including schemas removed by disable or replace."""
     generate = app.openapi
