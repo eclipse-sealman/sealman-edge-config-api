@@ -1,4 +1,8 @@
-"""Typed write characterization and generic POST contract for module_config/router.py."""
+"""Retained typed write characterization and generic POST contract for module_config/router.py.
+
+WP-4 C1 intentionally changes only the legacy Blob expectation below: explicit nulls
+now survive, as they do in generic writes. The pinned-base probe records old bytes.
+"""
 
 import importlib
 import json
@@ -95,9 +99,9 @@ def assert_targets(writes, device, module):
 
 
 @pytest.mark.parametrize("module,payload,blob", [
-    ("seal-module-opcua-client", OPCUA, '{"schemaVersion":"1.0","clients":{}}'),
+    ("seal-module-opcua-client", OPCUA, '{"schemaVersion":"1.0","mqttEndpoint":null,"clients":{}}'),
     ("seal-app-net-discover", DISCOVER,
-     '{"scheduledCron":"* * * * *","scanDefinition":{"networkDefinition":"192.0.2.0","subnetMask":24,"ports":[80]},"endpointNames":{"192.0.2.1":{"name":"test","serviceNames":{"80":"http"}}}}'),
+     '{"scheduledCron":"* * * * *","scanDefinition":{"networkDefinition":"192.0.2.0","subnetMask":24,"ports":[80]},"endpointNames":{"192.0.2.1":{"name":"test","description":null,"serviceNames":{"80":"http"}}}}'),
 ])
 async def test_typed_post_characterization_bytes_http_and_targets(client, writes, module, payload, blob):
     response = await client.post(f"/Device-Exact/twin/config/{module}", json=payload)

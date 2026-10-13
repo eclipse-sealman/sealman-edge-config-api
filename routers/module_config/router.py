@@ -14,8 +14,6 @@ from routers.base_api_router import BaseAPIRouter
 from routers.module_config.registry import ActiveModuleSchema, module_schema_registry
 from routers.module_config.payload import ModuleConfigPayload, ModuleJSONResponse, invalid_module_payload, parse_module_json
 from routers.module_config.schemas import GetModuleTwinIdentityResponse, GetModuleTwinBinaryResponse, GetModuleTwinResponse, ModuleList, ModuleConfStatus
-from routers.module_config.config_schemas.network_discover_config_v1 import GetNetDiscoverModuleConfigV1, NetworkDiscoverModuleConfigV1
-from routers.module_config.config_schemas.seal_module_opcua_client_config_v1 import OpcuaClientModuleConfigV1
 from routers.module_config.routes.post_module_twin_config import post_module_twin_config as _post_module_twin_config
 from routers.module_config.routes.get_module_twin_identity_reported import get_module_twin_identity_reported as _get_module_twin_identity_reported
 from routers.module_config.routes.get_module_twin_config import get_module_twin_config as _get_module_twin_config
@@ -31,21 +29,37 @@ _CONFIG_OPERATION_PATH = "/{device}/twin/config/{module}"
 _REPORTED_OPERATION_PATH = "/{device}/twin/identity/{module}/reported"
 _MODULE_SCHEMA_UNAVAILABLE_MESSAGE = "Module schema is unavailable"
 _MODULE_SCHEMA_MISMATCH_MESSAGE = "Module data could not be validated against its active schema"
+_FIXED_CONFIG_PATHS = {
+    "/{device}/twin/config/seal-module-opcua-client": "seal-module-opcua-client",
+    "/{device}/twin/config/seal-app-net-discover": "seal-app-net-discover",
+}
+_FIXED_CONFIG_DESCRIPTION = (
+    "Deprecated fixed-module alias of the generic configuration contract. Uses only this module's "
+    "active configuration schema, or the generic fallback when inactive. An enabled extension's "
+    "unavailable claim returns 503 before storage access; it never falls back."
+)
+_CONFIG_POST_OPENAPI_EXTRA = {"requestBody": {"required": True, "content": {
+    "application/json": {"schema": {"anyOf": [{"type": "object"}]}}
+}}}
 
 # ============================================================
 # POST Endpoints - Write Operations  
 # ============================================================
 
-@module_config.post("/{device}/twin/config/seal-module-opcua-client", tags=["Module Configuration"])
+@module_config.post("/{device}/twin/config/seal-module-opcua-client", tags=["Module Configuration"],
+                    deprecated=True, description=_FIXED_CONFIG_DESCRIPTION,
+                    openapi_extra=_CONFIG_POST_OPENAPI_EXTRA)
 async def post_module_twin_config_opcua(device: str,
-                                        request: OpcuaClientModuleConfigV1,
+                                        request: Request,
                                         _ = Depends(ABACPermissionCheck(Device.MODULE_TWIN_CONFIG_WRITE))):
-    return await _post_module_twin_config(device, "seal-module-opcua-client", request)
+    return await _write_module_configuration(device, "seal-module-opcua-client", request)
 
-@module_config.post("/{device}/twin/config/seal-app-net-discover", tags=["Module Configuration"])
-async def post_module_twin_config_discover(device: str, request: NetworkDiscoverModuleConfigV1,
+@module_config.post("/{device}/twin/config/seal-app-net-discover", tags=["Module Configuration"],
+                    deprecated=True, description=_FIXED_CONFIG_DESCRIPTION,
+                    openapi_extra=_CONFIG_POST_OPENAPI_EXTRA)
+async def post_module_twin_config_discover(device: str, request: Request,
                                   _ = Depends(ABACPermissionCheck(Device.MODULE_TWIN_CONFIG_WRITE))):
-    return await _post_module_twin_config(device, "seal-app-net-discover", request)
+    return await _write_module_configuration(device, "seal-app-net-discover", request)
 
 @module_config.post(
     _CONFIG_OPERATION_PATH,
@@ -54,12 +68,14 @@ async def post_module_twin_config_discover(device: str, request: NetworkDiscover
         "Validates the exact module's current configuration schema at runtime. Without an active "
         "schema, only JSON objects are accepted. Supplied JSON is persisted without normalization."
     ),
-    openapi_extra={"requestBody": {"required": True, "content": {
-        "application/json": {"schema": {"anyOf": [{"type": "object"}]}}
-    }}},
+    openapi_extra=_CONFIG_POST_OPENAPI_EXTRA,
 )
 async def post_module_twin_config(device: str, module: str, request: Request,
                                  _ = Depends(ABACPermissionCheck(Device.MODULE_TWIN_CONFIG_WRITE))):
+    return await _write_module_configuration(device, module, request)
+
+
+async def _write_module_configuration(device: str, module: str, request: Request):
     _refuse_unavailable_module(module)
     raw = await body_validation.read_limited_body(request)
     # Lifecycle may have changed while awaiting the body. Select only after that await.
@@ -96,17 +112,17 @@ async def post_module_config_status(device: str, module_list: ModuleList,
 # GET Endpoints - Read Operations
 # ============================================================
 
-@module_config.get("/{device}/twin/config/seal-app-net-discover", response_model=Union[GetNetDiscoverModuleConfigV1, None], response_model_exclude_none=True,
-                   tags=["Module Configuration"])
+@module_config.get("/{device}/twin/config/seal-app-net-discover", response_model=Union[GetModuleTwinResponse, None],
+                   tags=["Module Configuration"], deprecated=True, description=_FIXED_CONFIG_DESCRIPTION)
 async def get_net_discover_twin_config(device: str,
                                  _ = Depends(ABACPermissionCheck(Device.READ))):
-    return await _get_module_twin_config(device, "seal-app-net-discover")
+    return await _read_module_configuration(device, "seal-app-net-discover")
 
-@module_config.get("/{device}/twin/config/seal-module-opcua-client", response_model=Union[OpcuaClientModuleConfigV1, None], response_model_exclude_none=True,
-                   tags=["Module Configuration"])
+@module_config.get("/{device}/twin/config/seal-module-opcua-client", response_model=Union[GetModuleTwinResponse, None],
+                   tags=["Module Configuration"], deprecated=True, description=_FIXED_CONFIG_DESCRIPTION)
 async def get_opcua_client_twin_config(device: str,
                                  _ = Depends(ABACPermissionCheck(Device.READ))):
-    return await _get_module_twin_config(device, "seal-module-opcua-client")
+    return await _read_module_configuration(device, "seal-module-opcua-client")
 
 def _refuse_unavailable_module(module: str) -> None:
     """A module that an enabled extension claims but cannot activate never falls back to the generic response."""
@@ -130,6 +146,10 @@ def _ensure_matches_schema(module: str, active: ActiveModuleSchema, payload: Any
                    tags=["Module Configuration"])
 async def get_module_twin_config(device: str, module: str,
                                  _ = Depends(ABACPermissionCheck(Device.READ))):
+    return await _read_module_configuration(device, module)
+
+
+async def _read_module_configuration(device: str, module: str):
     _refuse_unavailable_module(module)
     configuration = module_schema_registry.get(module, "configuration")
     payload = await _get_module_twin_config(device, module)
@@ -239,8 +259,29 @@ def _publish_generic_alternatives(schema: dict) -> None:
         }}
 
 
+def _publish_fixed_module_schemas(schema: dict) -> None:
+    """Fixed aliases publish only their exact module's configuration snapshot, never the union."""
+    for path, module in _FIXED_CONFIG_PATHS.items():
+        operations = schema.get("paths", {}).get(path, {})
+        active = module_schema_registry.get(module, "configuration")
+        if active is None:
+            continue  # Generated GET object/null and required POST object are the generic fallbacks.
+        root, nested = _snapshot_alternative(active)
+        schema.setdefault("components", {}).setdefault("schemas", {}).update(nested)
+        get = operations.get("get")
+        if get is not None:
+            get["responses"]["200"]["content"]["application/json"]["schema"] = {
+                "anyOf": [root, {"type": "null"}],
+            }
+        post = operations.get("post")
+        if post is not None:
+            post["requestBody"] = {"required": True, "content": {
+                "application/json": {"schema": root}
+            }}
+
+
 def install_module_config_openapi(app: FastAPI) -> None:
-    """Publishes active module schemas on generic GET/POST operations. It works on a copy of the
+    """Publishes active module schemas on generic and fixed configuration operations. It works on a copy of the
     generated document, so FastAPI's cached `openapi_schema` is never mutated and each read reflects
     the registry as it is now, including schemas removed by disable or replace."""
     generate = app.openapi
@@ -248,6 +289,7 @@ def install_module_config_openapi(app: FastAPI) -> None:
     def openapi() -> Dict[str, Any]:
         schema = copy.deepcopy(generate())
         _publish_generic_alternatives(schema)
+        _publish_fixed_module_schemas(schema)
         return schema
 
     app.openapi = openapi
