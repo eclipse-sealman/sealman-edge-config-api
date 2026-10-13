@@ -1,11 +1,17 @@
-from typing import Union
+import copy
+import hashlib
+import logging
+import re
+from typing import Any, Dict, List, Tuple, Union
 
-from fastapi import Depends
+from fastapi import Depends, FastAPI, HTTPException
 
 from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Device
 
+from extensions import body_validation
 from routers.base_api_router import BaseAPIRouter
+from routers.module_config.registry import ActiveModuleSchema, module_schema_registry
 from routers.module_config.schemas import GetModuleTwinIdentityResponse, GetModuleTwinBinaryResponse, GetModuleTwinResponse, ModuleList, ModuleConfStatus
 from routers.module_config.config_schemas.network_discover_config_v1 import GetNetDiscoverModuleConfigV1, NetworkDiscoverModuleConfigV1
 from routers.module_config.config_schemas.seal_module_opcua_client_config_v1 import OpcuaClientModuleConfigV1
@@ -17,6 +23,13 @@ from routers.module_config.routes.post_module_config_status import (post_module_
                                                                     as _post_module_config_status)
 
 module_config = BaseAPIRouter()
+
+logger = logging.getLogger("EdgeConfigAPI")
+
+_CONFIG_OPERATION_PATH = "/{device}/twin/config/{module}"
+_REPORTED_OPERATION_PATH = "/{device}/twin/identity/{module}/reported"
+_MODULE_SCHEMA_UNAVAILABLE_MESSAGE = "Module schema is unavailable"
+_MODULE_SCHEMA_MISMATCH_MESSAGE = "Module data could not be validated against its active schema"
 
 # ============================================================
 # POST Endpoints - Write Operations  
@@ -55,11 +68,34 @@ async def get_opcua_client_twin_config(device: str,
                                  _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _get_module_twin_config(device, "seal-module-opcua-client")
 
-@module_config.get("/{device}/twin/config/{module}", response_model=Union[GetModuleTwinResponse, None],
+def _refuse_unavailable_module(module: str) -> None:
+    """A module that an enabled extension claims but cannot activate never falls back to the generic response."""
+    if module_schema_registry.is_unavailable(module):
+        raise HTTPException(status_code=503, detail=_MODULE_SCHEMA_UNAVAILABLE_MESSAGE)
+
+
+def _ensure_matches_schema(module: str, active: ActiveModuleSchema, payload: Any) -> None:
+    """Stored or reported data that violates its active snapshot is a server error. The details stay in the log."""
+    try:
+        errors = body_validation.validate_module_snapshot(module, active.purpose, active.version, active.schema, payload)
+    except Exception:
+        logger.exception(f"Module '{module}' {active.purpose} schema could not be applied")
+        raise HTTPException(status_code=500, detail=_MODULE_SCHEMA_MISMATCH_MESSAGE)
+    if errors:
+        logger.error(f"Module '{module}' {active.purpose} data violates its active schema: {errors}")
+        raise HTTPException(status_code=500, detail=_MODULE_SCHEMA_MISMATCH_MESSAGE)
+
+
+@module_config.get(_CONFIG_OPERATION_PATH, response_model=Union[GetModuleTwinResponse, None],
                    tags=["Module Configuration"])
 async def get_module_twin_config(device: str, module: str,
                                  _ = Depends(ABACPermissionCheck(Device.READ))):
-    return await _get_module_twin_config(device, module)
+    _refuse_unavailable_module(module)
+    configuration = module_schema_registry.get(module, "configuration")
+    payload = await _get_module_twin_config(device, module)
+    if configuration is not None and payload is not None:
+        _ensure_matches_schema(module, configuration, payload)
+    return payload
 
 
 @module_config.get("/{device}/twin/config/{module}/binary", response_model=GetModuleTwinBinaryResponse,
@@ -68,8 +104,98 @@ async def get_module_twin_config_binary(device: str, module: str,
                                         _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _get_module_twin_config_binary(device, module)
 
-@module_config.get("/{device}/twin/identity/{module}/reported", response_model=GetModuleTwinIdentityResponse,
+@module_config.get(_REPORTED_OPERATION_PATH, response_model=GetModuleTwinIdentityResponse,
                    tags=["Module Configuration"])
 async def get_module_twin_identity_reported(device: str, module: str,
                                  _ = Depends(ABACPermissionCheck(Device.READ))):
-    return await _get_module_twin_identity_reported(device, module)
+    _refuse_unavailable_module(module)
+    reported = module_schema_registry.get(module, "reported")
+    payload = await _get_module_twin_identity_reported(device, module)
+    if reported is not None and payload is not None:
+        _ensure_matches_schema(module, reported, payload)
+    return payload
+
+
+# ============================================================
+# OpenAPI - generic GET alternatives
+# ============================================================
+
+_COMPONENT_REF_PREFIX = "#/components/schemas/"
+_COMPONENT_NAME_INVALID_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _component_ref(name: str) -> str:
+    return f"{_COMPONENT_REF_PREFIX}{name}"
+
+
+def _snapshot_alternative(active: ActiveModuleSchema) -> Tuple[dict, Dict[str, dict]]:
+    """Returns one active snapshot's root schema and its components, renamed under a prefix derived
+    from the exact module ID and purpose so they cannot collide with core or other module components."""
+    digest = hashlib.sha256(f"{active.purpose}:{active.module_id}".encode("utf-8")).hexdigest()[:12]
+    prefix = f"Module_{active.purpose}_{digest}_"
+
+    def hoisted(name: str) -> str:
+        return prefix + _COMPONENT_NAME_INVALID_RE.sub("_", name)
+
+    def rewrite(node: Any) -> Any:
+        if isinstance(node, list):
+            return [rewrite(item) for item in node]
+        if isinstance(node, dict):
+            return {key: _rewrite_ref(value) if key == "$ref" and isinstance(value, str) else rewrite(value)
+                    for key, value in node.items()}
+        return node
+
+    def _rewrite_ref(ref: str) -> str:
+        if not ref.startswith(_COMPONENT_REF_PREFIX):
+            return ref
+        name = ref[len(_COMPONENT_REF_PREFIX):].replace("~1", "/").replace("~0", "~")
+        return _component_ref(hoisted(name))
+
+    root = rewrite({key: value for key, value in active.schema.items() if key != "components"})
+    components = {hoisted(name): rewrite(component)
+                  for name, component in active.schema.get("components", {}).get("schemas", {}).items()}
+    return root, components
+
+
+def _publish_generic_alternatives(schema: dict) -> None:
+    """Replaces each generic GET's 200 schema with anyOf: the core response, every active schema of
+    that response's own purpose, and null. A purpose with no active schema keeps the core schema as generated."""
+    operations = (
+        (_CONFIG_OPERATION_PATH, "configuration", GetModuleTwinResponse),
+        (_REPORTED_OPERATION_PATH, "reported", GetModuleTwinIdentityResponse),
+    )
+    for path, purpose, core_model in operations:
+        operation = schema.get("paths", {}).get(path, {}).get("get")
+        if operation is None:
+            continue
+        active = [entry for entry in module_schema_registry.list_active() if entry.purpose == purpose]
+        if not active:
+            continue
+        alternatives: List[dict] = [{"$ref": _component_ref(core_model.__name__)}]
+        components: Dict[str, dict] = {}
+        for entry in active:
+            root, nested = _snapshot_alternative(entry)
+            alternatives.append(root)
+            components.update(nested)
+        alternatives.append({"type": "null"})
+
+        response_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+        operation["responses"]["200"]["content"]["application/json"]["schema"] = {
+            **{key: value for key, value in response_schema.items() if key not in ("$ref", "anyOf")},
+            "anyOf": alternatives,
+        }
+        schema.setdefault("components", {}).setdefault("schemas", {}).update(components)
+
+
+def install_module_config_openapi(app: FastAPI) -> None:
+    """Publishes active module schemas on the two generic GET operations. It works on a copy of the
+    generated document, so FastAPI's cached `openapi_schema` is never mutated and each read reflects
+    the registry as it is now, including schemas removed by disable or replace."""
+    generate = app.openapi
+
+    def openapi() -> Dict[str, Any]:
+        schema = copy.deepcopy(generate())
+        _publish_generic_alternatives(schema)
+        return schema
+
+    app.openapi = openapi

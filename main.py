@@ -41,7 +41,7 @@ from helper import AuditTrail
 
 from routers.cmd_proxy.router import cmd_proxy
 from routers.general.router import general
-from routers.module_config.router import module_config
+from routers.module_config.router import install_module_config_openapi, module_config
 from routers.smart_ems.router import smart_ems
 from routers.network_discovery.router import network_discovery
 from routers.auth.router import auth
@@ -167,6 +167,8 @@ app = FastAPI(
         "clientId": SWAGGER_CLIENT_ID,
     },
 )
+
+install_module_config_openapi(app)
 
 allowed_origins = []
 if CORS_ALLOWED_ORIGINS is not None:

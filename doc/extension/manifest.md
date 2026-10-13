@@ -1,6 +1,6 @@
 # Extension manifest: module schemas and response references
 
-> **Status: WP-1 implemented (IIOT-2789).** `POST /extensions` and `PUT /extensions/{name}` accept `module_schemas` and `response_ref`, resolve and persist their schemas, and activate them on enable and at startup. Manifests without these fields are unchanged (`schema_version: 1`). **Planned, not yet enforced:** the generic configuration and reported GET and the generic configuration POST do not validate against these schemas, and do not return 503 for an unavailable module, until IIOT-2789 WP-2 and WP-3 ship. Until then, `module_schemas` is registration and lifecycle only.
+> **Status: WP-1 and WP-2 implemented (IIOT-2789).** `POST /extensions` and `PUT /extensions/{name}` accept `module_schemas` and `response_ref`, resolve and persist their schemas, and activate them on enable and at startup. The generic configuration and reported GET validate against these schemas (WP-2). **Planned, not yet enforced:** the generic configuration POST does not validate against `schema_ref` until IIOT-2789 WP-3 ships.
 
 ## Module schemas
 
@@ -22,8 +22,8 @@ An extension that owns a module's configuration declares it under `module_schema
 |---|---|---|
 | module ID (key) | yes | Exact IoT Hub module ID. Only one registered extension may claim it, including a disabled one. A second claim is rejected with 409. |
 | `upstream` | yes | Key of an `http` upstream declared in the same manifest. |
-| `schema_ref` | yes | Local component in that upstream's OpenAPI document, for configuration. Enforcement on `GET` and `POST /{device}/twin/config/{module}` is planned (WP-2/WP-3). |
-| `reported_schema_ref` | no | Local component for the filtered response of `GET /{device}/twin/identity/{module}/reported`. Enforcement is planned (WP-2). Without it, the generic reported response applies. |
+| `schema_ref` | yes | Local component in that upstream's OpenAPI document, for configuration. Enforced on `GET /{device}/twin/config/{module}`. Enforcement on `POST /{device}/twin/config/{module}` is planned (WP-3). |
+| `reported_schema_ref` | no | Local component for the filtered response of `GET /{device}/twin/identity/{module}/reported`. Enforced on that GET. Without it, the generic reported response applies. |
 
 A configuration schema never validates reported data, and a reported schema never validates configuration. Each is stored as its own snapshot.
 
@@ -59,22 +59,25 @@ If the upstream cannot be read, the route still registers and its response is si
 | Register or replace with an invalid module schema (422) or an unreachable upstream (502) | Rejected. Nothing is saved, and the previous state is kept. |
 | Register or replace with a module ID claimed by another extension | Rejected with 409. Nothing is saved. |
 | Enable or API startup | Activates the stored valid snapshots. Enable re-checks the claim (409 if another extension holds it). A failed refresh keeps the last valid snapshot. |
-| Enabled, but a module's stored snapshot cannot be activated | The module ID stays claimed and gets no active schema. Planned: configuration and reported calls for that module return 503 and never fall back to the generic response (WP-2/WP-3). |
+| Enabled, but a module's stored snapshot cannot be activated | The module ID stays claimed and gets no active schema. Configuration and reported `GET` calls for that module return 503 and never fall back to the generic response. Planned for the configuration `POST` (WP-3). |
 | Replace without `reported_schema_ref` | Removes the reported snapshot. The module returns to the generic reported response. The core route stays mounted. |
 | Disable | Removes the module's active schemas. The module ID stays claimed by the disabled extension, so another extension still cannot register it. |
 | Deregister | Removes the module's active schemas and its claim. The module ID becomes available again. |
 
-## Runtime responses for a declared module (planned)
+## Runtime responses for a declared module
 
-These rules are enforced by the generic routes in WP-2 and WP-3. They are not active yet.
+`GET` rows are enforced (WP-2). The `POST` row is planned and not active yet (WP-3).
 
-| Situation | Planned response |
+| Situation | Response |
 |---|---|
-| `POST` configuration violates `schema_ref` | 422 with the validation errors. |
-| Stored configuration violates `schema_ref` | Safe server error. The invalid data is not returned. |
-| Reported data violates `reported_schema_ref` | Safe server error. The generic response is not substituted. |
-| Module ID claimed but unavailable | 503. |
-| No `reported_schema_ref`, or the module is not declared | Generic reported response, as today. |
+| `POST` configuration violates `schema_ref` | Planned (WP-3): 422 with the validation errors. |
+| `GET` stored configuration violates `schema_ref` | Safe server error, `500` with the fixed message `Module data could not be validated against its active schema`. The invalid data and the validation details are not returned; they are logged server-side. |
+| `GET` reported data violates `reported_schema_ref` | The same safe `500`. The generic response is not substituted. |
+| `GET` module ID claimed but unavailable | `503` with `Module schema is unavailable`, before any Blob or IoT Hub read. Device read authorization still runs first. |
+| `GET` with no active schema for that purpose, or the module is not declared | Generic response, as today. |
+| `GET` for a module with no stored data | `null`, as today. Missing module keeps today's 404 for configuration and today's 500 wrapper for reported. |
+
+The generic `GET` routes publish their OpenAPI 200 response as `anyOf`: the core response, each active schema of that response's purpose only, and `null`. An unregistered module, a disabled extension or a configuration-only entry removes its reported alternative and keeps the core reported response.
 
 ## Route collisions
 
@@ -82,4 +85,4 @@ WP-1 does not check whether two routes share a method and path. That check is pl
 
 ## Maintenance
 
-WP-1 updated this page when its fields shipped. WP-2 and WP-3 must replace the "planned" statements above with the enforced behavior when their generic routes ship, and check every example against the running API.
+WP-1 updated this page when its fields shipped. WP-2 replaced the `GET` statements with the enforced behavior. WP-3 must replace the remaining "planned" `POST` statements when the generic configuration POST ships. Every example on this page is checked against the running API.

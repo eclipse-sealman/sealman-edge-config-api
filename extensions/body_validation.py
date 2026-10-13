@@ -8,7 +8,7 @@ than silently succeeding or hanging.
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 from jsonschema import Draft202012Validator
@@ -18,6 +18,9 @@ from referencing import Registry
 # One JSON Schema validator per route, built once (at first use) and reused for every
 # subsequent request against that route. Never rebuilt inside the request handler.
 _validator_cache: Dict[str, Draft202012Validator] = {}
+
+# One validator per active module snapshot, keyed by its exact module ID, purpose and version.
+_module_validator_cache: Dict[Tuple[str, str, str], Draft202012Validator] = {}
 
 # No `retrieve` callback: an external `$ref` in a registered schema raises instead of
 # making a network call during validation, an SSRF-shaped risk closed by construction.
@@ -64,6 +67,18 @@ def get_validator(route_id: str, schema: dict) -> Draft202012Validator:
         validator = Draft202012Validator(schema, registry=_NO_REMOTE_REFS)
         _validator_cache[route_id] = validator
     return validator
+
+
+def validate_module_snapshot(module_id: str, purpose: str, version: str, schema: dict, payload: Any) -> List[Dict[str, Any]]:
+    """Validates `payload` against one active module schema snapshot, collecting every failing
+    field. The validator is cached per module ID, purpose and version, so a replaced snapshot
+    never reuses a validator compiled from older schema JSON."""
+    key = (module_id, purpose, version)
+    validator = _module_validator_cache.get(key)
+    if validator is None:
+        validator = Draft202012Validator(schema, registry=_NO_REMOTE_REFS)
+        _module_validator_cache[key] = validator
+    return _errors_to_dicts(list(validator.iter_errors(payload)))
 
 
 def invalidate(route_id: str) -> None:
