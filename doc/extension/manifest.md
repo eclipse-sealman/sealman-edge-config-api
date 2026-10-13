@@ -43,6 +43,54 @@ A configuration schema never validates reported data, and a reported schema neve
 
 If the upstream cannot be read, the route still registers and its response is simply not documented. The stored response snapshot is never returned by `GET /extensions`.
 
+## Complete neutral test example
+
+The combined integration fixture serves these FastAPI/Pydantic-generated components
+and a non-template `/probe` on loopback HTTP. This is a test-only example, not a
+production provider or protocol schema. Replace the URL with the provider's
+allowlisted HTTP upstream; the integration test substitutes an ephemeral port.
+The `required_action` is enrolled by registration but is **not granted** to callers.
+
+```json
+{
+  "schema_version": 1,
+  "name": "neutral_example",
+  "description": "Neutral combined lifecycle fixture",
+  "upstreams": {
+    "svc": {"type": "http", "base_url": "http://127.0.0.1:9000"}
+  },
+  "actions": [
+    {"name": "neutral_example.probe", "description": "Independent probe permission"}
+  ],
+  "routes": [
+    {
+      "upstream": "svc",
+      "path": "/neutral_example/probe",
+      "upstream_path": "/probe",
+      "method": "GET",
+      "summary": "Neutral probe",
+      "response_ref": true,
+      "required_action": "neutral_example.probe",
+      "query_params": [{"name": "sample", "type": "string", "required": true}]
+    }
+  ],
+  "module_schemas": {
+    "neutral-module": {
+      "upstream": "svc",
+      "schema_ref": "#/components/schemas/NeutralConfig",
+      "reported_schema_ref": "#/components/schemas/NeutralReported"
+    }
+  }
+}
+```
+
+`GET /extensions/schema` is the authenticated registration JSON Schema, not an
+OpenAPI document or a provider schema. The combined test validates this example
+against it, registers/enables it through management HTTP, and checks runtime and
+OpenAPI behavior. Module operations use persisted snapshots; only the probe
+proxies to the provider. Its response is relayed unchanged even if it does not
+match the documented `response_ref`.
+
 ## Schema resolution
 
 - The core fetches only `{base_url}/openapi.json` of the referenced upstream. Redirects are not followed, and the manifest cannot supply a schema URL.
@@ -63,6 +111,14 @@ If the upstream cannot be read, the route still registers and its response is si
 | Replace without `reported_schema_ref` | Removes the reported snapshot. The module returns to the generic reported response. The core route stays mounted. |
 | Disable | Removes the module's active schemas. The module ID stays claimed by the disabled extension, so another extension still cannot register it. |
 | Deregister | Removes the module's active schemas and its claim. The module ID becomes available again. |
+
+Save and refresh are different: a replacement whose configuration resolves but
+whose reported reference is invalid rejects the entire save, preserving the
+manifest, both snapshots, active behavior and OpenAPI. On enable/startup refresh,
+each failed purpose retains its last valid snapshot while an independently
+successful purpose can advance its version. A syntactically invalid persisted
+snapshot is not a usable last-valid contract: if refresh cannot repair it, hydration keeps
+the module claimed/unavailable and module operations fail with 503.
 
 ## Runtime responses for a declared module
 
@@ -111,8 +167,8 @@ For each active fixed ID, OpenAPI publishes only its **configuration** snapshot:
 
 ## Route collisions
 
-WP-1 does not check whether two routes share a method and path. That check is planned in the extension template-routes plan (`iiot-XXXX-extension-template-routes`), not in IIOT-2789.
+WP-1 does not check whether two routes share a method and path. That check is planned in the extension template-routes plan (`iiot-2916-modules-templates`), not in IIOT-2789.
 
 ## Maintenance
 
-WP-1 updated this page when its fields shipped. WP-2 documented enforced generic GET behavior; WP-3 documents generic POST fallback, literal serialization, safe errors and dynamic OpenAPI. WP-4 applies the shared configuration contract to the four deprecated fixed aliases; route-collision checks remain in the separate template-routes plan. Examples and contracts are covered by isolated tests with synthetic schemas and mocked Blob/IoT Hub.
+WP-1 updated this page when its fields shipped. WP-2 documented enforced generic GET behavior; WP-3 documents generic POST fallback, literal serialization, safe errors and dynamic OpenAPI. WP-4 applies the shared configuration contract to the four deprecated fixed aliases; route-collision checks remain in the separate template-routes plan. Examples and contracts are covered by isolated tests with synthetic schemas and mocked Blob/IoT Hub. `tests/integration/test_module_schema_lifecycle.py` combines real loopback schema/probe HTTP, management lifecycle, PostgreSQL snapshots, explicit startup hydration, non-admin ABAC, literal POST-to-GET storage parity and both OpenAPI hooks. See [testing](../testing.md) for the reproducible command and isolation boundaries. This does not establish production provider, live-device, cloud or OIDC parity.

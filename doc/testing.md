@@ -123,3 +123,56 @@ world = await AbacFixtures(db_session).setup(
 ```
 
 Available action names are seeded by the `seed_actions` Alembic migration. Common values: `device.read`, `device.deployment.write`, `platform.authorization.read`, `platform.authorization.write`.
+
+### Combined module-schema lifecycle
+
+`tests/integration/test_module_schema_lifecycle.py` joins the previously separate
+module and dynamic-response contracts on the WP-1–WP-4 core behavior:
+
+- Function-scoped test-only FastAPI/Pydantic models generate the provider OpenAPI
+  document. A real allowlisted loopback `ThreadingHTTPServer` serves it and a
+  neutral, non-template probe. Schema-fetch/proxy counters prove module operations
+  do not contact that service at request time. `response_ref` remains documentation
+  only; the probe's deliberately different response is relayed unchanged.
+- The real management API (via the shared ASGI client) registers disabled providers,
+  enables/replaces/disables/re-enables/deregisters them, and persists snapshots in
+  Testcontainers PostgreSQL. The complete [manifest example](extension/manifest.md)
+  is validated against the authenticated `/extensions/schema` and exercised through
+  registration, runtime and OpenAPI. Separate providers reuse component names
+  without sharing module/purpose namespaces.
+- One in-memory fake Blob store connects POST uploads to configuration GET downloads.
+  Only external Blob/IoT Hub I/O and synthetic storage/auth settings are replaced;
+  the real parser, schema validator, upload helper, UUID and desired-twin patch
+  construction run. Neutral configuration and both deprecated fixed IDs retain
+  supplied nulls/extras without defaults, coercion or pruning. Configuration GET
+  still has its inherited object/`null` shape, not a newly broadened all-JSON contract.
+- `AbacFixtures` seeds non-admin users, roles, teams and device scopes through real
+  repositories. Read/write module actions and the probe action are independent;
+  registering an action does not grant it. A separate no-credentials case removes
+  only the JWT identity override and checks rejection by the real public dependency
+  chain before OIDC or cloud I/O. Synthetic identity is not live JWT/OIDC verification.
+- Tests explicitly call `extensions.setup.hydrate_all_routes()` with the session
+  factory bound to the isolated transaction. This exercises the startup hydration
+  entrypoint, **not** the entire application lifespan, OIDC discovery or background
+  jobs. Failed purpose refreshes keep last-valid snapshots independently; corrupted
+  persisted syntax remains claimed/unavailable before cloud effects.
+- Teardown closes loopback servers and the per-test HTTP upstream client, unmounts
+  only owned extensions, and restores registry, validator-cache, OpenAPI and temporary
+  dependency overrides even after assertion failure. Database changes roll back.
+
+Run with the existing development environment and Docker, without a production
+`.env` or cloud/device/OIDC credentials:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/integration/test_module_schema_lifecycle.py -q -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit -q -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/integration -q -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m alembic heads
+git diff --check
+```
+
+Existing module/extension tests remain the evidence for detailed malformed-body,
+size-limit, helper-error, local-ref, deep/surrogate/`_sa` serialization and disabled
+extension-startup regressions. These local tests do not verify production protocol
+schema parity, templates/CRUD/collisions, consumer/edge changes, live devices,
+release/deployment or cloud/OIDC connectivity; they do not replace Owner review.

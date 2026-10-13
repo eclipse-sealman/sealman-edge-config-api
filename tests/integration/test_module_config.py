@@ -1135,6 +1135,14 @@ class TestGenericPostLifecycle:
         read = await client.get(f"/{DEVICE}/twin/config/{module_id}")
         assert read.status_code == 200 and read.json() == payload
         assert iot_hub.requested == []
+        # Disabled startup also preserves independent reported fallback: no fetch
+        # or activation, even when this data violates the persisted contract.
+        projection = {"config": {"status": 123}, "diagnostics": {"info": None}}
+        iot_hub.set_twin({"properties": {"reported": projection}}, module=module_id)
+        reported = await client.get(f"/{DEVICE}/twin/identity/{module_id}/reported")
+        assert reported.status_code == 200 and reported.json() == projection
+        assert iot_hub.requested == [(DEVICE, module_id)]
+        assert len(post_writes.uploads) == 1 and len(post_writes.patches) == 1
 
 
 @pytest.mark.usefixtures("post_state")
