@@ -1,0 +1,34 @@
+{
+  "document": {
+    "config": {
+      "endpoint": "{{opc endpoint}}",
+      "unknownField": [
+        1,
+        true,
+        null,
+        {
+          "v": "${value}"
+        }
+      ]
+    },
+    "metadata": {
+      "nullable": null,
+      "owner": "工場",
+      "revision": 7
+    },
+    "placeholders": [
+      {
+        "description": "Ünicode & spaces",
+        "token": "{{device name}}"
+      }
+    ],
+    "schemaVersion": "template-not-runtime"
+  },
+  "names": [
+    "Pump ü #1 +%?.JSON",
+    "Folder/模板 config.json",
+    "NoSuffix",
+    "has.json.json",
+    " spaced "
+  ]
+}

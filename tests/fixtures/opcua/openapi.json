@@ -1,6 +1,19 @@
 {
   "components": {
     "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
       "HealthResponse": {
         "properties": {
           "service": {
@@ -24,6 +37,7 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "JsonValue": {},
       "OpcuaClientAnonymousCredentials": {
         "properties": {
           "type": {
@@ -492,6 +506,70 @@
         ],
         "title": "OpcuaClientUserNameCredentials",
         "type": "object"
+      },
+      "OpcuaTemplateDocument": {
+        "$ref": "#/components/schemas/JsonValue",
+        "title": "OpcuaTemplateDocument"
+      },
+      "OpcuaTemplateNames": {
+        "items": {
+          "type": "string"
+        },
+        "title": "OpcuaTemplateNames",
+        "type": "array"
+      },
+      "OpcuaTemplateReadError": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "OpcuaTemplateReadError",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
       }
     }
   },
@@ -517,6 +595,136 @@
           }
         },
         "summary": "Health"
+      }
+    },
+    "/opcua/template": {
+      "get": {
+        "operationId": "read_template_opcua_template_get",
+        "parameters": [
+          {
+            "description": "Exact stored catalog name",
+            "in": "query",
+            "name": "template_name",
+            "required": true,
+            "schema": {
+              "description": "Exact stored catalog name",
+              "minLength": 1,
+              "title": "Template Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateDocument"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Template not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Invalid catalog source response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Catalog source unavailable"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Catalog source timed out"
+          }
+        },
+        "summary": "Read Template"
+      }
+    },
+    "/opcua/template/list": {
+      "get": {
+        "operationId": "list_templates_opcua_template_list_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateNames"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Invalid catalog source response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Catalog source unavailable"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Catalog source timed out"
+          }
+        },
+        "summary": "List Templates"
       }
     }
   }

@@ -7,9 +7,17 @@
     {
       "description": "Invoke OPCUA write methods",
       "name": "opcua.methods.write"
+    },
+    {
+      "description": "List OPCUA template names",
+      "name": "opcua.templates.list"
+    },
+    {
+      "description": "Read OPCUA template content",
+      "name": "opcua.templates.read"
     }
   ],
-  "description": "OPCUA runtime 1.0 configuration, reported state and direct methods",
+  "description": "OPCUA runtime 1.0 configuration, reported state, direct methods and read-only templates",
   "module_schemas": {
     "seal-module-opcua-client": {
       "reported_schema_ref": "#/components/schemas/OpcuaClientReportedV1",
@@ -1513,6 +1521,33 @@
       "scope_param": "device_id",
       "scoped": true,
       "upstream": "opcua-iotedge",
+      "visibility": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/template/opc-ua/list",
+      "required_action": "opcua.templates.list",
+      "response_ref": true,
+      "scoped": false,
+      "upstream": "opcua-http",
+      "upstream_path": "/opcua/template/list",
+      "visibility": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/template/opc-ua",
+      "query_params": [
+        {
+          "name": "template_name",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.templates.read",
+      "response_ref": true,
+      "scoped": false,
+      "upstream": "opcua-http",
+      "upstream_path": "/opcua/template",
       "visibility": "public"
     }
   ],

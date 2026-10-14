@@ -9,27 +9,67 @@
       "sourcePath": "contracts/methods.json"
     },
     "openapi.json": {
-      "sha256": "f97771efa2526a89f6a94fb989dd21b135d205df1686d9e1a1ee35802b2a8948",
+      "sha256": "e19dde0bb7cb2e885b732ca39f1fed83e4970f03e319c07b602c843d81c36208",
       "sourcePath": "contracts/openapi.json"
     },
     "registration.json": {
-      "sha256": "b8827daae75b9e494252d64e1bce25d9d2041eaff408e255b3083154d466ab7c",
+      "sha256": "2ee8486198ce7473878a6774852900994390e9de353fab9466d6cdc2dc4a880b",
       "sourcePath": "registration.json"
     },
     "reported-operational.json": {
       "sha256": "71201d4a7f40788c77cec336bea3066151f10e0b6014e5fb5c4eb9206ac26e9f",
       "sourcePath": "contracts/fixtures/reported/operational.json"
+    },
+    "template-contract.json": {
+      "extraction": "AST literal NAMES and DOCUMENT only; deterministic synthetic fixture, not a live catalog capture",
+      "sha256": "d63580dd9045a382bb67796cf4ee8415be72c39851d39fc54d075a016bad50f5",
+      "sourcePath": "microservices/tests/test_template_reads.py"
     }
   },
-  "generation": "Provider GET /openapi.json via FastAPI TestClient; actual Zod 4.3.6 input-mode draft-2020-12 DTO exports plus source-backed ^opc\\.tcp:// dynamic endpoint override; Node 22.22.2. No regeneration by core.",
+  "generation": "Provider GET /openapi.json via FastAPI TestClient; actual Zod 4.3.6 input-mode draft-2020-12 DTO exports plus source-backed ^opc\\.tcp:// dynamic endpoint override; Node 22.22.2. No regeneration by core. WP-7 committed provider snapshot/manifest copied via git show; template literals extracted without executing/importing provider code. No live catalog claim.",
   "pendingAcceptance": [
-    "WP-3 canonical configuration ABAC/literal round trips",
-    "WP-7 template bindings and live Blob parity",
+    "WP-7 live Blob name/content parity pending secure Owner settings",
     "WP-6 discovery",
     "WP-8 reported public projection readiness",
     "independent review and Owner no-CI exception"
   ],
-  "providerCommit": "ad10d2d67d02b4bf0493c273487ad3e36b68d2fc",
+  "providerCommit": "b9c6490fc881ee87dd694b80132ef8895443314e",
+  "providerHistory": [
+    {
+      "files": {
+        "configuration.json": {
+          "sha256": "1c796235c4d122488917210656e778d149fd51e83f34616c5c0bbf8db3f140bd",
+          "sourcePath": "contracts/fixtures/config/accept-anonymous-sinks.json"
+        },
+        "methods.json": {
+          "sha256": "55258b95bb306c4b495bd997e38998c04033454984ed7149744ba8628e295407",
+          "sourcePath": "contracts/methods.json"
+        },
+        "openapi.json": {
+          "sha256": "f97771efa2526a89f6a94fb989dd21b135d205df1686d9e1a1ee35802b2a8948",
+          "sourcePath": "contracts/openapi.json"
+        },
+        "registration.json": {
+          "sha256": "b8827daae75b9e494252d64e1bce25d9d2041eaff408e255b3083154d466ab7c",
+          "sourcePath": "registration.json"
+        },
+        "reported-operational.json": {
+          "sha256": "71201d4a7f40788c77cec336bea3066151f10e0b6014e5fb5c4eb9206ac26e9f",
+          "sourcePath": "contracts/fixtures/reported/operational.json"
+        }
+      },
+      "providerCommit": "ad10d2d67d02b4bf0493c273487ad3e36b68d2fc",
+      "sourceSha256": {
+        "contracts/export_provider.py": "adc39e380947a00d80888e2761f73a93b4653cd68a5d867b942e42892f2453d1",
+        "edge-opcua-client/src/app.ts": "217bf821ca23319eb7349b4670a464cfa5ac1167f59c595e1fdd0f38c031f874",
+        "edge-opcua-client/src/dtos/base/connectionDynamicSchema.ts": "c7b42b73bc91f68c7a330a4b4fe02b86415531a0697ee6d13a95355ce63ec0a3",
+        "edge-opcua-client/test/contract/methodSchemas.contract.spec.ts": "25292410ecedf157f1994629f5ed2033b1330fb18e73d8eb23232fd626e3d66b",
+        "edge-opcua-client/test/contract/methodSchemas.ts": "e6f59fb1d06f7ffb1b484af8031d2623ed9ddcaaa5664b859bbf5ee47f08acd3",
+        "microservices/main.py": "1bc5ecf65980587da6ab29c2b75b70305e49e85dd0c97b188635d7ed1315dc53",
+        "microservices/schemas.py": "ce26c1dcb59b2a35c90a5c6fe7122a10e1f44f6f5a7703d3b180fef092b41da4"
+      }
+    }
+  ],
   "providerRepository": "extension-opcua",
   "registeredHandlers": {
     "browseNode": {
@@ -117,12 +157,15 @@
   ],
   "runtimeSourceCommit": "1761b5f237a8d177d69f8dabca9f3d70166e9c08",
   "sourceSha256": {
-    "contracts/export_provider.py": "adc39e380947a00d80888e2761f73a93b4653cd68a5d867b942e42892f2453d1",
+    "contracts/export_provider.py": "71760a0449c0c0627ba173a81b4e1a70ba3fcd9c096ff8826d08cc42257c22d3",
     "edge-opcua-client/src/app.ts": "217bf821ca23319eb7349b4670a464cfa5ac1167f59c595e1fdd0f38c031f874",
     "edge-opcua-client/src/dtos/base/connectionDynamicSchema.ts": "c7b42b73bc91f68c7a330a4b4fe02b86415531a0697ee6d13a95355ce63ec0a3",
     "edge-opcua-client/test/contract/methodSchemas.contract.spec.ts": "25292410ecedf157f1994629f5ed2033b1330fb18e73d8eb23232fd626e3d66b",
     "edge-opcua-client/test/contract/methodSchemas.ts": "e6f59fb1d06f7ffb1b484af8031d2623ed9ddcaaa5664b859bbf5ee47f08acd3",
-    "microservices/main.py": "1bc5ecf65980587da6ab29c2b75b70305e49e85dd0c97b188635d7ed1315dc53",
-    "microservices/schemas.py": "ce26c1dcb59b2a35c90a5c6fe7122a10e1f44f6f5a7703d3b180fef092b41da4"
+    "microservices/main.py": "9455b8e4d68d2112f6dba4e5e9fa7170be9073e4d272f28f7b23133f7a7e5036",
+    "microservices/schemas.py": "5bf78272c60caca60365ebd9204bb6af00d621db1101c71cb2f7ee8e284ca55b",
+    "microservices/template_repository.py": "791bb2247e6bd4a0f3915d0f07fbf0ce7c56f9ce8a7661e7f0f21e4d6c9d00ce",
+    "microservices/template_service.py": "bd52f15ab0af9846408bc4c2d376594c1d3b3080b4e66bbcb6c5b22cabeb1ab7",
+    "microservices/tests/test_template_reads.py": "48127a858b28db9538f786417498b11d11850063375f1fa050df1f5eac9b7d85"
   }
 }

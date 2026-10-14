@@ -1,19 +1,22 @@
 """OPCUA lifecycle and canonical configuration adoption of committed artifacts.
 
 No sibling-repository imports or live cloud credentials: PostgreSQL is disposable,
-provider OpenAPI travels over real loopback HTTP, and only cloud I/O is replaced.
+provider OpenAPI travels over real loopback HTTP; only external provider/cloud/JWT
+boundaries are replaced.
 Configuration uses real core helpers and non-admin ABAC, not a provider callback.
-Template execution and reported readiness remain later stages.
+Template HTTP execution uses synthetic committed provider test literals, not a live
+catalog. Reported readiness remains a later stage.
 """
 
 import copy
 import hashlib
 import json
+import re
 import threading
 from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 from uuid import UUID
 
 from starlette.routing import Match
@@ -22,9 +25,11 @@ import pytest
 from jsonschema import Draft202012Validator
 
 import auth
+from authorization.abac_permission_check import ABACPermissionCheck
 from db.repos.extension import ExtensionRepository
 from db.session import get_repository
 from extensions import body_validation, schemas as extension_schemas, setup as extensions_setup
+from extensions.upstreams import http as http_upstream
 from main import app
 from routers.module_config.registry import module_schema_registry
 from routers.module_config.routes import post_module_twin_config as write_route
@@ -52,6 +57,7 @@ HTTP_UPSTREAM = "opcua-http"
 CONFIG_COMPONENT = "OpcuaClientModuleConfigV1"
 REPORTED_COMPONENT = "OpcuaClientReportedV1"
 COMPONENTS = {"configuration": CONFIG_COMPONENT, "reported": REPORTED_COMPONENT}
+TEMPLATE_PATHS = {"/template/opc-ua/list": "/opcua/template/list", "/template/opc-ua": "/opcua/template"}
 CONFIG_PATH = "/{device}/twin/config/{module}"
 REPORTED_PATH = "/{device}/twin/identity/{module}/reported"
 METHODS = {
@@ -72,13 +78,34 @@ class _OpcuaDocumentHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        path = urlsplit(self.path).path
+        parsed = urlsplit(self.path)
+        path = parsed.path
         self.server.calls[path] += 1
-        status = 200 if path == "/openapi.json" and self.server.document is not None else 404
-        body = json.dumps(self.server.document if status == 200 else {}).encode()
+        self.server.requests.append({
+            "method": "GET", "path": path, "query": parsed.query,
+            "headers": dict(self.headers),
+            "body": self.rfile.read(int(self.headers.get("Content-Length", 0))),
+        })
+        if path == "/openapi.json" and self.server.document is not None:
+            status, value = 200, self.server.document
+        elif path == "/opcua/template/list":
+            status, value = 200, self.server.template_names
+        elif path == "/opcua/template":
+            name = parse_qs(parsed.query, keep_blank_values=True).get("template_name", [""])[-1]
+            if not name:
+                status, value = 422, {"detail": "Template name is required"}
+            elif name == "missing":
+                status, value = 404, {"detail": "Template not found"}
+            else:
+                status, value = 200, self.server.template_document
+        else:
+            status, value = 404, {}
+        status, value = self.server.template_errors.get(path, (status, value))
+        body = json.dumps(value, ensure_ascii=False).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
 
@@ -88,6 +115,11 @@ def opcua_provider(monkeypatch):
     server = ThreadingHTTPServer(("127.0.0.1", 0), _OpcuaDocumentHandler)
     server.document = _artifact("openapi.json")
     server.calls = Counter()
+    server.requests = []
+    templates = _artifact("template-contract.json")
+    server.template_names = templates["names"]
+    server.template_document = templates["document"]
+    server.template_errors = {}
     server.base_url = f"http://127.0.0.1:{server.server_port}"
     # Explicit host AND port allowlisting; no bypass of manifest URL validation.
     monkeypatch.setattr(extension_schemas, "EXTENSIONS_HTTP_UPSTREAM_ALLOWLIST", f"127.0.0.1:{server.server_port}")
@@ -236,12 +268,17 @@ async def _opcua_openapi(client, baseline, purposes=("configuration", "reported"
         else:
             assert operation["requestBody"] == {"required": True, "content": {
                 "application/json": {"schema": methods[method]}}}
-    return document
+    _assert_template_openapi(document, mounted=mounted)
+    # HTTP response components use surrogate route IDs in this inherited core.
+    # Compare lifecycle documentation semantically; raw repeated reads above must
+    # still be byte-for-byte equivalent and never mutate the cached base document.
+    return _stable_opcua_openapi(document)
 
 
 def test_opcua_committed_artifact_hashes_and_src_app_registered_handler_contract():
     provenance = _artifact("provenance.json")
-    assert provenance["providerCommit"] == "ad10d2d67d02b4bf0493c273487ad3e36b68d2fc"
+    assert provenance["providerCommit"] == "b9c6490fc881ee87dd694b80132ef8895443314e"
+    assert provenance["providerHistory"][0]["providerCommit"] == "ad10d2d67d02b4bf0493c273487ad3e36b68d2fc"
     assert provenance["runtimeSourceCommit"] == "1761b5f237a8d177d69f8dabca9f3d70166e9c08"
     for name, record in provenance["files"].items():
         assert hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest() == record["sha256"]
@@ -252,9 +289,11 @@ def test_opcua_committed_artifact_hashes_and_src_app_registered_handler_contract
     assert manifest["upstreams"]["opcua-iotedge"] == {"type": "iotedge", "module_name": MODULE}
     assert set(handlers) == set(methods) == METHODS
     assert set(manifest["module_schemas"]) == {MODULE}
-    assert {action["name"] for action in manifest["actions"]} == {"opcua.methods.read", "opcua.methods.write"}
-    assert len(manifest["routes"]) == 12
-    for route in manifest["routes"]:
+    assert {action["name"] for action in manifest["actions"]} == {
+        "opcua.methods.read", "opcua.methods.write", "opcua.templates.list", "opcua.templates.read",
+    }
+    assert len(manifest["routes"]) == 14
+    for route in (route for route in manifest["routes"] if route["upstream"] == "opcua-iotedge"):
         method = route["iotedge"]["method_name"]
         assert route["iotedge"] == {"operation": "direct_method", "method_name": method}
         assert route["path"] == f"/opcua/{method}" and route["method"] == "POST"
@@ -269,7 +308,18 @@ def test_opcua_committed_artifact_hashes_and_src_app_registered_handler_contract
             Draft202012Validator.check_schema(methods[method])
     document = _artifact("openapi.json")
     _assert_refs(document, document)
-    assert set(document["paths"]) == {"/health"}
+    assert set(document["paths"]) == {"/health", *TEMPLATE_PATHS.values()}
+    templates = [route for route in manifest["routes"] if route["upstream"] == HTTP_UPSTREAM]
+    assert {route["path"]: route["upstream_path"] for route in templates} == TEMPLATE_PATHS
+    for route in templates:
+        assert route["method"] == "GET" and route["visibility"] == "public"
+        assert route["response_ref"] is True and route["scoped"] is False
+        assert "body" not in route and "device_id" not in json.dumps(route)
+        suffix = "list" if route["path"].endswith("/list") else "read"
+        assert route["required_action"] == f"opcua.templates.{suffix}"
+        assert route.get("query_params", []) == ([] if suffix == "list" else [
+            {"name": "template_name", "required": True, "type": "string"},
+        ])
     configuration = _artifact("configuration.json")
     reported = _artifact("reported-operational.json")
     assert configuration["result"]["success"] is True and configuration["literal"]["schemaVersion"] == "1.0"
@@ -292,7 +342,7 @@ async def test_opcua_registration_lifecycle_purpose_snapshots_nested_openapi_and
     assert rows["configuration"]["version"] != rows["reported"]["version"]
     await _opcua_openapi(client, baseline, purposes=(), mounted=False)
     assert opcua_provider.calls == Counter({"/openapi.json": 1})
-    for action in ("opcua.methods.read", "opcua.methods.write"):
+    for action in ("opcua.methods.read", "opcua.methods.write", "opcua.templates.list", "opcua.templates.read"):
         assert not await repo.is_action_granted_to_any_role(action)
 
     assert (await client.post(f"/extensions/{NAME}/enable")).status_code == 200
@@ -301,8 +351,10 @@ async def test_opcua_registration_lifecycle_purpose_snapshots_nested_openapi_and
     await _snapshots(repo)
     methods = _artifact("methods.json")
     routes = await repo.list_routes(NAME)
-    assert len(routes) == 12 and {row["method_name"] for row in routes} == METHODS
-    for row in routes:
+    assert len(routes) == 14
+    method_routes = [row for row in routes if row["upstream"] == "opcua-iotedge"]
+    assert len(method_routes) == 12 and {row["method_name"] for row in method_routes} == METHODS
+    for row in method_routes:
         assert UUID(row["id"])
         assert row["iotedge_operation"] == "direct_method"
         method = row["method_name"]
@@ -316,8 +368,8 @@ async def test_opcua_registration_lifecycle_purpose_snapshots_nested_openapi_and
         assert row["required_action"] == ("opcua.methods.write" if method.startswith("write") else "opcua.methods.read")
         assert row["scoped"] is True and row["scope_in"] == "query" and row["scope_param"] == "device_id"
 
-    # Replace recreates surrogate route IDs, but public operation IDs and nested
-    # documentation must not depend on those IDs or resolution timestamps.
+    # Replace recreates surrogate route IDs (including HTTP response namespaces),
+    # but public operation IDs and logical schemas remain stable.
     manifest["description"] = "OPCUA committed contract replacement"
     response = await client.put(f"/extensions/{NAME}", json=manifest)
     assert response.status_code == 200 and response.json()["enabled"] is True
@@ -469,7 +521,7 @@ async def test_opcua_invalid_persisted_contract_hydrates_claimed_unavailable_bef
     assert module_schema_registry.is_unavailable(MODULE)
     for current_purpose in COMPONENTS:
         assert module_schema_registry.get(MODULE, current_purpose) is None
-    await _opcua_openapi(client, baseline, purposes=())  # method routes survive module failure
+    await _opcua_openapi(client, baseline, purposes=())  # persisted route docs survive module failure
     calls = opcua_provider.calls.copy()
     for path in (f"/{DEVICE}/twin/config/{MODULE}", f"/{DEVICE}/twin/identity/{MODULE}/reported"):
         response = await client.get(path)
@@ -958,3 +1010,368 @@ async def test_opcua_active_blob_io_failure_keeps_existing_500_wrapper_and_no_tw
     assert blob_store.requested == [f"{DEVICE}/{MODULE}/current"]
     assert iot_hub.requested == [] and cloud.effects == []
     assert cloud.direct_methods == 0 and opcua_provider.calls == calls
+
+
+def _stable_opcua_openapi(document):
+    """Normalize ONLY inherited per-route HTTP response namespaces for lifecycle comparison."""
+    encoded = json.dumps(document)
+    for path in TEMPLATE_PATHS:
+        operation = document["paths"].get(path, {}).get("get")
+        if operation is None:
+            continue
+        schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+        if "$ref" in schema:
+            prefix = re.match(r"#/components/schemas/(ext_[0-9a-f]{32}_)", schema["$ref"])
+            assert prefix, schema
+            encoded = encoded.replace(prefix[1], f"ext_{operation['operationId']}_")
+    return json.loads(encoded)
+
+
+def _assert_template_openapi(document, *, mounted=True):
+    provider = _artifact("openapi.json")
+    assert {path for path in document["paths"] if path.startswith("/template/opc-ua")} == (
+        set(TEMPLATE_PATHS) if mounted else set()
+    )
+    refs = set()
+    for path, private in TEMPLATE_PATHS.items() if mounted else ():
+        assert set(document["paths"][path]) == {"get"}
+        operation = document["paths"][path]["get"]
+        assert operation["operationId"] == "opcua_get_" + path.strip("/").replace("/", "_").replace("-", "_")
+        assert operation["security"] and "requestBody" not in operation
+        parameters = operation.get("parameters", [])
+        assert not any(parameter["name"] == "device_id" for parameter in parameters)
+        if path.endswith("/list"):
+            assert parameters == []
+        else:
+            assert parameters == [{"name": "template_name", "in": "query", "required": True,
+                                   "schema": {"type": "string", "title": "Template Name"}}]
+        root = operation["responses"]["200"]["content"]["application/json"]["schema"]
+        component = root["$ref"].removeprefix("#/components/schemas/")
+        prefix = re.match(r"ext_[0-9a-f]{32}_", component)[0]
+        closure = _component_closure(document, component)
+        assert json.loads(json.dumps(closure).replace(prefix, "")) == _component_closure(
+            provider, "OpcuaTemplateNames" if path.endswith("/list") else "OpcuaTemplateDocument",
+        )
+        components = set(closure["components"]["schemas"])
+        assert refs.isdisjoint(components)
+        refs.update(components)
+        assert "502" not in operation["responses"]  # Core response_ref copies 200 only, not provider error docs.
+    _assert_refs(document, document)
+
+
+@pytest.fixture
+async def template_http_responses(monkeypatch, _fresh_http_upstream_client):
+    """Observe real httpx streaming responses/closure without substituting transport or dispatch."""
+    responses = []
+    send = http_upstream._client.send
+
+    async def observed_send(request, **kwargs):
+        response = await send(request, **kwargs)
+        if request.url.path in TEMPLATE_PATHS.values():
+            record = {"response": response, "close_calls": 0}
+            close = response.aclose
+
+            async def observed_close():
+                record["close_calls"] += 1
+                await close()
+
+            monkeypatch.setattr(response, "aclose", observed_close)
+            responses.append(record)
+        return response
+
+    monkeypatch.setattr(http_upstream._client, "send", observed_send)
+    yield responses
+    assert all(record["response"].is_closed and record["close_calls"] >= 1 for record in responses)
+
+
+def _assert_templates_have_no_module_effects(cloud):
+    assert cloud.effects == [] and cloud.direct_methods == 0
+    assert cloud.blobs == {} and cloud.twins == {}
+
+
+@pytest.mark.parametrize("actions,list_status,read_status", [
+    (["opcua.templates.list"], 200, 403),
+    (["opcua.templates.read"], 403, 200),
+    (["opcua.templates.list", "opcua.templates.read"], 200, 200),
+    (["device.read", "device.module_twin_config.write", "opcua.methods.read"], 403, 403),
+    ([], 403, 403),
+])
+async def test_opcua_templates_non_admin_independent_global_actions_without_device_id(
+    client, db_session, opcua_provider, lifecycle_state, cloud, template_http_responses,
+    actions, list_status, read_status,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    repo = get_repository(ExtensionRepository)(db_session)
+    for action in ("opcua.templates.list", "opcua.templates.read"):
+        assert not await repo.is_action_granted_to_any_role(action)
+    # Test-only role/team rows roll back with the disposable DB; no production grants.
+    await AbacFixtures(db_session).setup(
+        users={"caller": "opcua-template-caller-oid"},
+        scopes={"restricted": {"attr": {"region": "EU"}, "access_rule": "ALL"}},
+        roles={"template-role": actions},
+        teams={"template-team": {"scope": "restricted", "roles": ["template-role"], "users": ["caller"]}},
+    )
+    # No device is seeded. Even a team with a device scope must be global here.
+    for path in TEMPLATE_PATHS:
+        route = next(route for route in app.routes if route.path == path and getattr(route, "extension_name", None) == NAME)
+        permission, = [dependency.call for dependency in route.dependant.dependencies
+                       if isinstance(dependency.call, ABACPermissionCheck)]
+        assert permission.device_path is None
+        assert permission.permission == "opcua.templates." + ("list" if path.endswith("/list") else "read")
+
+    async def caller():
+        return {"oid": "opcua-template-caller-oid", "sub": "opcua-template-caller-oid", "roles": []}
+
+    previous = app.dependency_overrides[auth.validate_jwt]
+    app.dependency_overrides[auth.validate_jwt] = caller
+    try:
+        calls = opcua_provider.calls.copy()
+        for path, status, expected in [
+            ("/template/opc-ua/list", list_status, opcua_provider.template_names),
+            ("/template/opc-ua?template_name=fixture", read_status, opcua_provider.template_document),
+        ]:
+            response = await client.get(path)
+            assert response.status_code == status
+            if status == 200:
+                assert response.json() == expected
+            else:
+                assert "errors" not in response.json()
+        assert opcua_provider.calls - calls == Counter({
+            private: 1 for private, status in [("/opcua/template/list", list_status), ("/opcua/template", read_status)]
+            if status == 200
+        })
+        calls = opcua_provider.calls.copy()
+        denied_or_missing = await client.get("/template/opc-ua")
+        assert denied_or_missing.status_code == (400 if read_status == 200 else 403)
+        assert opcua_provider.calls == calls
+        # Independently authorized template callers are not management admins.
+        assert (await client.get("/extensions/schema")).status_code == 403
+        _assert_templates_have_no_module_effects(cloud)
+    finally:
+        app.dependency_overrides[auth.validate_jwt] = previous
+
+
+@pytest.mark.parametrize("path", ["/template/opc-ua/list", "/template/opc-ua?template_name=fixture"])
+async def test_opcua_templates_missing_bearer_is_401_before_provider_or_oidc(
+    client, opcua_provider, lifecycle_state, cloud, monkeypatch, path,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+
+    async def forbidden_oidc():
+        pytest.fail("Missing template bearer must not initiate OIDC I/O")
+
+    monkeypatch.setattr(auth, "ensure_oidc_initialized", forbidden_oidc)
+    previous = app.dependency_overrides.pop(auth.validate_jwt)
+    calls = opcua_provider.calls.copy()
+    try:
+        response = await client.get(path)
+        assert response.status_code == 401 and response.json() == {"message": "Not authenticated"}
+        assert opcua_provider.calls == calls
+        _assert_templates_have_no_module_effects(cloud)
+    finally:
+        app.dependency_overrides[auth.validate_jwt] = previous
+
+
+@pytest.mark.parametrize("name", _artifact("template-contract.json")["names"])
+async def test_opcua_templates_encoded_names_queries_and_logical_json_are_relayed_unchanged(
+    client, opcua_provider, lifecycle_state, cloud, template_http_responses, name,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+    query = f"template_name={quote(name, safe='')}&tag=first&tag=second&account=ignored&container=ignored"
+    response = await client.get("/template/opc-ua?" + query)
+    assert response.status_code == 200 and response.json() == _artifact("template-contract.json")["document"]
+    assert response.content == json.dumps(opcua_provider.template_document, ensure_ascii=False).encode()
+    assert response.headers["content-type"] == "application/json"
+    request = opcua_provider.requests[-1]
+    assert request["method"] == "GET" and request["path"] == "/opcua/template"
+    assert parse_qs(request["query"], keep_blank_values=True) == {
+        "template_name": [name], "tag": ["first", "second"], "account": ["ignored"], "container": ["ignored"],
+    }
+    assert request["body"] == b"" and "Authorization" not in request["headers"]
+    assert opcua_provider.calls - calls == Counter({"/opcua/template": 1})
+    assert len(template_http_responses) == 1 and template_http_responses[0]["response"].is_closed
+    _assert_templates_have_no_module_effects(cloud)
+
+
+@pytest.mark.parametrize("document", [None, [1, "Ü", {"placeholder": "{{x}}"}], "literal", 7, 2.5, False, {}])
+async def test_opcua_template_content_is_logical_json_not_module_config_or_generated_envelope(
+    client, opcua_provider, lifecycle_state, cloud, template_http_responses, document,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    opcua_provider.template_document = document
+    response = await client.get("/template/opc-ua", params={"template_name": "fixture"})
+    assert response.status_code == 200 and response.json() == document
+    assert opcua_provider.requests[-1]["body"] == b""
+    _assert_templates_have_no_module_effects(cloud)
+
+
+async def test_opcua_template_list_raw_names_empty_versus_failing_source_and_query_errors(
+    client, opcua_provider, lifecycle_state, cloud, template_http_responses,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    response = await client.get("/template/opc-ua/list")
+    assert response.status_code == 200 and response.json() == _artifact("template-contract.json")["names"]
+    opcua_provider.template_names = []
+    response = await client.get("/template/opc-ua/list")
+    assert response.status_code == 200 and response.json() == []
+    opcua_provider.template_errors["/opcua/template/list"] = (503, {"detail": "Template source unavailable"})
+    response = await client.get("/template/opc-ua/list")
+    assert response.status_code == 503 and response.json() == {"detail": "Template source unavailable"}
+    calls = opcua_provider.calls.copy()
+    response = await client.get("/template/opc-ua")
+    assert response.status_code == 400 and opcua_provider.calls == calls
+    # Core requires presence only; the provider rejects an explicitly empty value.
+    response = await client.get("/template/opc-ua?template_name=")
+    assert response.status_code == 422
+    assert parse_qs(opcua_provider.requests[-1]["query"], keep_blank_values=True) == {"template_name": [""]}
+    response = await client.get("/template/opc-ua?template_name=missing")
+    assert response.status_code == 404 and response.json() == {"detail": "Template not found"}
+    assert len(template_http_responses) == 5
+    _assert_templates_have_no_module_effects(cloud)
+
+
+@pytest.mark.parametrize("path,private", TEMPLATE_PATHS.items())
+@pytest.mark.parametrize("status,detail", [(503, "Template source unavailable"), (504, "Template source timed out"),
+                                          (502, "Invalid template source JSON")])
+async def test_opcua_template_provider_error_status_and_json_forwarding_close_real_responses(
+    client, opcua_provider, lifecycle_state, cloud, template_http_responses, path, private, status, detail,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    opcua_provider.template_errors[private] = (status, {"detail": detail})
+    response = await client.get(path, params={"template_name": "fixture"} if path == "/template/opc-ua" else None)
+    assert response.status_code == status and response.json() == {"detail": detail}
+    assert len(template_http_responses) == 1 and template_http_responses[0]["response"].is_closed
+    _assert_templates_have_no_module_effects(cloud)
+
+
+@pytest.mark.parametrize("path", TEMPLATE_PATHS)
+async def test_opcua_template_real_provider_connection_failure_is_safe_502_not_empty(
+    client, opcua_provider, lifecycle_state, cloud, template_http_responses, path,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+    # Close the actual listener, not a mocked HTTP transport or exception.
+    opcua_provider.shutdown()
+    opcua_provider.server_close()
+    response = await client.get(path, params={"template_name": "fixture"} if path == "/template/opc-ua" else None)
+    assert response.status_code == 502 and response.json() == {"detail": "Upstream unavailable"}
+    assert opcua_provider.calls == calls and template_http_responses == []
+    _assert_templates_have_no_module_effects(cloud)
+
+
+async def test_opcua_template_manifest_response_snapshots_and_executing_lifecycle_hydration(
+    client, db_session, opcua_provider, lifecycle_state, cloud, hydrate, template_http_responses,
+):
+    baseline = (await client.get("/openapi.json")).json()
+    manifest = await _register_opcua(client, lifecycle_state, opcua_provider, enable=False)
+    repo = get_repository(ExtensionRepository)(db_session)
+    rows = [row for row in await repo.list_routes(NAME) if row["upstream"] == HTTP_UPSTREAM]
+    assert len(rows) == 2
+    for row in rows:
+        component = "OpcuaTemplateNames" if row["path"].endswith("/list") else "OpcuaTemplateDocument"
+        assert row["response_schema"] == _component_closure(opcua_provider.document, component)
+        assert row["response_ref"] and not row["body_ref"] and row["body"] is None
+        assert row["validation_mode"] == "none" and row["scoped"] is False
+        assert row["method_name"] is None and row["iotedge_operation"] is None
+    for path in TEMPLATE_PATHS:
+        assert (await client.get(path)).status_code == 404
+    assert (await client.post(f"/extensions/{NAME}/enable")).status_code == 200
+    enabled = (await client.get("/openapi.json")).json()
+    _assert_template_openapi(enabled)
+
+    async def check_reads():
+        calls = opcua_provider.calls.copy()
+        for path in TEMPLATE_PATHS:
+            response = await client.get(path, params={"template_name": "fixture"} if path == "/template/opc-ua" else None)
+            assert response.status_code == 200
+        assert opcua_provider.calls - calls == Counter({private: 1 for private in TEMPLATE_PATHS.values()})
+        _assert_templates_have_no_module_effects(cloud)
+
+    await check_reads()
+    manifest["description"] = "Template lifecycle self-replacement"
+    old_ids = {row["id"] for row in rows}
+    assert (await client.put(f"/extensions/{NAME}", json=manifest)).status_code == 200
+    assert old_ids.isdisjoint({row["id"] for row in await repo.list_routes(NAME)})
+    replaced = (await client.get("/openapi.json")).json()
+    _assert_template_openapi(replaced)
+    assert _stable_opcua_openapi(replaced) == _stable_opcua_openapi(enabled)
+    old_response_names = {name for name in enabled["components"]["schemas"] if name.startswith("ext_")}
+    assert old_response_names and old_response_names.isdisjoint(replaced["components"]["schemas"])
+    await check_reads()
+    extensions_setup._unmount_extension(NAME)
+    await hydrate()  # ASGITransport skips lifespan; explicitly invoke the real DB hydration entrypoint.
+    assert (await repo.get_extension_row(NAME))["enabled"] is True
+    _assert_template_openapi((await client.get("/openapi.json")).json())
+    await check_reads()
+    for operation in ("disable", "enable"):
+        assert (await client.post(f"/extensions/{NAME}/{operation}")).status_code == 200
+        document = (await client.get("/openapi.json")).json()
+        _assert_template_openapi(document, mounted=operation == "enable")
+        if operation == "enable":
+            await check_reads()
+        else:
+            assert document == baseline
+            for path in TEMPLATE_PATHS:
+                assert (await client.get(path)).status_code == 404
+    # Remove only template bindings: method/module contracts stay active, response namespaces disappear.
+    manifest["routes"] = [route for route in manifest["routes"] if route["path"] not in TEMPLATE_PATHS]
+    assert (await client.put(f"/extensions/{NAME}", json=manifest)).status_code == 200
+    document = (await client.get("/openapi.json")).json()
+    _assert_template_openapi(document, mounted=False)
+    assert not any(name.startswith("ext_") for name in document["components"]["schemas"])
+    await _snapshots(repo)
+    assert {row["method_name"] for row in await repo.list_routes(NAME)} == METHODS
+    for path in TEMPLATE_PATHS:
+        assert (await client.get(path)).status_code == 404
+    assert (await client.put(f"/extensions/{NAME}", json=_manifest(opcua_provider))).status_code == 200
+    await check_reads()
+    assert (await client.delete(f"/extensions/{NAME}")).status_code == 204
+    assert (await client.get("/openapi.json")).json() == baseline
+    assert await repo.list_routes(NAME) == [] and await repo.list_module_schemas(NAME) == []
+    assert set(opcua_provider.calls) == {"/openapi.json", *TEMPLATE_PATHS.values()}
+    _assert_templates_have_no_module_effects(cloud)
+
+
+@pytest.mark.parametrize("path,private", TEMPLATE_PATHS.items())
+async def test_opcua_template_exact_public_route_ownership_enable_conflict_and_release(
+    client, db_session, opcua_provider, lifecycle_state, cloud, path, private,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    other = _unique_name("template_claimant")
+    lifecycle_state.append(other)
+    claimant = {"schema_version": 1, "name": other, "upstreams": {"svc": {"type": "http", "base_url": opcua_provider.base_url}},
+                "routes": [{"upstream": "svc", "path": path, "upstream_path": private, "method": "GET"}]}
+    assert (await client.post("/extensions", json=claimant)).status_code == 201
+    before = (await client.get(f"/extensions/{other}")).json()
+    openapi = (await client.get("/openapi.json")).json()
+    repo = get_repository(ExtensionRepository)(db_session)
+    rows = copy.deepcopy(await repo.list_routes(NAME))
+    response = await client.post(f"/extensions/{other}/enable")
+    assert response.status_code == 409
+    assert (await client.get(f"/extensions/{other}")).json() == before
+    assert await repo.list_routes(NAME) == rows
+    assert (await client.get("/openapi.json")).json() == openapi
+    assert not any(getattr(route, "extension_name", None) == other for route in app.routes)
+    assert (await client.post(f"/extensions/{NAME}/disable")).status_code == 200
+    assert (await client.post(f"/extensions/{other}/enable")).status_code == 200
+    assert (await client.get(path, params={"template_name": "fixture"} if path == "/template/opc-ua" else None)).status_code == 200
+    assert (await client.post(f"/extensions/{NAME}/enable")).status_code == 409
+    assert (await client.delete(f"/extensions/{other}")).status_code == 204
+    assert (await client.post(f"/extensions/{NAME}/enable")).status_code == 200
+    _assert_template_openapi((await client.get("/openapi.json")).json())
+    _assert_templates_have_no_module_effects(cloud)
+
+
+@pytest.mark.parametrize("path", TEMPLATE_PATHS)
+async def test_opcua_templates_expose_no_write_delete_or_configuration_facade(
+    client, opcua_provider, lifecycle_state, cloud, path,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+    for method in ("POST", "PUT", "DELETE"):
+        response = await client.request(method, path, params={"template_name": "fixture"}, json={"config": "not-written"})
+        assert response.status_code == 405
+    assert (await client.get("/opcua/config/test-device")).status_code == 404
+    assert opcua_provider.calls == calls
+    _assert_templates_have_no_module_effects(cloud)
