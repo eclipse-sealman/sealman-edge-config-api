@@ -1,0 +1,59 @@
+{
+    "fixture": "failed",
+    "description": "A configuration FAILED condition, as reported by the configUpdated handler in app.ts, sets health FAILED and status false.",
+    "provenance": {
+        "sourceRepository": "edge-opcua-client",
+        "sourceCommit": "1761b5f237a8d177d69f8dabca9f3d70166e9c08",
+        "runtimeVersion": "1.0.0",
+        "sourceFiles": [
+            "edge-opcua-client/src/controller/ConfigurationStateReporter.ts",
+            "edge-opcua-client/src/dtos/configuration/configurationState.ts",
+            "edge-opcua-client/src/iotInterfaces/IotEdgeInterface.ts"
+        ],
+        "symbols": [
+            "ConfigurationStateReporter.reportCondition",
+            "ConfigurationStateReporter.removeConditionsByPrefix",
+            "ConfigurationStateReporter.calculateState",
+            "IoTEdgeInterface.updatePropertiesReported"
+        ],
+        "capture": "Serialized argument of the debounced IoTEdgeInterface.updatePropertiesReported call after a 1000 ms fake-timer tick; IoT boundary stubbed in the spec.",
+        "resetBeforeCase": "ConfigurationStateReporter.removeConditionsByPrefix(\"\")"
+    },
+    "steps": [
+        {
+            "action": "reportCondition",
+            "condition": {
+                "name": "configuration",
+                "health": "FAILED",
+                "message": "Configuration malformed: {\"clients\":{\"_errors\":[\"Required\"]}}"
+            }
+        }
+    ],
+    "emittedPatch": {
+        "config": {
+            "status": false,
+            "health": "FAILED",
+            "conditions": [
+                {
+                    "name": "configuration",
+                    "health": "FAILED",
+                    "message": "Configuration malformed: {\"clients\":{\"_errors\":[\"Required\"]}}"
+                }
+            ],
+            "configs": null,
+            "message": "Configuration malformed: {\"clients\":{\"_errors\":[\"Required\"]}}"
+        }
+    },
+    "effectiveConfig": {
+        "status": false,
+        "health": "FAILED",
+        "message": "Configuration malformed: {\"clients\":{\"_errors\":[\"Required\"]}}",
+        "conditions": [
+            {
+                "name": "configuration",
+                "health": "FAILED",
+                "message": "Configuration malformed: {\"clients\":{\"_errors\":[\"Required\"]}}"
+            }
+        ]
+    }
+}

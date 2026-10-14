@@ -226,6 +226,33 @@ class ExtensionDetail(ExtensionRegistration):
     enabled: bool = False
 
 
+class DirectMethodInvocation(BaseModel):
+    """Public call metadata only; deliberately excludes examples and upstream details."""
+
+    path: str
+    http_method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+    summary: Optional[str] = None
+    description: Optional[str] = None
+    query_params: List[QueryParamSpec]
+    scoped: bool
+    scope_param: Optional[str] = None
+    scope_in: Optional[Literal["path", "query"]] = None
+    request_schema: Optional[dict] = None
+
+
+class DiscoveredDirectMethod(BaseModel):
+    module_id: str
+    method_name: str
+    invocations: List[DirectMethodInvocation]
+
+
+class DirectMethodDiscovery(BaseModel):
+    extension: str
+    device_id: str
+    enabled: bool
+    methods: List[DiscoveredDirectMethod]
+
+
 class ExtensionHealthCheckResult(BaseModel):
     name: str
     upstreams: Dict[str, UpstreamHealthStatus]

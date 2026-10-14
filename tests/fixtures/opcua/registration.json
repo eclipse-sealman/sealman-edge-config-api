@@ -1,0 +1,1565 @@
+{
+  "actions": [
+    {
+      "description": "Invoke OPCUA read, browse, monitor and status methods",
+      "name": "opcua.methods.read"
+    },
+    {
+      "description": "Invoke OPCUA write methods",
+      "name": "opcua.methods.write"
+    },
+    {
+      "description": "List OPCUA template names",
+      "name": "opcua.templates.list"
+    },
+    {
+      "description": "Read OPCUA template content",
+      "name": "opcua.templates.read"
+    }
+  ],
+  "description": "OPCUA runtime 1.0 configuration, reported state, direct methods and read-only templates",
+  "module_schemas": {
+    "seal-module-opcua-client": {
+      "reported_schema_ref": "#/components/schemas/OpcuaClientReportedV1",
+      "schema_ref": "#/components/schemas/OpcuaClientModuleConfigV1",
+      "upstream": "opcua-http"
+    }
+  },
+  "name": "opcua",
+  "routes": [
+    {
+      "body": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "properties": {
+              "clientName": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "nodeId": {
+                "type": "string"
+              },
+              "sessionName": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "clientName",
+              "sessionName",
+              "nodeId"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "credentials": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "certificate": {
+                        "type": "string"
+                      },
+                      "privateKey": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "Certificate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "certificate",
+                      "privateKey"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "password": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "UserName",
+                        "type": "string"
+                      },
+                      "userName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "password",
+                      "userName"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "type": {
+                        "const": "Anonymous",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "endpoint": {
+                "pattern": "^opc\\.tcp://",
+                "type": "string"
+              },
+              "messageSecurityMode": {
+                "enum": [
+                  "0",
+                  "1",
+                  "2",
+                  "3",
+                  "Invalid",
+                  "None",
+                  "Sign",
+                  "SignAndEncrypt"
+                ],
+                "type": "string"
+              },
+              "nodeId": {
+                "type": "string"
+              },
+              "securityPolicy": {
+                "enum": [
+                  "Invalid",
+                  "None",
+                  "Basic128",
+                  "Basic192",
+                  "Basic192Rsa15",
+                  "Basic256Rsa15",
+                  "Basic256Sha256",
+                  "Aes128_Sha256_RsaOaep",
+                  "Aes256_Sha256_RsaPss",
+                  "PubSub_Aes128_CTR",
+                  "PubSub_Aes256_CTR",
+                  "Basic128Rsa15",
+                  "Basic256"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "endpoint",
+              "messageSecurityMode",
+              "securityPolicy",
+              "credentials",
+              "nodeId"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "iotedge": {
+        "method_name": "browseNode",
+        "operation": "direct_method"
+      },
+      "method": "POST",
+      "path": "/opcua/browseNode",
+      "query_params": [
+        {
+          "name": "device_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.methods.read",
+      "scope_in": "query",
+      "scope_param": "device_id",
+      "scoped": true,
+      "upstream": "opcua-iotedge",
+      "visibility": "public"
+    },
+    {
+      "body": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "properties": {
+              "clientName": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "nodeIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "sessionName": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "clientName",
+              "sessionName",
+              "nodeIds"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "credentials": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "certificate": {
+                        "type": "string"
+                      },
+                      "privateKey": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "Certificate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "certificate",
+                      "privateKey"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "password": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "UserName",
+                        "type": "string"
+                      },
+                      "userName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "password",
+                      "userName"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "type": {
+                        "const": "Anonymous",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "endpoint": {
+                "pattern": "^opc\\.tcp://",
+                "type": "string"
+              },
+              "messageSecurityMode": {
+                "enum": [
+                  "0",
+                  "1",
+                  "2",
+                  "3",
+                  "Invalid",
+                  "None",
+                  "Sign",
+                  "SignAndEncrypt"
+                ],
+                "type": "string"
+              },
+              "nodeIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "securityPolicy": {
+                "enum": [
+                  "Invalid",
+                  "None",
+                  "Basic128",
+                  "Basic192",
+                  "Basic192Rsa15",
+                  "Basic256Rsa15",
+                  "Basic256Sha256",
+                  "Aes128_Sha256_RsaOaep",
+                  "Aes256_Sha256_RsaPss",
+                  "PubSub_Aes128_CTR",
+                  "PubSub_Aes256_CTR",
+                  "Basic128Rsa15",
+                  "Basic256"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "endpoint",
+              "messageSecurityMode",
+              "securityPolicy",
+              "credentials",
+              "nodeIds"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "iotedge": {
+        "method_name": "browseNodes",
+        "operation": "direct_method"
+      },
+      "method": "POST",
+      "path": "/opcua/browseNodes",
+      "query_params": [
+        {
+          "name": "device_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.methods.read",
+      "scope_in": "query",
+      "scope_param": "device_id",
+      "scoped": true,
+      "upstream": "opcua-iotedge",
+      "visibility": "public"
+    },
+    {
+      "iotedge": {
+        "method_name": "getClients",
+        "operation": "direct_method"
+      },
+      "method": "POST",
+      "path": "/opcua/getClients",
+      "query_params": [
+        {
+          "name": "device_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.methods.read",
+      "scope_in": "query",
+      "scope_param": "device_id",
+      "scoped": true,
+      "upstream": "opcua-iotedge",
+      "visibility": "public"
+    },
+    {
+      "body": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "properties": {
+              "clientName": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "clientName"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "endpoint": {
+                "pattern": "^opc\\.tcp://",
+                "type": "string"
+              },
+              "messageSecurityMode": {
+                "enum": [
+                  "0",
+                  "1",
+                  "2",
+                  "3",
+                  "Invalid",
+                  "None",
+                  "Sign",
+                  "SignAndEncrypt"
+                ],
+                "type": "string"
+              },
+              "securityPolicy": {
+                "enum": [
+                  "Invalid",
+                  "None",
+                  "Basic128",
+                  "Basic192",
+                  "Basic192Rsa15",
+                  "Basic256Rsa15",
+                  "Basic256Sha256",
+                  "Aes128_Sha256_RsaOaep",
+                  "Aes256_Sha256_RsaPss",
+                  "PubSub_Aes128_CTR",
+                  "PubSub_Aes256_CTR",
+                  "Basic128Rsa15",
+                  "Basic256"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "endpoint",
+              "messageSecurityMode",
+              "securityPolicy"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "iotedge": {
+        "method_name": "getEndpoints",
+        "operation": "direct_method"
+      },
+      "method": "POST",
+      "path": "/opcua/getEndpoints",
+      "query_params": [
+        {
+          "name": "device_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.methods.read",
+      "scope_in": "query",
+      "scope_param": "device_id",
+      "scoped": true,
+      "upstream": "opcua-iotedge",
+      "visibility": "public"
+    },
+    {
+      "body": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "clientName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "clientName"
+        ],
+        "type": "object"
+      },
+      "iotedge": {
+        "method_name": "getSessions",
+        "operation": "direct_method"
+      },
+      "method": "POST",
+      "path": "/opcua/getSessions",
+      "query_params": [
+        {
+          "name": "device_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.methods.read",
+      "scope_in": "query",
+      "scope_param": "device_id",
+      "scoped": true,
+      "upstream": "opcua-iotedge",
+      "visibility": "public"
+    },
+    {
+      "iotedge": {
+        "method_name": "moduleDefinition",
+        "operation": "direct_method"
+      },
+      "method": "POST",
+      "path": "/opcua/moduleDefinition",
+      "query_params": [
+        {
+          "name": "device_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.methods.read",
+      "scope_in": "query",
+      "scope_param": "device_id",
+      "scoped": true,
+      "upstream": "opcua-iotedge",
+      "visibility": "public"
+    },
+    {
+      "body": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "properties": {
+              "clientName": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "nodeId": {
+                "type": "string"
+              },
+              "sessionName": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "clientName",
+              "sessionName",
+              "nodeId"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "credentials": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "certificate": {
+                        "type": "string"
+                      },
+                      "privateKey": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "Certificate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "certificate",
+                      "privateKey"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "password": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "UserName",
+                        "type": "string"
+                      },
+                      "userName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "password",
+                      "userName"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "type": {
+                        "const": "Anonymous",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "endpoint": {
+                "pattern": "^opc\\.tcp://",
+                "type": "string"
+              },
+              "messageSecurityMode": {
+                "enum": [
+                  "0",
+                  "1",
+                  "2",
+                  "3",
+                  "Invalid",
+                  "None",
+                  "Sign",
+                  "SignAndEncrypt"
+                ],
+                "type": "string"
+              },
+              "nodeId": {
+                "type": "string"
+              },
+              "securityPolicy": {
+                "enum": [
+                  "Invalid",
+                  "None",
+                  "Basic128",
+                  "Basic192",
+                  "Basic192Rsa15",
+                  "Basic256Rsa15",
+                  "Basic256Sha256",
+                  "Aes128_Sha256_RsaOaep",
+                  "Aes256_Sha256_RsaPss",
+                  "PubSub_Aes128_CTR",
+                  "PubSub_Aes256_CTR",
+                  "Basic128Rsa15",
+                  "Basic256"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "endpoint",
+              "messageSecurityMode",
+              "securityPolicy",
+              "credentials",
+              "nodeId"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "iotedge": {
+        "method_name": "monitorItem",
+        "operation": "direct_method"
+      },
+      "method": "POST",
+      "path": "/opcua/monitorItem",
+      "query_params": [
+        {
+          "name": "device_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.methods.read",
+      "scope_in": "query",
+      "scope_param": "device_id",
+      "scoped": true,
+      "upstream": "opcua-iotedge",
+      "visibility": "public"
+    },
+    {
+      "body": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "properties": {
+              "clientName": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "nodeIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "sessionName": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "clientName",
+              "sessionName",
+              "nodeIds"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "credentials": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "certificate": {
+                        "type": "string"
+                      },
+                      "privateKey": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "Certificate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "certificate",
+                      "privateKey"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "password": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "UserName",
+                        "type": "string"
+                      },
+                      "userName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "password",
+                      "userName"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "type": {
+                        "const": "Anonymous",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "endpoint": {
+                "pattern": "^opc\\.tcp://",
+                "type": "string"
+              },
+              "messageSecurityMode": {
+                "enum": [
+                  "0",
+                  "1",
+                  "2",
+                  "3",
+                  "Invalid",
+                  "None",
+                  "Sign",
+                  "SignAndEncrypt"
+                ],
+                "type": "string"
+              },
+              "nodeIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "securityPolicy": {
+                "enum": [
+                  "Invalid",
+                  "None",
+                  "Basic128",
+                  "Basic192",
+                  "Basic192Rsa15",
+                  "Basic256Rsa15",
+                  "Basic256Sha256",
+                  "Aes128_Sha256_RsaOaep",
+                  "Aes256_Sha256_RsaPss",
+                  "PubSub_Aes128_CTR",
+                  "PubSub_Aes256_CTR",
+                  "Basic128Rsa15",
+                  "Basic256"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "endpoint",
+              "messageSecurityMode",
+              "securityPolicy",
+              "credentials",
+              "nodeIds"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "iotedge": {
+        "method_name": "monitorItems",
+        "operation": "direct_method"
+      },
+      "method": "POST",
+      "path": "/opcua/monitorItems",
+      "query_params": [
+        {
+          "name": "device_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.methods.read",
+      "scope_in": "query",
+      "scope_param": "device_id",
+      "scoped": true,
+      "upstream": "opcua-iotedge",
+      "visibility": "public"
+    },
+    {
+      "body": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "properties": {
+              "attributeId": {
+                "default": "Value",
+                "enum": [
+                  "NodeId",
+                  "NodeClass",
+                  "BrowseName",
+                  "DisplayName",
+                  "Description",
+                  "WriteMask",
+                  "UserWriteMask",
+                  "IsAbstract",
+                  "Symmetric",
+                  "InverseName",
+                  "ContainsNoLoops",
+                  "EventNotifier",
+                  "Value",
+                  "DataType",
+                  "ValueRank",
+                  "ArrayDimensions",
+                  "AccessLevel",
+                  "UserAccessLevel",
+                  "MinimumSamplingInterval",
+                  "Historizing",
+                  "Executable",
+                  "UserExecutable",
+                  "DataTypeDefinition",
+                  "RolePermissions",
+                  "UserRolePermissions",
+                  "AccessRestrictions",
+                  "AccessLevelEx"
+                ],
+                "type": "string"
+              },
+              "clientName": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "nodeId": {
+                "type": "string"
+              },
+              "sessionName": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "clientName",
+              "sessionName",
+              "nodeId"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "attributeId": {
+                "default": "Value",
+                "enum": [
+                  "NodeId",
+                  "NodeClass",
+                  "BrowseName",
+                  "DisplayName",
+                  "Description",
+                  "WriteMask",
+                  "UserWriteMask",
+                  "IsAbstract",
+                  "Symmetric",
+                  "InverseName",
+                  "ContainsNoLoops",
+                  "EventNotifier",
+                  "Value",
+                  "DataType",
+                  "ValueRank",
+                  "ArrayDimensions",
+                  "AccessLevel",
+                  "UserAccessLevel",
+                  "MinimumSamplingInterval",
+                  "Historizing",
+                  "Executable",
+                  "UserExecutable",
+                  "DataTypeDefinition",
+                  "RolePermissions",
+                  "UserRolePermissions",
+                  "AccessRestrictions",
+                  "AccessLevelEx"
+                ],
+                "type": "string"
+              },
+              "credentials": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "certificate": {
+                        "type": "string"
+                      },
+                      "privateKey": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "Certificate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "certificate",
+                      "privateKey"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "password": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "UserName",
+                        "type": "string"
+                      },
+                      "userName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "password",
+                      "userName"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "type": {
+                        "const": "Anonymous",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "endpoint": {
+                "pattern": "^opc\\.tcp://",
+                "type": "string"
+              },
+              "messageSecurityMode": {
+                "enum": [
+                  "0",
+                  "1",
+                  "2",
+                  "3",
+                  "Invalid",
+                  "None",
+                  "Sign",
+                  "SignAndEncrypt"
+                ],
+                "type": "string"
+              },
+              "nodeId": {
+                "type": "string"
+              },
+              "securityPolicy": {
+                "enum": [
+                  "Invalid",
+                  "None",
+                  "Basic128",
+                  "Basic192",
+                  "Basic192Rsa15",
+                  "Basic256Rsa15",
+                  "Basic256Sha256",
+                  "Aes128_Sha256_RsaOaep",
+                  "Aes256_Sha256_RsaPss",
+                  "PubSub_Aes128_CTR",
+                  "PubSub_Aes256_CTR",
+                  "Basic128Rsa15",
+                  "Basic256"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "endpoint",
+              "messageSecurityMode",
+              "securityPolicy",
+              "credentials",
+              "nodeId"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "iotedge": {
+        "method_name": "readNode",
+        "operation": "direct_method"
+      },
+      "method": "POST",
+      "path": "/opcua/readNode",
+      "query_params": [
+        {
+          "name": "device_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.methods.read",
+      "scope_in": "query",
+      "scope_param": "device_id",
+      "scoped": true,
+      "upstream": "opcua-iotedge",
+      "visibility": "public"
+    },
+    {
+      "body": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "properties": {
+              "clientName": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "nodeIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "sessionName": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "clientName",
+              "sessionName",
+              "nodeIds"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "credentials": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "certificate": {
+                        "type": "string"
+                      },
+                      "privateKey": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "Certificate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "certificate",
+                      "privateKey"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "password": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "UserName",
+                        "type": "string"
+                      },
+                      "userName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "password",
+                      "userName"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "type": {
+                        "const": "Anonymous",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "endpoint": {
+                "pattern": "^opc\\.tcp://",
+                "type": "string"
+              },
+              "messageSecurityMode": {
+                "enum": [
+                  "0",
+                  "1",
+                  "2",
+                  "3",
+                  "Invalid",
+                  "None",
+                  "Sign",
+                  "SignAndEncrypt"
+                ],
+                "type": "string"
+              },
+              "nodeIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "securityPolicy": {
+                "enum": [
+                  "Invalid",
+                  "None",
+                  "Basic128",
+                  "Basic192",
+                  "Basic192Rsa15",
+                  "Basic256Rsa15",
+                  "Basic256Sha256",
+                  "Aes128_Sha256_RsaOaep",
+                  "Aes256_Sha256_RsaPss",
+                  "PubSub_Aes128_CTR",
+                  "PubSub_Aes256_CTR",
+                  "Basic128Rsa15",
+                  "Basic256"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "endpoint",
+              "messageSecurityMode",
+              "securityPolicy",
+              "credentials",
+              "nodeIds"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "iotedge": {
+        "method_name": "readNodes",
+        "operation": "direct_method"
+      },
+      "method": "POST",
+      "path": "/opcua/readNodes",
+      "query_params": [
+        {
+          "name": "device_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.methods.read",
+      "scope_in": "query",
+      "scope_param": "device_id",
+      "scoped": true,
+      "upstream": "opcua-iotedge",
+      "visibility": "public"
+    },
+    {
+      "body": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "properties": {
+              "clientName": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "nodeId": {
+                "type": "string"
+              },
+              "sessionName": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "value": {}
+            },
+            "required": [
+              "clientName",
+              "sessionName",
+              "nodeId",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "credentials": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "certificate": {
+                        "type": "string"
+                      },
+                      "privateKey": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "Certificate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "certificate",
+                      "privateKey"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "password": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "UserName",
+                        "type": "string"
+                      },
+                      "userName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "password",
+                      "userName"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "type": {
+                        "const": "Anonymous",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "endpoint": {
+                "pattern": "^opc\\.tcp://",
+                "type": "string"
+              },
+              "messageSecurityMode": {
+                "enum": [
+                  "0",
+                  "1",
+                  "2",
+                  "3",
+                  "Invalid",
+                  "None",
+                  "Sign",
+                  "SignAndEncrypt"
+                ],
+                "type": "string"
+              },
+              "nodeId": {
+                "type": "string"
+              },
+              "securityPolicy": {
+                "enum": [
+                  "Invalid",
+                  "None",
+                  "Basic128",
+                  "Basic192",
+                  "Basic192Rsa15",
+                  "Basic256Rsa15",
+                  "Basic256Sha256",
+                  "Aes128_Sha256_RsaOaep",
+                  "Aes256_Sha256_RsaPss",
+                  "PubSub_Aes128_CTR",
+                  "PubSub_Aes256_CTR",
+                  "Basic128Rsa15",
+                  "Basic256"
+                ],
+                "type": "string"
+              },
+              "value": {}
+            },
+            "required": [
+              "endpoint",
+              "messageSecurityMode",
+              "securityPolicy",
+              "credentials",
+              "nodeId",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "iotedge": {
+        "method_name": "writeNode",
+        "operation": "direct_method"
+      },
+      "method": "POST",
+      "path": "/opcua/writeNode",
+      "query_params": [
+        {
+          "name": "device_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.methods.write",
+      "scope_in": "query",
+      "scope_param": "device_id",
+      "scoped": true,
+      "upstream": "opcua-iotedge",
+      "visibility": "public"
+    },
+    {
+      "body": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "properties": {
+              "clientName": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "nodes": {
+                "items": {
+                  "properties": {
+                    "nodeId": {
+                      "type": "string"
+                    },
+                    "value": {}
+                  },
+                  "required": [
+                    "nodeId",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "sessionName": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "clientName",
+              "sessionName",
+              "nodes"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "credentials": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "certificate": {
+                        "type": "string"
+                      },
+                      "privateKey": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "Certificate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "certificate",
+                      "privateKey"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "password": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "UserName",
+                        "type": "string"
+                      },
+                      "userName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "password",
+                      "userName"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "type": {
+                        "const": "Anonymous",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "endpoint": {
+                "pattern": "^opc\\.tcp://",
+                "type": "string"
+              },
+              "messageSecurityMode": {
+                "enum": [
+                  "0",
+                  "1",
+                  "2",
+                  "3",
+                  "Invalid",
+                  "None",
+                  "Sign",
+                  "SignAndEncrypt"
+                ],
+                "type": "string"
+              },
+              "nodes": {
+                "items": {
+                  "properties": {
+                    "nodeId": {
+                      "type": "string"
+                    },
+                    "value": {}
+                  },
+                  "required": [
+                    "nodeId",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "securityPolicy": {
+                "enum": [
+                  "Invalid",
+                  "None",
+                  "Basic128",
+                  "Basic192",
+                  "Basic192Rsa15",
+                  "Basic256Rsa15",
+                  "Basic256Sha256",
+                  "Aes128_Sha256_RsaOaep",
+                  "Aes256_Sha256_RsaPss",
+                  "PubSub_Aes128_CTR",
+                  "PubSub_Aes256_CTR",
+                  "Basic128Rsa15",
+                  "Basic256"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "endpoint",
+              "messageSecurityMode",
+              "securityPolicy",
+              "credentials",
+              "nodes"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "iotedge": {
+        "method_name": "writeNodes",
+        "operation": "direct_method"
+      },
+      "method": "POST",
+      "path": "/opcua/writeNodes",
+      "query_params": [
+        {
+          "name": "device_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.methods.write",
+      "scope_in": "query",
+      "scope_param": "device_id",
+      "scoped": true,
+      "upstream": "opcua-iotedge",
+      "visibility": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/template/opc-ua/list",
+      "required_action": "opcua.templates.list",
+      "response_ref": true,
+      "scoped": false,
+      "upstream": "opcua-http",
+      "upstream_path": "/opcua/template/list",
+      "visibility": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/template/opc-ua",
+      "query_params": [
+        {
+          "name": "template_name",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "required_action": "opcua.templates.read",
+      "response_ref": true,
+      "scoped": false,
+      "upstream": "opcua-http",
+      "upstream_path": "/opcua/template",
+      "visibility": "public"
+    }
+  ],
+  "schema_version": 1,
+  "upstreams": {
+    "opcua-http": {
+      "base_url": "http://127.0.0.1:7000",
+      "type": "http"
+    },
+    "opcua-iotedge": {
+      "module_name": "seal-module-opcua-client",
+      "type": "iotedge"
+    }
+  }
+}

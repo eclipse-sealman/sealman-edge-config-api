@@ -1,0 +1,77 @@
+{
+    "fixture": "warning",
+    "description": "A client WARNING lowers status to false and becomes the reported message.",
+    "provenance": {
+        "sourceRepository": "edge-opcua-client",
+        "sourceCommit": "1761b5f237a8d177d69f8dabca9f3d70166e9c08",
+        "runtimeVersion": "1.0.0",
+        "sourceFiles": [
+            "edge-opcua-client/src/controller/ConfigurationStateReporter.ts",
+            "edge-opcua-client/src/dtos/configuration/configurationState.ts",
+            "edge-opcua-client/src/iotInterfaces/IotEdgeInterface.ts"
+        ],
+        "symbols": [
+            "ConfigurationStateReporter.reportCondition",
+            "ConfigurationStateReporter.removeConditionsByPrefix",
+            "ConfigurationStateReporter.calculateState",
+            "IoTEdgeInterface.updatePropertiesReported"
+        ],
+        "capture": "Serialized argument of the debounced IoTEdgeInterface.updatePropertiesReported call after a 1000 ms fake-timer tick; IoT boundary stubbed in the spec.",
+        "resetBeforeCase": "ConfigurationStateReporter.removeConditionsByPrefix(\"\")"
+    },
+    "steps": [
+        {
+            "action": "reportCondition",
+            "condition": {
+                "name": "configuration",
+                "health": "OPERATIONAL",
+                "message": "Configuration applied"
+            }
+        },
+        {
+            "action": "reportCondition",
+            "condition": {
+                "name": "client:powerpak-client",
+                "health": "WARNING",
+                "message": "Session reconnecting"
+            }
+        }
+    ],
+    "emittedPatch": {
+        "config": {
+            "status": false,
+            "health": "WARNING",
+            "conditions": [
+                {
+                    "name": "configuration",
+                    "health": "OPERATIONAL",
+                    "message": "Configuration applied"
+                },
+                {
+                    "name": "client:powerpak-client",
+                    "health": "WARNING",
+                    "message": "Session reconnecting"
+                }
+            ],
+            "configs": null,
+            "message": "Session reconnecting"
+        }
+    },
+    "effectiveConfig": {
+        "status": false,
+        "health": "WARNING",
+        "message": "Session reconnecting",
+        "conditions": [
+            {
+                "name": "configuration",
+                "health": "OPERATIONAL",
+                "message": "Configuration applied"
+            },
+            {
+                "name": "client:powerpak-client",
+                "health": "WARNING",
+                "message": "Session reconnecting"
+            }
+        ]
+    }
+}

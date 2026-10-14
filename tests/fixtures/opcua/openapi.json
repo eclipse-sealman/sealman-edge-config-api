@@ -1,0 +1,731 @@
+{
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "properties": {
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "service",
+          "version"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      },
+      "JsonValue": {},
+      "OpcuaClientAnonymousCredentials": {
+        "properties": {
+          "type": {
+            "const": "Anonymous",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "OpcuaClientAnonymousCredentials",
+        "type": "object"
+      },
+      "OpcuaClientApplicationData": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/components/schemas/OpcuaClientApplicationData"
+            }
+          ]
+        },
+        "title": "OpcuaClientApplicationData",
+        "type": "object"
+      },
+      "OpcuaClientCertificateCredentials": {
+        "properties": {
+          "certificate": {
+            "title": "Certificate",
+            "type": "string"
+          },
+          "privateKey": {
+            "title": "Privatekey",
+            "type": "string"
+          },
+          "type": {
+            "const": "Certificate",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "certificate",
+          "privateKey"
+        ],
+        "title": "OpcuaClientCertificateCredentials",
+        "type": "object"
+      },
+      "OpcuaClientClientConfig": {
+        "properties": {
+          "clientCertificate": {
+            "title": "Clientcertificate",
+            "type": "string"
+          },
+          "clientPrivateKey": {
+            "title": "Clientprivatekey",
+            "type": "string"
+          },
+          "endpoint": {
+            "pattern": "^opc\\.tcp://",
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "messageSecurityMode": {
+            "enum": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "Invalid",
+              "None",
+              "Sign",
+              "SignAndEncrypt"
+            ],
+            "title": "Messagesecuritymode",
+            "type": "string"
+          },
+          "rootCertificates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rootcertificates",
+            "type": "array"
+          },
+          "rootCrls": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rootcrls",
+            "type": "array"
+          },
+          "securityPolicy": {
+            "enum": [
+              "Invalid",
+              "None",
+              "Basic128",
+              "Basic192",
+              "Basic192Rsa15",
+              "Basic256Rsa15",
+              "Basic256Sha256",
+              "Aes128_Sha256_RsaOaep",
+              "Aes256_Sha256_RsaPss",
+              "PubSub_Aes128_CTR",
+              "PubSub_Aes256_CTR",
+              "Basic128Rsa15",
+              "Basic256"
+            ],
+            "title": "Securitypolicy",
+            "type": "string"
+          },
+          "serverCertificate": {
+            "title": "Servercertificate",
+            "type": "string"
+          },
+          "sessions": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OpcuaClientSessionConfig"
+            },
+            "title": "Sessions",
+            "type": "object"
+          }
+        },
+        "required": [
+          "endpoint",
+          "messageSecurityMode",
+          "securityPolicy",
+          "sessions"
+        ],
+        "title": "OpcuaClientClientConfig",
+        "type": "object"
+      },
+      "OpcuaClientEdgeHubSinkConfig": {
+        "properties": {
+          "applicationData": {
+            "$ref": "#/components/schemas/OpcuaClientApplicationData"
+          },
+          "messageFormat": {
+            "enum": [
+              "influx:1.0",
+              "csi:1.0",
+              "opcuaStream:1.0"
+            ],
+            "title": "Messageformat",
+            "type": "string"
+          },
+          "topic": {
+            "default": "message",
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "messageFormat"
+        ],
+        "title": "OpcuaClientEdgeHubSinkConfig",
+        "type": "object"
+      },
+      "OpcuaClientModuleConfigV1": {
+        "properties": {
+          "clients": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OpcuaClientClientConfig"
+            },
+            "title": "Clients",
+            "type": "object"
+          },
+          "mqttEndpoint": {
+            "title": "Mqttendpoint",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": "1.0",
+            "title": "Schemaversion",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "clients"
+        ],
+        "title": "OpcuaClientModuleConfigV1",
+        "type": "object"
+      },
+      "OpcuaClientMonitoredItemConfig": {
+        "properties": {
+          "discardOldest": {
+            "title": "Discardoldest",
+            "type": "boolean"
+          },
+          "inverseScalingFactor": {
+            "title": "Inversescalingfactor",
+            "type": "number"
+          },
+          "nodeId": {
+            "title": "Nodeid",
+            "type": "string"
+          },
+          "queueSize": {
+            "title": "Queuesize",
+            "type": "number"
+          },
+          "samplingInterval": {
+            "title": "Samplinginterval",
+            "type": "number"
+          },
+          "scalingFactor": {
+            "title": "Scalingfactor",
+            "type": "number"
+          }
+        },
+        "required": [
+          "nodeId"
+        ],
+        "title": "OpcuaClientMonitoredItemConfig",
+        "type": "object"
+      },
+      "OpcuaClientMqttSinkConfig": {
+        "properties": {
+          "applicationData": {
+            "$ref": "#/components/schemas/OpcuaClientApplicationData"
+          },
+          "messageFormat": {
+            "enum": [
+              "influx:1.0",
+              "csi:1.0",
+              "opcuaStream:1.0"
+            ],
+            "title": "Messageformat",
+            "type": "string"
+          },
+          "topic": {
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic",
+          "messageFormat"
+        ],
+        "title": "OpcuaClientMqttSinkConfig",
+        "type": "object"
+      },
+      "OpcuaClientReportedCondition": {
+        "properties": {
+          "health": {
+            "enum": [
+              "OPERATIONAL",
+              "WARNING",
+              "FAILED"
+            ],
+            "title": "Health",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "health",
+          "message"
+        ],
+        "title": "OpcuaClientReportedCondition",
+        "type": "object"
+      },
+      "OpcuaClientReportedConfig": {
+        "properties": {
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/OpcuaClientReportedCondition"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "health": {
+            "enum": [
+              "OPERATIONAL",
+              "WARNING",
+              "FAILED"
+            ],
+            "title": "Health",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "status",
+          "health",
+          "conditions"
+        ],
+        "title": "OpcuaClientReportedConfig",
+        "type": "object"
+      },
+      "OpcuaClientReportedV1": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/OpcuaClientReportedConfig"
+          },
+          "lastUpdated": {
+            "title": "Lastupdated",
+            "type": "string"
+          }
+        },
+        "title": "OpcuaClientReportedV1",
+        "type": "object"
+      },
+      "OpcuaClientSessionConfig": {
+        "properties": {
+          "credentials": {
+            "discriminator": {
+              "mapping": {
+                "Anonymous": "#/components/schemas/OpcuaClientAnonymousCredentials",
+                "Certificate": "#/components/schemas/OpcuaClientCertificateCredentials",
+                "UserName": "#/components/schemas/OpcuaClientUserNameCredentials"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpcuaClientAnonymousCredentials"
+              },
+              {
+                "$ref": "#/components/schemas/OpcuaClientUserNameCredentials"
+              },
+              {
+                "$ref": "#/components/schemas/OpcuaClientCertificateCredentials"
+              }
+            ],
+            "title": "Credentials"
+          },
+          "dynamicDeclarations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Dynamicdeclarations",
+            "type": "object"
+          },
+          "subscriptions": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OpcuaClientSubscriptionConfig"
+            },
+            "title": "Subscriptions",
+            "type": "object"
+          }
+        },
+        "required": [
+          "credentials",
+          "subscriptions"
+        ],
+        "title": "OpcuaClientSessionConfig",
+        "type": "object"
+      },
+      "OpcuaClientSubscriptionConfig": {
+        "properties": {
+          "edgeHubOutput": {
+            "items": {
+              "$ref": "#/components/schemas/OpcuaClientEdgeHubSinkConfig"
+            },
+            "title": "Edgehuboutput",
+            "type": "array"
+          },
+          "maxNotificationsPerPublish": {
+            "title": "Maxnotificationsperpublish",
+            "type": "number"
+          },
+          "monitoredItems": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OpcuaClientMonitoredItemConfig"
+            },
+            "title": "Monitoreditems",
+            "type": "object"
+          },
+          "monitoredItemsDiscardOldest": {
+            "title": "Monitoreditemsdiscardoldest",
+            "type": "boolean"
+          },
+          "monitoredItemsQueueSize": {
+            "title": "Monitoreditemsqueuesize",
+            "type": "number"
+          },
+          "monitoredItemsSamplingInterval": {
+            "title": "Monitoreditemssamplinginterval",
+            "type": "number"
+          },
+          "mqttOutput": {
+            "items": {
+              "$ref": "#/components/schemas/OpcuaClientMqttSinkConfig"
+            },
+            "title": "Mqttoutput",
+            "type": "array"
+          },
+          "priority": {
+            "maximum": 255,
+            "minimum": 0,
+            "title": "Priority",
+            "type": "number"
+          },
+          "publishingEnabled": {
+            "title": "Publishingenabled",
+            "type": "boolean"
+          },
+          "requestedLifetimeCount": {
+            "title": "Requestedlifetimecount",
+            "type": "number"
+          },
+          "requestedMaxKeepAliveCount": {
+            "title": "Requestedmaxkeepalivecount",
+            "type": "number"
+          },
+          "requestedPublishingInterval": {
+            "title": "Requestedpublishinginterval",
+            "type": "number"
+          }
+        },
+        "required": [
+          "maxNotificationsPerPublish",
+          "publishingEnabled",
+          "requestedLifetimeCount",
+          "requestedMaxKeepAliveCount",
+          "requestedPublishingInterval",
+          "priority",
+          "monitoredItemsDiscardOldest",
+          "monitoredItemsQueueSize",
+          "monitoredItemsSamplingInterval",
+          "monitoredItems"
+        ],
+        "title": "OpcuaClientSubscriptionConfig",
+        "type": "object"
+      },
+      "OpcuaClientUserNameCredentials": {
+        "properties": {
+          "password": {
+            "title": "Password",
+            "type": "string"
+          },
+          "type": {
+            "const": "UserName",
+            "title": "Type",
+            "type": "string"
+          },
+          "userName": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "userName",
+          "password"
+        ],
+        "title": "OpcuaClientUserNameCredentials",
+        "type": "object"
+      },
+      "OpcuaTemplateDocument": {
+        "$ref": "#/components/schemas/JsonValue",
+        "title": "OpcuaTemplateDocument"
+      },
+      "OpcuaTemplateNames": {
+        "items": {
+          "type": "string"
+        },
+        "title": "OpcuaTemplateNames",
+        "type": "array"
+      },
+      "OpcuaTemplateReadError": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "OpcuaTemplateReadError",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "OPCUA extension",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/opcua/template": {
+      "get": {
+        "operationId": "read_template_opcua_template_get",
+        "parameters": [
+          {
+            "description": "Exact stored catalog name",
+            "in": "query",
+            "name": "template_name",
+            "required": true,
+            "schema": {
+              "description": "Exact stored catalog name",
+              "minLength": 1,
+              "title": "Template Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateDocument"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Template not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Invalid catalog source response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Catalog source unavailable"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Catalog source timed out"
+          }
+        },
+        "summary": "Read Template"
+      }
+    },
+    "/opcua/template/list": {
+      "get": {
+        "operationId": "list_templates_opcua_template_list_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateNames"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Invalid catalog source response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Catalog source unavailable"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcuaTemplateReadError"
+                }
+              }
+            },
+            "description": "Catalog source timed out"
+          }
+        },
+        "summary": "List Templates"
+      }
+    }
+  }
+}

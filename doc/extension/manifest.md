@@ -351,6 +351,61 @@ With no active configuration snapshot, GET uses the generic object/`null` contra
 
 For each active fixed ID, OpenAPI publishes only its **configuration** snapshot: a nullable GET response and a required POST body, not all modules' alternatives or its reported schema. Inactive aliases publish the generic fallbacks. Nested references reuse the same module/purpose-namespaced components as the generic operations. Replacement/removal and explicit startup hydration refresh these contracts without mutating the cached base document. The description explains that unavailable claims return `503`, not a usable fallback contract.
 
+## Shared registered-method discovery (IIOT-2913)
+
+```http
+GET /extensions/{name}/direct-methods?device_id={device_id}
+```
+
+This static public endpoint requires a normal caller JWT, **not** `extension.read`
+or an internal key. `{name}` is the persisted extension name; `device_id` is a
+required, nonempty device-table key. Missing/invalid authentication, including a
+token without `oid`/`sub`, retains the public application's existing `401`.
+Discovery's own missing caller identifier or unresolved persisted user is `403`.
+Unknown extension/device is `404`; missing/empty or repeated `device_id` is `400`.
+Normal user provisioning remains unchanged.
+
+The typed response contains `extension`, `device_id`, `enabled`, and `methods`.
+A disabled registration returns `enabled: false, methods: []`; an enabled
+registration with no permitted bindings returns `enabled: true, methods: []`.
+Unknown/deregistered registrations have no catalog fallback.
+
+Only enabled persisted PUBLIC routes on an `iotedge` upstream with operation
+`direct_method` and a method name are considered. Each binding uses its actual
+invocation action and device-scope policy via the existing permission evaluator.
+Scoped actions use the requested device's current metadata; unscoped actions do
+not use device scope. A persisted public binding without an action mirrors the
+runtime's no-action policy. This does **not** relax registration validation: new
+public IoT Edge bindings must remain scoped and action-bound.
+
+Methods are grouped by exact `(module_id, method_name)`, sorted by those values.
+All authorized aliases are retained, sorted by path and HTTP verb. Each invocation
+contains its actual `path`, `http_method`, summary/description, sorted
+`query_params` (including the runtime's implicit target parameters), `scoped`,
+`scope_param`, `scope_in`, and `request_schema`. The path template retains path
+parameters. Unscoped placement and absent bodies are explicit JSON `null`.
+Request schemas are returned as persisted, with locally resolvable references
+inside the descriptor; defaults are not injected and schemas are not rewritten.
+
+**Approved failure policy:** if an authorized binding's persisted body is not
+self-contained (for example a remote or dangling schema reference), discovery
+fails with exactly HTTP `500` and
+`{"message": "This route's body schema is misconfigured"}`. The check runs only
+after permission/device filtering. Unauthorized bindings, other extensions and
+disabled registrations cannot trigger it. The server logs only the extension
+name and route ID, never schema/body/reference/exception content; the response
+contains no route ID or exception text. No reference retrieval is attempted.
+
+There is no caller-filtered cache, manifest/README reread, protocol-specific
+inventory or runtime enumeration. Replacement, role/device metadata changes,
+enable/disable, deregistration and startup hydration use current persistence.
+The generic discovery route remains in OpenAPI when protocol invocation routes
+are disabled. HTTP/internal/twin/configuration bindings, upstream URLs, private
+keys/credentials, health metadata and route request examples are not projected.
+Listing makes no dispatch, health, upstream, schema-service, IoT Hub or Blob call.
+It describes registered capabilities, **not** deployment, online status or
+successful execution. Action registration still grants no role permissions.
+
 ## Maintenance
 
 WP-1 updated this page when its fields shipped. WP-2 documented enforced generic GET behavior; WP-3 documents generic POST fallback, literal serialization, safe errors and dynamic OpenAPI. WP-4 applies the shared configuration contract to the four deprecated fixed aliases. Examples and contracts are covered by isolated tests with synthetic schemas and mocked Blob/IoT Hub. `tests/integration/test_module_schema_lifecycle.py` combines real loopback schema/probe HTTP, management lifecycle, PostgreSQL snapshots, explicit startup hydration, non-admin ABAC, literal POST-to-GET storage parity and both OpenAPI hooks. The IIOT-2916 feature-branch template contract and all-extension route-claim policy are described above and tested by `tests/integration/test_extension_templates.py`; neither is implied to be available on the `d29cc96` base or deployed API. See [testing](../testing.md) for the reproducible commands and isolation boundaries. This does not establish production provider, live-device, cloud or OIDC parity.
