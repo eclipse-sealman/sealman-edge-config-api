@@ -29,7 +29,7 @@ from db.repos.role import RoleRepository
 from exceptions import APIError
 from routers.module_config.registry import ActiveModuleSchema
 
-from . import body_validation, health, signature
+from . import body_validation, health, route_ownership, signature
 from .schemas import (
     ExtensionHealthCheckResult,
     ExtensionRegistration,
@@ -62,6 +62,14 @@ def _validate_manifest_cross_references(registration: ExtensionRegistration) -> 
         seen_actions.add(action.name)
     if duplicate_actions:
         raise APIError(f"Duplicate action names in manifest: {sorted(duplicate_actions)}", 422)
+
+    duplicate_route = route_ownership.duplicate_claim(route.model_dump() for route in registration.routes)
+    if duplicate_route is not None:
+        visibility, method, path = duplicate_route
+        raise APIError(
+            f"Duplicate route in manifest: {method} {path} in the {visibility} app",
+            422,
+        )
 
     for route in registration.routes:
         upstream = registration.upstreams.get(route.upstream)

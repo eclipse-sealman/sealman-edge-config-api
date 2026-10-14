@@ -91,6 +91,192 @@ OpenAPI behavior. Module operations use persisted snapshots; only the probe
 proxies to the provider. Its response is relayed unchanged even if it does not
 match the documented `response_ref`.
 
+## Provider-declared template routes (IIOT-2916 feature-branch contract)
+
+> This section describes the reusable IIOT-2916 contract implemented on the
+> `feat/module-template` feature branch. It is not a claim that the behavior is
+> present on the `d29cc96` base or deployed API. The core does not add a
+> template-specific manifest field, router, catalog or provider implementation.
+
+A provider that owns a template catalog declares only the operations it serves.
+Use concrete extension routes: `GET /{extension_name}/template/list` for the
+raw JSON string-array of names, and `GET /{extension_name}/template` for the
+provider's content document (including provider metadata and placeholders).
+That content is not a final module configuration. Optional `POST` and `DELETE`
+use the same content path only when the provider implements create/delete; a
+read-only catalog simply omits them. Do not publish placeholder writes merely
+because a different provider supports them.
+
+Use public, unscoped routes (`visibility: "public"`, `scoped: false`, the
+manifest default) and a distinct extension action per operation. The action is
+registered into the existing global action catalog, but registration does not
+add it to any role. Existing role assignment remains the only way to grant it.
+The core does not create device scopes or couple template permissions to module
+or twin operations.
+
+Each content, write and delete route declares `template_name` as a required
+`query_params` entry. It is query metadata, not part of `path` or
+`upstream_path`; the existing HTTP proxy forwards the supplied query value,
+including encoded Unicode and punctuation. A missing required query parameter
+uses the API's existing request-validation response (400).
+
+The provider may map the public route to its own namespaced HTTP handler. For
+example, `/{extension_name}/template/list` can map to that provider's
+`/{extension_name}/template/list`, while GET/POST/DELETE content operations map
+to `/{extension_name}/template`. The service keeps the template catalog and any
+provider credentials; the edge API only dispatches the declared operation.
+
+The following read-only manifest is a complete schema-shaped example. The URL
+is illustrative loopback HTTP; a deployment must use its configured allowlist.
+
+```json
+{
+  "schema_version": 1,
+  "name": "neutral_catalog",
+  "description": "Read-only neutral template catalog",
+  "upstreams": {
+    "catalog": {"type": "http", "base_url": "http://127.0.0.1:9000"}
+  },
+  "actions": [
+    {"name": "neutral_catalog.templates.list", "description": "List templates"},
+    {"name": "neutral_catalog.templates.read", "description": "Read template content"}
+  ],
+  "routes": [
+    {
+      "upstream": "catalog",
+      "path": "/neutral_catalog/template/list",
+      "upstream_path": "/neutral_catalog/template/list",
+      "method": "GET",
+      "summary": "List neutral templates",
+      "response_ref": true,
+      "required_action": "neutral_catalog.templates.list"
+    },
+    {
+      "upstream": "catalog",
+      "path": "/neutral_catalog/template",
+      "upstream_path": "/neutral_catalog/template",
+      "method": "GET",
+      "summary": "Read neutral template content",
+      "query_params": [
+        {"name": "template_name", "type": "string", "required": true}
+      ],
+      "response_ref": true,
+      "required_action": "neutral_catalog.templates.read"
+    }
+  ]
+}
+```
+
+A full-CRUD provider adds only the write/delete operations it implements. Its
+OpenAPI document declares the request model (including nested local references)
+and responses; no request schema is copied into the manifest:
+
+```json
+{
+  "schema_version": 1,
+  "name": "neutral_editor",
+  "description": "Neutral catalog with provider-owned create and delete",
+  "upstreams": {
+    "catalog": {"type": "http", "base_url": "http://127.0.0.1:9000"}
+  },
+  "actions": [
+    {"name": "neutral_editor.templates.list", "description": "List templates"},
+    {"name": "neutral_editor.templates.read", "description": "Read template content"},
+    {"name": "neutral_editor.templates.write", "description": "Create a template"},
+    {"name": "neutral_editor.templates.delete", "description": "Delete a template"}
+  ],
+  "routes": [
+    {
+      "upstream": "catalog",
+      "path": "/neutral_editor/template/list",
+      "upstream_path": "/neutral_editor/template/list",
+      "method": "GET",
+      "summary": "List neutral templates",
+      "response_ref": true,
+      "required_action": "neutral_editor.templates.list"
+    },
+    {
+      "upstream": "catalog",
+      "path": "/neutral_editor/template",
+      "upstream_path": "/neutral_editor/template",
+      "method": "GET",
+      "summary": "Read neutral template content",
+      "query_params": [
+        {"name": "template_name", "type": "string", "required": true}
+      ],
+      "response_ref": true,
+      "required_action": "neutral_editor.templates.read"
+    },
+    {
+      "upstream": "catalog",
+      "path": "/neutral_editor/template",
+      "upstream_path": "/neutral_editor/template",
+      "method": "POST",
+      "status_code": 201,
+      "summary": "Create neutral template",
+      "query_params": [
+        {"name": "template_name", "type": "string", "required": true}
+      ],
+      "body_ref": true,
+      "response_ref": true,
+      "required_action": "neutral_editor.templates.write"
+    },
+    {
+      "upstream": "catalog",
+      "path": "/neutral_editor/template",
+      "upstream_path": "/neutral_editor/template",
+      "method": "DELETE",
+      "summary": "Delete neutral template",
+      "query_params": [
+        {"name": "template_name", "type": "string", "required": true}
+      ],
+      "response_ref": true,
+      "required_action": "neutral_editor.templates.delete"
+    }
+  ]
+}
+```
+
+`body_ref` and `response_ref` reuse the upstream's own OpenAPI document. With
+`body_ref`, the provider remains responsible for request validation: the
+`upstream_declared` body is streamed through the HTTP proxy and is not buffered
+or validated by this core. This differs from a literal manifest `body`, which
+uses the existing bounded buffering and JSON Schema validation path. The
+upstream's documented response is for OpenAPI only; `response_ref` does not
+validate, materialize or rewrite the proxied response. Provider status, body
+(including error bodies) and streaming behavior remain the upstream contract.
+If the route's OpenAPI response cannot be resolved, the route still registers
+without that response schema, matching the existing response-reference policy.
+
+### Active extension route claims
+
+The feature-branch policy applies to every enabled extension route, not only
+template paths. A claim is the exact manifest path and uppercase HTTP method
+within its visibility app: public and internal apps are independent, and the
+same path with a different method is a separate claim. This is exact ownership,
+not generic path-pattern overlap detection or hardening of static core routes.
+
+A duplicate route inside one manifest is rejected with 422. A registered but
+disabled extension owns no active path. Enabling an extension, or replacing an
+enabled extension's manifest, that would duplicate another active claim returns
+409 before its saved enabled state/manifest or current routes are changed; the
+current owner remains reachable. Self-replacement excludes the extension's
+own existing claims. Disabling or deregistering releases its active paths.
+
+At startup, enabled extensions are hydrated in deterministic name order. The
+first mounted owner remains active; a conflicting candidate is logged and
+skipped without preventing unrelated routes from mounting. Resolve persisted
+conflicts by changing/disabling the affected extension, not by relying on
+route-registration order. These collision guarantees are part of the IIOT-2916
+feature branch contract and are not present on the `d29cc96` base.
+
+`tests/integration/test_extension_templates.py` is the protocol-neutral core
+conformance suite, using synthetic providers rather than a production catalog.
+The core implementer owns that reusable suite. Each downstream provider's
+implementer owns its provider-specific catalog, schema, registration and
+conformance evidence against it; passing the neutral suite does not establish a
+protocol provider's schema/catalog parity.
+
 ## Schema resolution
 
 - The core fetches only `{base_url}/openapi.json` of the referenced upstream. Redirects are not followed, and the manifest cannot supply a schema URL.
@@ -165,10 +351,6 @@ With no active configuration snapshot, GET uses the generic object/`null` contra
 
 For each active fixed ID, OpenAPI publishes only its **configuration** snapshot: a nullable GET response and a required POST body, not all modules' alternatives or its reported schema. Inactive aliases publish the generic fallbacks. Nested references reuse the same module/purpose-namespaced components as the generic operations. Replacement/removal and explicit startup hydration refresh these contracts without mutating the cached base document. The description explains that unavailable claims return `503`, not a usable fallback contract.
 
-## Route collisions
-
-WP-1 does not check whether two routes share a method and path. That check is planned in the extension template-routes plan (`iiot-2916-modules-templates`), not in IIOT-2789.
-
 ## Maintenance
 
-WP-1 updated this page when its fields shipped. WP-2 documented enforced generic GET behavior; WP-3 documents generic POST fallback, literal serialization, safe errors and dynamic OpenAPI. WP-4 applies the shared configuration contract to the four deprecated fixed aliases; route-collision checks remain in the separate template-routes plan. Examples and contracts are covered by isolated tests with synthetic schemas and mocked Blob/IoT Hub. `tests/integration/test_module_schema_lifecycle.py` combines real loopback schema/probe HTTP, management lifecycle, PostgreSQL snapshots, explicit startup hydration, non-admin ABAC, literal POST-to-GET storage parity and both OpenAPI hooks. See [testing](../testing.md) for the reproducible command and isolation boundaries. This does not establish production provider, live-device, cloud or OIDC parity.
+WP-1 updated this page when its fields shipped. WP-2 documented enforced generic GET behavior; WP-3 documents generic POST fallback, literal serialization, safe errors and dynamic OpenAPI. WP-4 applies the shared configuration contract to the four deprecated fixed aliases. Examples and contracts are covered by isolated tests with synthetic schemas and mocked Blob/IoT Hub. `tests/integration/test_module_schema_lifecycle.py` combines real loopback schema/probe HTTP, management lifecycle, PostgreSQL snapshots, explicit startup hydration, non-admin ABAC, literal POST-to-GET storage parity and both OpenAPI hooks. The IIOT-2916 feature-branch template contract and all-extension route-claim policy are described above and tested by `tests/integration/test_extension_templates.py`; neither is implied to be available on the `d29cc96` base or deployed API. See [testing](../testing.md) for the reproducible commands and isolation boundaries. This does not establish production provider, live-device, cloud or OIDC parity.

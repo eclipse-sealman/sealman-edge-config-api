@@ -214,11 +214,8 @@ def body_schema_from_document(document: Optional[dict], upstream_path: str, meth
     try:
         operation = document["paths"][upstream_path][method.lower()]
         schema = operation["requestBody"]["content"]["application/json"]["schema"]
-        ref = schema.get("$ref") if isinstance(schema, dict) else None
-        if ref and ref.startswith("#/components/schemas/"):
-            schema = document["components"]["schemas"][ref.rsplit("/", 1)[-1]]
-        return schema
-    except (KeyError, TypeError, AttributeError) as exc:
+        return self_contained_schema(document, schema)
+    except (KeyError, TypeError, AttributeError, SchemaResolutionError) as exc:
         logger.info(f"OpenAPI document declares no JSON body for {method} {upstream_path}: {exc}")
         return None
 

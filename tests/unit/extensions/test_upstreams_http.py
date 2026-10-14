@@ -449,6 +449,62 @@ def test_self_contained_schema_of_inline_root_without_references_adds_no_compone
     assert http_upstream.self_contained_schema({}, {"type": "object"}) == {"type": "object"}
 
 
+def test_body_schema_from_document_resolves_nested_and_recursive_request_components():
+    document = {
+        "paths": {
+            "/items": {
+                "post": {
+                    "requestBody": {
+                        "content": {
+                            "application/json": {"schema": {"$ref": "#/components/schemas/Root"}}
+                        }
+                    }
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                "Root": {
+                    "type": "object",
+                    "properties": {
+                        "child": {"$ref": "#/components/schemas/Child"},
+                        "self": {"$ref": "#/components/schemas/Root"},
+                    },
+                },
+                "Child": {"type": "object", "properties": {"leaf": {"$ref": "#/components/schemas/Leaf"}}},
+                "Leaf": {"type": "string"},
+                "Unused": {"type": "integer"},
+            }
+        },
+    }
+
+    schema = http_upstream.body_schema_from_document(document, "/items", "POST")
+
+    assert schema["$ref"] == "#/components/schemas/Root"
+    assert set(schema["components"]["schemas"]) == {"Root", "Child", "Leaf"}
+
+
+def test_body_schema_from_document_rejects_external_or_unresolved_nested_refs():
+    for ref in ("https://elsewhere.example/schema.json#/Thing", "#/components/schemas/Missing"):
+        document = {
+            "paths": {
+                "/items": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {"type": "object", "properties": {"bad": {"$ref": ref}}}
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "components": {"schemas": {}},
+        }
+        assert http_upstream.body_schema_from_document(document, "/items", "POST") is None
+
+
 def test_response_schema_from_document_resolves_status_code_response():
     document = {
         "paths": {

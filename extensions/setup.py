@@ -9,7 +9,7 @@ stub), and re-hydrates persisted routes at startup.
 import asyncio
 import logging
 from collections import defaultdict
-from typing import DefaultDict, List, Optional
+from typing import DefaultDict, Dict, List, Optional
 
 import uvicorn
 from fastapi import Depends, FastAPI
@@ -28,7 +28,7 @@ from exceptions import APIError
 from routers.base_api_router import BaseAPIRouter
 from routers.module_config.registry import ModuleSchemaConflictError, module_schema_registry
 
-from . import registry, runtime
+from . import registry, route_ownership, runtime
 from .schemas import (
     ExtensionDetail,
     ExtensionHealthCheckResult,
@@ -145,20 +145,24 @@ def _build_management_router() -> BaseAPIRouter:
         extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
     ) -> ExtensionDetail:
         async with _extension_locks[name]:
-            detail = await registry.replace_extension(extension_repo, name, registration)
-            if not detail.enabled:
+            async with _route_ownership_lock:
+                existing = await extension_repo.get_extension_row(name)
+                if existing is not None and existing.get("enabled"):
+                    _check_route_ownership(name, [route.model_dump() for route in registration.routes])
+                detail = await registry.replace_extension(extension_repo, name, registration)
+                if not detail.enabled:
+                    return detail
+                # New route ids only exist after the commit, so this build cannot precede it.
+                try:
+                    built = await _build_persisted_routes(extension_repo, name)
+                    await _activate_module_schemas(extension_repo, name)
+                except Exception as exc:
+                    logger.exception(f"Replaced extension '{name}' could not be mounted; disabling it")
+                    _unmount_extension(name)
+                    await registry.disable_extension(extension_repo, name)
+                    raise APIError(f"Extension '{name}' was saved but could not be mounted and was disabled: {exc}", 500)
+                runtime.publish_routes(_public_app, internal_app, name, built)
                 return detail
-            # New route ids only exist after the commit, so this build cannot precede it.
-            try:
-                built = await _build_persisted_routes(extension_repo, name)
-                await _activate_module_schemas(extension_repo, name)
-            except Exception as exc:
-                logger.exception(f"Replaced extension '{name}' could not be mounted; disabling it")
-                _unmount_extension(name)
-                await registry.disable_extension(extension_repo, name)
-                raise APIError(f"Extension '{name}' was saved but could not be mounted and was disabled: {exc}", 500)
-            runtime.publish_routes(_public_app, internal_app, name, built)
-            return detail
 
     @router.delete(
         "/{name}",
@@ -176,8 +180,9 @@ def _build_management_router() -> BaseAPIRouter:
         role_repo: RoleRepository = Depends(get_repository(RoleRepository)),
     ) -> None:
         async with _extension_locks[name]:
-            await registry.deregister_extension(extension_repo, role_repo, name)
-            _unmount_extension(name)
+            async with _route_ownership_lock:
+                await registry.deregister_extension(extension_repo, role_repo, name)
+                _unmount_extension(name)
 
     @router.post(
         "/{name}/enable",
@@ -195,19 +200,22 @@ def _build_management_router() -> BaseAPIRouter:
         extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
     ) -> ExtensionDetail:
         async with _extension_locks[name]:
-            await registry.check_module_schema_ownership(extension_repo, name)
-            # Refetch before mount so a previously unreachable body_ref can flip to
-            # upstream_declared without a process restart. See registry.refresh_extension_ref_schemas.
-            await registry.refresh_extension_ref_schemas(extension_repo, name)
-            try:
-                built = await _build_persisted_routes(extension_repo, name)
-            except Exception as exc:
-                logger.exception(f"Extension '{name}' could not be mounted; it stays disabled")
-                raise APIError(f"Extension '{name}' could not be mounted: {exc}", 500)
-            await _activate_module_schemas(extension_repo, name)
-            detail = await registry.enable_extension(extension_repo, name)
-            runtime.publish_routes(_public_app, internal_app, name, built)
-            return detail
+            async with _route_ownership_lock:
+                if await extension_repo.get_extension_row(name) is not None:
+                    _check_route_ownership(name, await extension_repo.list_routes(name))
+                await registry.check_module_schema_ownership(extension_repo, name)
+                # Refetch before mount so a previously unreachable body_ref can flip to
+                # upstream_declared without a process restart. See registry.refresh_extension_ref_schemas.
+                await registry.refresh_extension_ref_schemas(extension_repo, name)
+                try:
+                    built = await _build_persisted_routes(extension_repo, name)
+                except Exception as exc:
+                    logger.exception(f"Extension '{name}' could not be mounted; it stays disabled")
+                    raise APIError(f"Extension '{name}' could not be mounted: {exc}", 500)
+                await _activate_module_schemas(extension_repo, name)
+                detail = await registry.enable_extension(extension_repo, name)
+                runtime.publish_routes(_public_app, internal_app, name, built)
+                return detail
 
     @router.post(
         "/{name}/disable",
@@ -221,9 +229,10 @@ def _build_management_router() -> BaseAPIRouter:
         extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
     ) -> ExtensionDetail:
         async with _extension_locks[name]:
-            detail = await registry.disable_extension(extension_repo, name)
-            _unmount_extension(name)
-            return detail
+            async with _route_ownership_lock:
+                detail = await registry.disable_extension(extension_repo, name)
+                _unmount_extension(name)
+                return detail
 
     @router.post(
         "/{name}/health-check",
@@ -268,12 +277,42 @@ _public_app: Optional[FastAPI] = None
 
 # Serializes lifecycle changes per extension; one process only (see README).
 _extension_locks: DefaultDict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+# Route claims span extensions, so per-extension locks alone cannot serialize ownership.
+_route_ownership_lock = asyncio.Lock()
 
 
 async def _build_persisted_routes(extension_repo: ExtensionRepository, name: str) -> runtime.BuiltRoutes:
     upstreams = await extension_repo.list_upstreams(name)
     routes = await extension_repo.list_routes(name)
     return runtime.build_routes(_public_app, internal_app, name, upstreams, routes)
+
+
+def _check_route_ownership(name: str, proposed_routes: List[dict]) -> None:
+    """Rejects live claims held by another extension before lifecycle state changes."""
+    duplicate = route_ownership.duplicate_claim(proposed_routes)
+    if duplicate is not None:
+        visibility, method, path = duplicate
+        raise APIError(f"Duplicate route claim: {method} {path} in the {visibility} app", 409)
+
+    routes_by_owner: Dict[str, List[dict]] = {}
+    for visibility, app in (("public", _public_app), ("internal", internal_app)):
+        if app is None:
+            continue
+        for mounted in app.router.routes:
+            owner = getattr(mounted, "extension_name", None)
+            if owner is None or owner == name:
+                continue
+            for method in getattr(mounted, "methods", None) or ():
+                routes_by_owner.setdefault(owner, []).append(
+                    {"path": mounted.path, "method": method, "visibility": visibility}
+                )
+    collision = route_ownership.conflict(proposed_routes, routes_by_owner.items())
+    if collision is not None:
+        owner, (visibility, method, path) = collision
+        raise APIError(
+            f"Route {method} {path} in the {visibility} app is already owned by extension '{owner}'",
+            409,
+        )
 
 
 def _unmount_extension(name: str) -> None:
