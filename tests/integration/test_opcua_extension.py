@@ -5,7 +5,8 @@ provider OpenAPI travels over real loopback HTTP; only external provider/cloud/J
 boundaries are replaced.
 Configuration uses real core helpers and non-admin ABAC, not a provider callback.
 Template HTTP execution uses synthetic committed provider test literals, not a live
-catalog. Reported readiness remains a later stage.
+catalog. Captured reporter patches are merged by a test-only IoT Hub oracle and
+replayed through the real reported helper/GET; no live acquisition is claimed.
 """
 
 import copy
@@ -32,6 +33,7 @@ from extensions import body_validation, schemas as extension_schemas, setup as e
 from extensions.upstreams import http as http_upstream
 from main import app
 from routers.module_config.registry import module_schema_registry
+from routers.module_config.routes import get_module_twin_identity_reported as reported_route
 from routers.module_config.routes import post_module_twin_config as write_route
 from tests.integration.test_abac_authorization import AbacFixtures
 from tests.integration.test_extension_direct_method_discovery import forbid_discovery_io  # noqa: F401
@@ -278,8 +280,11 @@ async def _opcua_openapi(client, baseline, purposes=("configuration", "reported"
 
 def test_opcua_committed_artifact_hashes_and_src_app_registered_handler_contract():
     provenance = _artifact("provenance.json")
-    assert provenance["providerCommit"] == "b9c6490fc881ee87dd694b80132ef8895443314e"
-    assert provenance["providerHistory"][0]["providerCommit"] == "ad10d2d67d02b4bf0493c273487ad3e36b68d2fc"
+    assert provenance["providerCommit"] == "47359569edf53bdcf55c50591916c3cda35a655a"
+    assert [record["providerCommit"] for record in provenance["providerHistory"]] == [
+        "ad10d2d67d02b4bf0493c273487ad3e36b68d2fc",
+        "b9c6490fc881ee87dd694b80132ef8895443314e",
+    ]
     assert provenance["runtimeSourceCommit"] == "1761b5f237a8d177d69f8dabca9f3d70166e9c08"
     for name, record in provenance["files"].items():
         assert hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest() == record["sha256"]
@@ -1351,7 +1356,8 @@ async def test_opcua_template_exact_public_route_ownership_enable_conflict_and_r
     response = await client.post(f"/extensions/{other}/enable")
     assert response.status_code == 409
     assert (await client.get(f"/extensions/{other}")).json() == before
-    assert await repo.list_routes(NAME) == rows
+    # list_routes has no ORDER BY, so compare rows by id rather than by list order.
+    assert {row["id"]: row for row in await repo.list_routes(NAME)} == {row["id"]: row for row in rows}
     assert (await client.get("/openapi.json")).json() == openapi
     assert not any(getattr(route, "extension_name", None) == other for route in app.routes)
     assert (await client.post(f"/extensions/{NAME}/disable")).status_code == 200
@@ -1434,3 +1440,352 @@ async def test_opcua_discovery_actual_handler_subset_full_twelve_and_dto_parity(
     assert opcua_provider.calls == before_calls and opcua_provider.requests == before_requests
     assert cloud.effects == [] and cloud.direct_methods == 0
     assert cloud.blobs == {} and cloud.twins == {}
+
+
+# Recorded IoT Hub metadata is opaque: a stale report is not a current health probe.
+REPORTED_TIMESTAMP = "2026-10-14T10:00:00.1234567Z"
+REPORTED_OFFSET_TIMESTAMP = "2026-10-14T12:00:00.7654321+02:00"
+CAPTURE_NAMES = ["operational", "warning", "failed", "no-conditions"]
+
+
+def _effective_reported(previous, patch):
+    """Test-only IoT Hub oracle: null deletes, objects merge, arrays/scalars replace."""
+    effective = copy.deepcopy(previous)
+    for key, value in patch.items():
+        if value is None:
+            effective.pop(key, None)
+        elif isinstance(value, dict):
+            prior = effective.get(key)
+            effective[key] = _effective_reported(prior if isinstance(prior, dict) else {}, value)
+        else:
+            effective[key] = copy.deepcopy(value)
+    return effective
+
+
+def _set_opcua_reported(cloud, reported, *, module=MODULE):
+    cloud.twins[(DEVICE, module)] = {
+        "deviceId": DEVICE, "moduleId": module, "etag": "private-twin-envelope",
+        "properties": {"reported": copy.deepcopy(reported), "desired": {"credentials": "private-desired"}},
+    }
+
+
+@pytest.fixture
+def opcua_reported_io(cloud, monkeypatch):
+    """Observe the real helper's mocked HTTP boundary, including URL and deadline."""
+    requests = []
+    get = reported_route.get_async
+
+    async def observed_get(url, responses, headers=None, timeout=5):
+        requests.append((url, headers, timeout))
+        await get(url, responses, headers=headers, timeout=timeout)
+
+    monkeypatch.setattr(reported_route, "get_async", observed_get)
+    return requests
+
+
+def _assert_reported_read_only(cloud, requests, *, module=MODULE, reads=1):
+    assert requests == [(
+        f"https://testhub.invalid/twins/{DEVICE}/modules/{module}?api-version=2020-05-31-preview",
+        {"Authorization": "synthetic"}, 15,
+    )] * reads
+    assert cloud.effects == [("twin_read", DEVICE, module, {"Authorization": "synthetic"})] * reads
+    assert cloud.blobs == {} and cloud.direct_methods == 0
+
+
+@pytest.mark.parametrize("name", CAPTURE_NAMES)
+@pytest.mark.parametrize("timestamp", [None, REPORTED_TIMESTAMP, REPORTED_OFFSET_TIMESTAMP],
+                         ids=["omitted-metadata", "recorded-z-precision", "recorded-offset"])
+async def test_opcua_configuration_state_reporter_captures_effective_twin_public_get(
+    client, db_session, opcua_provider, lifecycle_state, cloud, opcua_reported_io, name, timestamp,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    capture = _artifact(f"reported-{name}.json")
+    original = copy.deepcopy(capture)
+    assert capture["provenance"]["sourceCommit"] == _artifact("provenance.json")["runtimeSourceCommit"]
+    assert capture["provenance"]["symbols"] == [
+        "ConfigurationStateReporter.reportCondition", "ConfigurationStateReporter.removeConditionsByPrefix",
+        "ConfigurationStateReporter.calculateState", "IoTEdgeInterface.updatePropertiesReported",
+    ]
+    previous = {
+        "configId": "private-runtime-config-id", "$version": 17, "unrelated": {"private": True},
+        "config": {"configs": {"legacy-client": {"status": False}}, "status": False,
+                   "health": "FAILED", "conditions": [{"name": "stale"}], "message": "Previous state"},
+    }
+    if timestamp is not None:
+        previous["$metadata"] = {"$lastUpdated": timestamp, "config": {"$lastUpdated": "1999-01-01T00:00:00Z"}}
+    prior = copy.deepcopy(previous)
+    assert capture["emittedPatch"]["config"]["configs"] is None
+    effective = _effective_reported(previous, capture["emittedPatch"])
+    assert effective["config"] == capture["effectiveConfig"]
+    assert "configs" not in effective["config"]
+    assert effective["configId"] == previous["configId"]
+    assert previous == prior and capture == original
+    _set_opcua_reported(cloud, effective)
+    twin = copy.deepcopy(cloud.twins)
+    expected = {"config": capture["effectiveConfig"]}
+    if timestamp is not None:
+        expected["lastUpdated"] = timestamp
+    rows = await _snapshots(get_repository(ExtensionRepository)(db_session))
+    Draft202012Validator(rows["reported"]["schema"]).validate(expected)
+    calls = opcua_provider.calls.copy()
+    response = await client.get(f"/{DEVICE}/twin/identity/{MODULE}/reported")
+    assert response.status_code == 200 and response.json() == expected
+    assert not {"configId", "diagnostic", "diagnostics", "$metadata", "properties", "etag"}.intersection(response.json())
+    assert cloud.twins == twin and opcua_provider.calls == calls
+    _assert_reported_read_only(cloud, opcua_reported_io)
+
+
+@pytest.mark.parametrize("reported,expected", [
+    (None, None),
+    ({}, None),
+    ({"configId": "private", "$version": 1}, None),
+    ({"$metadata": {}}, None),
+    ({"$metadata": {"$lastUpdated": None}}, None),
+    ({"$metadata": {"$lastUpdated": REPORTED_TIMESTAMP}}, {"lastUpdated": REPORTED_TIMESTAMP}),
+    ({"configId": "private", "config": {"status": True, "health": "OPERATIONAL", "conditions": []}},
+     {"config": {"status": True, "health": "OPERATIONAL", "conditions": []}}),
+], ids=["null-reported", "empty", "only-private", "empty-metadata", "null-timestamp", "metadata-only", "message-omitted"])
+async def test_opcua_reported_partial_null_no_data_public_get_has_no_injected_fields(
+    client, opcua_provider, lifecycle_state, cloud, opcua_reported_io, reported, expected,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    _set_opcua_reported(cloud, reported)
+    twin = copy.deepcopy(cloud.twins)
+    calls = opcua_provider.calls.copy()
+    response = await client.get(f"/{DEVICE}/twin/identity/{MODULE}/reported")
+    assert response.status_code == 200 and response.json() == expected
+    assert cloud.twins == twin and opcua_provider.calls == calls
+    _assert_reported_read_only(cloud, opcua_reported_io)
+
+
+async def test_opcua_reported_missing_section_is_null_without_module_or_health_probe(
+    client, opcua_provider, lifecycle_state, cloud, opcua_reported_io,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    cloud.twins[(DEVICE, MODULE)] = {"properties": {"desired": {"private": "not-returned"}}}
+    calls = opcua_provider.calls.copy()
+    response = await client.get(f"/{DEVICE}/twin/identity/{MODULE}/reported")
+    assert response.status_code == 200 and response.json() is None
+    assert opcua_provider.calls == calls
+    _assert_reported_read_only(cloud, opcua_reported_io)
+
+
+async def test_opcua_reported_stale_metadata_repeats_without_freshness_or_health_guarantee(
+    client, opcua_provider, lifecycle_state, cloud, opcua_reported_io,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    timestamp = "1999-01-01T00:00:00.1234567+02:00"
+    config = _artifact("reported-operational.json")["effectiveConfig"]
+    _set_opcua_reported(cloud, {"config": config, "$metadata": {"$lastUpdated": timestamp}})
+    twin = copy.deepcopy(cloud.twins)
+    calls = opcua_provider.calls.copy()
+    for _ in range(2):
+        response = await client.get(f"/{DEVICE}/twin/identity/{MODULE}/reported")
+        assert response.status_code == 200 and response.json() == {"config": config, "lastUpdated": timestamp}
+        assert response.json()["lastUpdated"].encode() == timestamp.encode()
+    assert cloud.twins == twin and opcua_provider.calls == calls
+    _assert_reported_read_only(cloud, opcua_reported_io, reads=2)
+
+
+@pytest.mark.parametrize("payload", [
+    {"config": None}, {"config": {}},
+    {"config": {"status": True, "health": "OPERATIONAL"}},
+    {"config": {"status": "true", "health": "OPERATIONAL", "conditions": []}},
+    {"config": {"status": True, "health": "UNKNOWN", "conditions": []}},
+    {"config": {"status": True, "health": "OPERATIONAL", "message": None, "conditions": []}},
+    {"config": {"status": False, "health": "FAILED", "conditions": [{"name": "configuration", "health": "FAILED"}]}},
+    {"$metadata": {"$lastUpdated": 123}},
+], ids=["null-config", "empty-config", "missing-conditions", "no-status-coercion", "unknown-health",
+        "null-message", "missing-condition-message", "numeric-metadata"])
+async def test_opcua_reported_active_invalid_data_is_safe_500_after_one_exact_twin_read(
+    client, opcua_provider, lifecycle_state, cloud, opcua_reported_io, payload,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    _set_opcua_reported(cloud, payload)
+    twin = copy.deepcopy(cloud.twins)
+    calls = opcua_provider.calls.copy()
+    response = await client.get(f"/{DEVICE}/twin/identity/{MODULE}/reported")
+    assert response.status_code == 500 and response.json() == MISMATCH
+    assert "configuration" not in response.text and "errors" not in response.json()
+    assert cloud.twins == twin and opcua_provider.calls == calls
+    _assert_reported_read_only(cloud, opcua_reported_io)
+
+
+@pytest.mark.parametrize("actions,region,status", [
+    (["device.read"], "EU", 200),
+    (["device.read"], "US", 403),
+    (["opcua.methods.read", "device.module_twin_config.write"], "EU", 403),
+    ([], "EU", 403),
+])
+async def test_opcua_reported_non_admin_device_read_auth_precedes_invalid_or_unavailable_contract(
+    client, db_session, opcua_provider, lifecycle_state, cloud, opcua_reported_io, actions, region, status,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    await AbacFixtures(db_session).setup(
+        users={"caller": "opcua-reported-caller-oid"},
+        scopes={"eu": {"attr": {"region": "EU"}, "access_rule": "ALL"}},
+        roles={"reported-role": actions},
+        teams={"reported-team": {"scope": "eu", "roles": ["reported-role"], "users": ["caller"]}},
+        devices={DEVICE: {"region": region}},
+    )
+
+    async def caller():
+        return {"oid": "opcua-reported-caller-oid", "sub": "opcua-reported-caller-oid", "roles": []}
+
+    previous = app.dependency_overrides[auth.validate_jwt]
+    app.dependency_overrides[auth.validate_jwt] = caller
+    try:
+        calls = opcua_provider.calls.copy()
+        config = _artifact("reported-warning.json")["effectiveConfig"]
+        _set_opcua_reported(cloud, {"config": config})
+        for state, allowed_status in [("valid", 200), ("invalid", 500), ("unavailable", 503)]:
+            if state == "invalid":
+                _set_opcua_reported(cloud, {"config": {"health": "private-invalid-data"}})
+            elif state == "unavailable":
+                module_schema_registry.replace_extension_entries(NAME, [], [MODULE])
+            cloud.effects.clear()
+            opcua_reported_io.clear()
+            response = await client.get(f"/{DEVICE}/twin/identity/{MODULE}/reported")
+            assert response.status_code == (allowed_status if status == 200 else 403)
+            if status == 403 or state == "unavailable":
+                _assert_reported_read_only(cloud, opcua_reported_io, reads=0)
+            else:
+                _assert_reported_read_only(cloud, opcua_reported_io)
+            if status == 200:
+                assert response.json() == {"valid": {"config": config}, "invalid": MISMATCH, "unavailable": UNAVAILABLE}[state]
+            assert "private-invalid-data" not in response.text and "errors" not in response.json()
+        assert opcua_provider.calls == calls
+    finally:
+        app.dependency_overrides[auth.validate_jwt] = previous
+
+
+@pytest.mark.parametrize("state", ["unregistered", "no-module-schemas", "configuration-only", "disabled"])
+async def test_opcua_reported_generic_fallback_without_active_reported_schema(
+    client, opcua_provider, lifecycle_state, cloud, opcua_reported_io, state,
+):
+    if state != "unregistered":
+        manifest = await _register_opcua(client, lifecycle_state, opcua_provider, enable=state != "disabled")
+        if state in {"no-module-schemas", "configuration-only"}:
+            if state == "no-module-schemas":
+                del manifest["module_schemas"]
+            else:
+                del manifest["module_schemas"][MODULE]["reported_schema_ref"]
+            assert (await client.put(f"/extensions/{NAME}", json=manifest)).status_code == 200
+    assert module_schema_registry.get(MODULE, "reported") is None
+    # Deliberately invalid typed data distinguishes generic fallback from enforcement.
+    raw = {"config": {"health": "legacy-generic", "keepNull": None}, "configId": "private"}
+    _set_opcua_reported(cloud, raw)
+    calls = opcua_provider.calls.copy()
+    response = await client.get(f"/{DEVICE}/twin/identity/{MODULE}/reported")
+    assert response.status_code == 200 and response.json() == {"config": raw["config"]}
+    assert opcua_provider.calls == calls
+    _assert_reported_read_only(cloud, opcua_reported_io)
+
+
+async def test_opcua_reported_schema_is_selected_by_exact_module_not_prefix(
+    client, opcua_provider, lifecycle_state, cloud, opcua_reported_io,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    other = f"{MODULE}-other"
+    _set_opcua_reported(cloud, {"config": {"health": "generic-other-module"}}, module=other)
+    calls = opcua_provider.calls.copy()
+    response = await client.get(f"/{DEVICE}/twin/identity/{other}/reported")
+    assert response.status_code == 200 and response.json() == {"config": {"health": "generic-other-module"}}
+    assert opcua_provider.calls == calls
+    _assert_reported_read_only(cloud, opcua_reported_io, module=other)
+
+
+async def test_opcua_reported_public_ref_remove_restore_replace_disable_hydrate_deregister(
+    client, db_session, opcua_provider, lifecycle_state, cloud, opcua_reported_io, hydrate,
+):
+    manifest = await _register_opcua(client, lifecycle_state, opcua_provider)
+    repo = get_repository(ExtensionRepository)(db_session)
+    config = _artifact("reported-warning.json")["effectiveConfig"]
+    _set_opcua_reported(cloud, {"config": config})
+
+    async def check(status, expected):
+        calls = opcua_provider.calls.copy()
+        cloud.effects.clear()
+        opcua_reported_io.clear()
+        response = await client.get(f"/{DEVICE}/twin/identity/{MODULE}/reported")
+        assert response.status_code == status and response.json() == expected
+        assert opcua_provider.calls == calls
+        _assert_reported_read_only(cloud, opcua_reported_io)
+
+    await check(200, {"config": config})
+    _set_opcua_reported(cloud, {"config": {"health": "generic"}})
+    await check(500, MISMATCH)
+    del manifest["module_schemas"][MODULE]["reported_schema_ref"]
+    assert (await client.put(f"/extensions/{NAME}", json=manifest)).status_code == 200
+    await _snapshots(repo, purposes=("configuration",))
+    await check(200, {"config": {"health": "generic"}})
+    assert (await client.put(f"/extensions/{NAME}", json=_manifest(opcua_provider))).status_code == 200
+    before = await _snapshots(repo)
+    await check(500, MISMATCH)
+    _set_opcua_reported(cloud, {"config": config})
+    await check(200, {"config": config})
+
+    # Test-only replacement provider document tightens one health enum to prove
+    # public GET uses the new persisted snapshot, not a stale validator cache.
+    component = opcua_provider.document["components"]["schemas"]["OpcuaClientReportedConfig"]
+    component["properties"]["health"]["enum"] = ["OPERATIONAL"]
+    assert (await client.put(f"/extensions/{NAME}", json=_manifest(opcua_provider))).status_code == 200
+    after = await _snapshots(repo)
+    assert after["reported"]["version"] != before["reported"]["version"]
+    assert after["reported"]["schema"] != before["reported"]["schema"]
+    # Version also includes resolution time; compare the unaffected purpose's schema.
+    assert after["configuration"]["schema"] == before["configuration"]["schema"]
+    await check(500, MISMATCH)
+    assert (await client.post(f"/extensions/{NAME}/disable")).status_code == 200
+    await check(200, {"config": config})
+    assert (await client.post(f"/extensions/{NAME}/enable")).status_code == 200
+    persisted = await _snapshots(repo)
+    await check(500, MISMATCH)
+    # Offline provider hydration retains the valid persisted contract, without
+    # making availability/freshness of hardware a condition for reported GET.
+    opcua_provider.document = None
+    extensions_setup._unmount_extension(NAME)
+    await hydrate()
+    assert not module_schema_registry.is_unavailable(MODULE)
+    assert (await _snapshots(repo))["reported"]["version"] == persisted["reported"]["version"]
+    await check(500, MISMATCH)
+    config = _artifact("reported-operational.json")["effectiveConfig"]
+    _set_opcua_reported(cloud, {"config": config})
+    await check(200, {"config": config})
+    assert (await client.delete(f"/extensions/{NAME}")).status_code == 204
+    assert await repo.list_module_schemas(NAME) == []
+    assert module_schema_registry.claim_owner(MODULE) is None
+    _set_opcua_reported(cloud, {"config": {"health": "generic"}})
+    await check(200, {"config": {"health": "generic"}})
+
+
+@pytest.mark.parametrize("failure,message", [
+    ("missing-module", f"Module {MODULE} not found on device {DEVICE}"),
+    ("backend", "Could not retrieve module identity twin: synthetic upstream failure"),
+    ("network", "synthetic network failure"),
+    ("invalid-json", "Expecting value: line 1 column 1 (char 0)"),
+])
+async def test_opcua_reported_real_helper_preserves_existing_500_error_wrappers(
+    client, opcua_provider, lifecycle_state, cloud, opcua_reported_io, monkeypatch, failure, message,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    if failure != "missing-module":
+        observed_get = reported_route.get_async
+
+        async def failed_get(url, responses, headers=None, timeout=5):
+            # Record the same exact boundary as a successful/missing-module read.
+            await observed_get(url, responses, headers=headers, timeout=timeout)
+            if failure == "network":
+                raise RuntimeError("synthetic network failure")
+            responses[url].status_code = 200 if failure == "invalid-json" else 502
+            responses[url].text = "not JSON" if failure == "invalid-json" else "synthetic upstream failure"
+
+        monkeypatch.setattr(reported_route, "get_async", failed_get)
+    calls = opcua_provider.calls.copy()
+    response = await client.get(f"/{DEVICE}/twin/identity/{MODULE}/reported")
+    assert response.status_code == 500
+    # The shipped APIError handler stringifies the helper's error dict under message.
+    helper_error = {"error": "IoTBackendAPIError", "message": f"Could not retrieve module identity twin: {message}"}
+    assert response.json() == {"message": str(helper_error)}
+    assert opcua_provider.calls == calls
+    _assert_reported_read_only(cloud, opcua_reported_io)

@@ -266,3 +266,68 @@ The ASGI client does not run full lifespan; hydration is explicitly exercised
 against the isolated session. Synthetic JWT and cloud fixtures do not establish
 live OIDC/Blob/IoT Hub/device readiness. Independent review and whole-plan
 acceptance remain separate from these focused gates.
+
+### IIOT-2913 OPCUA reported projection adoption (WP-8 core)
+
+`tests/integration/test_opcua_extension.py` consumes the committed provider
+`47359569edf53bdcf55c50591916c3cda35a655a` without importing or executing sibling
+provider/runtime code. `tests/fixtures/opcua/provenance.json` records byte hashes,
+source paths, the original runtime revision and prior provider receipts. The four
+`reported-*.json` captures come from the original `ConfigurationStateReporter`
+through the mocked IoT adapter and fake timers: operational, warning, failed
+(including the invalid-configuration message), and removed/empty conditions.
+These are runtime captures, not synthesized hardware health observations.
+
+A test-only IoT Hub merge/deletion oracle applies each exact emitted patch to a
+previous twin. `configs: null` deletes the legacy member; arrays replace stale
+conditions, and omitted private `configId` survives only in the effective twin.
+The effective twin is replayed through real authenticated registration and the
+public `GET /{device}/twin/identity/seal-module-opcua-client/reported`, using the
+real core helper with only IoT Hub HTTP/auth settings mocked. Real allowlisted
+loopback HTTP serves the copied OpenAPI during management/hydration; schema
+snapshots persist in disposable PostgreSQL. No provider reported endpoint is
+invented and no wizard code is changed.
+
+The suite checks exact module/URL/15-second helper deadline, literal conditions
+and messages, metadata precision/offset preservation, omitted message,
+metadata-only, absent/null/empty reported sections, and repeatable stale
+snapshots. Metadata/partial/no-data variants are synthetic projection checks,
+not additional runtime emissions. An old `lastUpdated` is returned unchanged:
+there is **no freshness, current acquisition or healthy-hardware guarantee**.
+The no-conditions operational capture is likewise not proof of acquired data.
+
+Non-admin repository-seeded callers need scoped `device.read`, independently of
+OPCUA method/template or configuration-write actions. Denials remain `403`
+before invalid-data `500` or claimed/unavailable `503`. Active invalid data
+returns the existing safe mismatch `500`, while unregistered, no-schema,
+configuration-only, disabled, ref-removed and deregistered states use the
+inherited generic projection. Replace/restore and explicit startup hydration
+exercise the persisted reported contract and validator-cache lifecycle; the
+narrower replacement document is explicitly test-only. Existing missing-module,
+backend, network and JSON-error `500` wrappers are preserved, including the
+shipped APIError handler's stringified error dictionary under `message`.
+
+Every accepted GET has only the exact mocked IoT Hub read; denied/unavailable
+GETs have none. Counters/observers assert no request-time provider/schema/health
+calls, Blob operations, direct methods, uploads or twin writes. The returned
+runtime projection excludes full-twin/desired/configId envelopes and does not
+invent diagnostic(s), defaults or timestamps. Fixture/hash tests and management
+fixtures restore shared state and roll back test-only authorization rows.
+
+Run with the existing Python 3.14 `.venv`, pinned requirements and Docker:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/integration/test_opcua_extension.py tests/integration/test_module_config.py tests/integration/test_module_schema_lifecycle.py tests/integration/test_extension_direct_method_discovery.py tests/integration/test_extension_templates.py -q -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit -q -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/integration -q -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m alembic heads
+git diff --check
+```
+
+These are local core integration checks, not whole-plan verification. Live Blob
+catalog parity still needs secure Owner settings; live cloud/device/JWT/OIDC
+smoke, independent review, Owner review/role enablement and an explicit Owner
+no-test-CI exception remain pending. Previously accepted runtime-only NodeId,
+host/port and PEM checks are unchanged; the shipped empty-PEM example remains a
+runtime rejection. No runtime/provider production code, credentials, production
+role grants, cloud calls or dependency changes are part of this core stage.
