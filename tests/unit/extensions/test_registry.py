@@ -69,6 +69,23 @@ def test_manifest_rejects_duplicate_action_names():
     assert exc_info.value.status_code == 422
 
 
+def test_manifest_rejects_duplicate_route_claims_but_allows_other_methods_or_visibility():
+    duplicate = _registration()
+    duplicate.routes.append(duplicate.routes[0].model_copy(deep=True))
+    with pytest.raises(APIError, match="Duplicate route") as exc_info:
+        _validate_manifest_cross_references(duplicate)
+    assert exc_info.value.status_code == 422
+
+    distinct = _registration()
+    distinct.routes[0].method = "POST"
+    distinct.routes.append(distinct.routes[0].model_copy(update={"method": "GET"}))
+    _validate_manifest_cross_references(distinct)
+
+    separate_visibility = _registration()
+    separate_visibility.routes.append(separate_visibility.routes[0].model_copy(update={"visibility": "internal"}))
+    _validate_manifest_cross_references(separate_visibility)
+
+
 @pytest.mark.asyncio
 async def test_action_declaration_rejects_platform_action():
     extension_repo = AsyncMock()

@@ -123,6 +123,120 @@ def test_response_schema_is_documented_with_resolvable_hoisted_components():
     assert hoisted[f"{prefix}Items"]["items"] == {"$ref": f"#/components/schemas/{prefix}Item"}
 
 
+def test_upstream_declared_request_components_are_hoisted_and_namespaced_per_route():
+    public, internal = FastAPI(), FastAPI()
+    runtime.install_openapi_components(public)
+    routes = []
+    for route_id, path, leaf_type in (
+        ("11111111-1111-4111-8111-111111111111", "/first", "string"),
+        ("22222222-2222-4222-8222-222222222222", "/second", "integer"),
+    ):
+        routes.append(
+            _route(
+                route_id,
+                path,
+                method="POST",
+                validation_mode="upstream_declared",
+                body={
+                    "$ref": "#/components/schemas/Root",
+                    "components": {
+                        "schemas": {
+                            "Root": {"type": "object", "properties": {"leaf": {"$ref": "#/components/schemas/Leaf"}}},
+                            "Leaf": {"type": leaf_type},
+                        }
+                    },
+                },
+            )
+        )
+    _mount(public, internal, "widgets", routes)
+
+    openapi = public.openapi()
+    components = openapi["components"]["schemas"]
+    first = openapi["paths"]["/first"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+    second = openapi["paths"]["/second"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+    first_prefix = "ext_11111111111141118111111111111111_request_"
+    second_prefix = "ext_22222222222242228222222222222222_request_"
+
+    assert first == {"$ref": f"#/components/schemas/{first_prefix}Root"}
+    assert second == {"$ref": f"#/components/schemas/{second_prefix}Root"}
+    assert components[f"{first_prefix}Root"]["properties"]["leaf"] == {
+        "$ref": f"#/components/schemas/{first_prefix}Leaf"
+    }
+    assert components[f"{first_prefix}Leaf"]["type"] == "string"
+    assert components[f"{second_prefix}Leaf"]["type"] == "integer"
+
+    runtime.publish_routes(public, internal, "widgets", None)
+    assert not [
+        name
+        for name in public.openapi().get("components", {}).get("schemas", {})
+        if "_request_" in name
+    ]
+
+
+def test_declared_request_schema_keeps_its_existing_verbatim_openapi_representation():
+    public, internal = FastAPI(), FastAPI()
+    runtime.install_openapi_components(public)
+    literal = {"$ref": "https://example.invalid/literal-schema"}
+    _mount(public, internal, "widgets", [_route("literal", "/literal", method="POST", validation_mode="declared", body=literal)])
+
+    schema = public.openapi()["paths"]["/literal"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+
+    assert schema == literal
+
+
+@pytest.mark.asyncio
+async def test_hydration_sorts_enabled_extensions_and_skips_persisted_route_collisions(monkeypatch):
+    public, internal = FastAPI(), FastAPI()
+    errors = []
+    monkeypatch.setattr(runtime.logger, "error", errors.append)
+
+    class Repository:
+        async def list_extensions_rows(self):
+            return [
+                {"name": "zeta", "enabled": True},
+                {"name": "disabled", "enabled": False},
+                {"name": "alpha", "enabled": True},
+            ]
+
+        async def list_upstreams(self, name):
+            return UPSTREAMS
+
+        async def list_routes(self, name):
+            return [_route(f"{name}-route", "/shared")]
+
+    await runtime.load_all_routes(public, internal, Repository())
+
+    assert _live_paths(public, "alpha") == ["/shared"]
+    assert _live_paths(public, "zeta") == []
+    assert _live_paths(public, "disabled") == []
+    assert any("already owned by extension 'alpha'" in message for message in errors)
+
+
+@pytest.mark.asyncio
+async def test_hydration_skips_an_ambiguous_manifest_without_aborting_unrelated_extensions(monkeypatch):
+    public, internal = FastAPI(), FastAPI()
+    errors = []
+    monkeypatch.setattr(runtime.logger, "error", errors.append)
+
+    class Repository:
+        async def list_extensions_rows(self):
+            return [{"name": "ambiguous", "enabled": True}, {"name": "unrelated", "enabled": True}]
+
+        async def list_upstreams(self, name):
+            return UPSTREAMS
+
+        async def list_routes(self, name):
+            if name == "ambiguous":
+                return [_route("first", "/duplicate"), _route("second", "/duplicate")]
+            return [_route("unrelated", "/safe")]
+
+    await runtime.load_all_routes(public, internal, Repository())
+
+    assert _live_paths(public, "ambiguous") == []
+    assert _live_paths(public, "unrelated") == ["/safe"]
+    assert any("manifest repeats GET /duplicate" in message for message in errors)
+
+
 def test_unmounting_a_response_route_removes_its_components_from_openapi():
     public, internal = FastAPI(), FastAPI()
     runtime.install_openapi_components(public)

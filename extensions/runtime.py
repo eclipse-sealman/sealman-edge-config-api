@@ -21,7 +21,7 @@ from db.session import get_repository
 from exceptions import APIError
 from helper import AuditTrail
 
-from . import body_validation, signature
+from . import body_validation, route_ownership, signature
 from .security import keys_match
 from .upstreams import http as http_upstream
 from .upstreams import iotedge as iotedge_upstream
@@ -111,11 +111,14 @@ def _dispatch_handler(extension_name: str, upstream: Dict[str, Any], route: Dict
     return _handler
 
 
-def _hoist_response_schema(route_id: str, schema: dict) -> Tuple[dict, Dict[str, dict]]:
-    """Splits a route's self-contained response schema into its root and its components.
-    Components are renamed with a prefix unique to the route, so they cannot collide in
-    the API's OpenAPI document; every local reference is rewritten to match."""
+def _hoist_openapi_schema(
+    route_id: str, schema: dict, component_scope: str = ""
+) -> Tuple[dict, Dict[str, dict]]:
+    """Splits a self-contained schema into its root and components, namespaced to its
+    route (and optionally request/response role) so published refs cannot collide."""
     prefix = f"ext_{route_id.replace('-', '')}_"
+    if component_scope:
+        prefix += f"{component_scope}_"
 
     def hoisted_name(name: str) -> str:
         return prefix + _OPENAPI_COMPONENT_NAME_INVALID_RE.sub("_", name)
@@ -138,7 +141,7 @@ def _hoist_response_schema(route_id: str, schema: dict) -> Tuple[dict, Dict[str,
 
 
 def install_openapi_components(app: FastAPI) -> None:
-    """Merges the live extension routes' response components into `app`'s OpenAPI document.
+    """Merges live extension request/response components into `app`'s OpenAPI document.
     FastAPI builds components only from its own models, so they are added after generation.
     `publish_routes` clears the cached document, so removed routes drop out on the next read."""
     generate = app.openapi
@@ -208,19 +211,23 @@ def _add_routes_from_specs(
         tags = list(route.get("tags") or []) + [f"Extension: {extension_name}"]
         method = route.get("method") or "GET"
 
-        # Documents the route's raw JSON Schema body in /openapi.json only, merged
-        # verbatim into the generated Operation Object, never bound as a native
-        # FastAPI Body(...) param (see signature.py). Covers both `declared` (author-
-        # supplied) and `upstream_declared` (fetched-from-upstream) bodies, since both
-        # populate route["body"]; `none`/`unreachable_ref` routes leave this None.
+        # Documents the route's raw JSON Schema body in /openapi.json only, never bound
+        # as a native FastAPI Body(...) param (see signature.py). Fetched upstream bodies
+        # have their local component closure namespaced and published alongside the operation.
         openapi_extra = None
+        request_components: Dict[str, dict] = {}
         if route.get("body"):
+            request_schema = route["body"]
+            if route.get("validation_mode") == "upstream_declared":
+                request_schema, request_components = _hoist_openapi_schema(
+                    route["id"], request_schema, component_scope="request"
+                )
             openapi_extra = {
                 "requestBody": {
                     "required": True,
                     "content": {
                         "application/json": {
-                            "schema": route["body"],
+                            "schema": request_schema,
                             **({"example": route["example"]} if route.get("example") else {}),
                         }
                     },
@@ -228,9 +235,9 @@ def _add_routes_from_specs(
             }
         # `response_ref` documents the upstream's response schema for the route's status code.
         # Its components are published by install_openapi_components, not by the operation.
-        response_components: Dict[str, dict] = {}
+        route_components: Dict[str, dict] = {}
         if route.get("response_schema"):
-            response_schema, response_components = _hoist_response_schema(route["id"], route["response_schema"])
+            response_schema, route_components = _hoist_openapi_schema(route["id"], route["response_schema"])
             openapi_extra = {
                 **(openapi_extra or {}),
                 "responses": {
@@ -239,6 +246,7 @@ def _add_routes_from_specs(
                     }
                 },
             }
+        route_components.update(request_components)
 
         target_app.add_api_route(
             route["path"],
@@ -258,7 +266,7 @@ def _add_routes_from_specs(
         mounted = target_app.router.routes[-1]
         mounted.extension_name = extension_name
         mounted.extension_route_id = route["id"]
-        mounted.extension_openapi_components = response_components
+        mounted.extension_openapi_components = route_components
 
 
 def build_routes(
@@ -316,14 +324,40 @@ async def load_all_routes(
     """Re-mounts every persisted, *enabled* extension's routes, called once at startup
     so registrations survive a process restart. A disabled extension stays disabled.
     One extension failing to build is logged and skipped; it must not abort startup."""
-    for ext in await extension_repo.list_extensions_rows():
+    claims: Dict[route_ownership.RouteClaim, str] = {}
+    extensions = sorted(await extension_repo.list_extensions_rows(), key=lambda row: row["name"])
+    for ext in extensions:
         if not ext.get("enabled"):
             continue
         upstreams = await extension_repo.list_upstreams(ext["name"])
         routes = await extension_repo.list_routes(ext["name"])
+        duplicate = route_ownership.duplicate_claim(routes)
+        if duplicate is not None:
+            logger.error(
+                f"Skipping enabled extension '{ext['name']}' during hydration: its manifest repeats "
+                f"{duplicate[1]} {duplicate[2]} in the {duplicate[0]} app"
+            )
+            continue
+        collision = next(
+            (
+                (claims[claim], claim)
+                for route in routes
+                if (claim := route_ownership.route_claim(route)) in claims
+            ),
+            None,
+        )
+        if collision is not None:
+            owner, claim = collision
+            logger.error(
+                f"Skipping enabled extension '{ext['name']}' during hydration: {claim[1]} {claim[2]} "
+                f"in the {claim[0]} app is already owned by extension '{owner}'"
+            )
+            continue
         try:
             built = build_routes(public_app, internal_app, ext["name"], upstreams, routes)
         except Exception:
             logger.exception(f"Could not build routes for extension '{ext['name']}'; it stays unmounted")
             continue
         publish_routes(public_app, internal_app, ext["name"], built)
+        for route in routes:
+            claims[route_ownership.route_claim(route)] = ext["name"]

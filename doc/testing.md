@@ -173,6 +173,45 @@ git diff --check
 
 Existing module/extension tests remain the evidence for detailed malformed-body,
 size-limit, helper-error, local-ref, deep/surrogate/`_sa` serialization and disabled
-extension-startup regressions. These local tests do not verify production protocol
-schema parity, templates/CRUD/collisions, consumer/edge changes, live devices,
-release/deployment or cloud/OIDC connectivity; they do not replace Owner review.
+extension-startup regressions. Local core tests do not establish production protocol
+schema parity, consumer/edge changes, live-device behavior, release/deployment or
+cloud/OIDC connectivity; they do not replace Owner review.
+
+### IIOT-2916 neutral template conformance
+
+`tests/integration/test_extension_templates.py` verifies the feature-branch
+protocol-neutral template contract through the real `/extensions/schema`,
+registration/enable/replace/disable/deregister APIs, public ASGI dispatch and
+OpenAPI generation. Test-only FastAPI/Pydantic models generate provider OpenAPI;
+function-scoped `ThreadingHTTPServer` instances bind only to allowlisted
+`127.0.0.1` loopback ports and serve a read-only catalog and a separate full-CRUD
+catalog. No protocol provider, production catalog, credentials, cloud/device
+service or additional dependency is needed.
+
+The suite uses the normal integration Testcontainers PostgreSQL/migration and
+outer-transaction rollback fixtures. Since `ASGITransport` skips lifespan, the
+startup contract is exercised by explicitly calling
+`extensions.setup.hydrate_all_routes()` against the isolated session. Synthetic
+JWT identities bypass OIDC only; real non-admin users, action rows, roles and
+teams are seeded through `AbacFixtures` and the real repositories. A separate
+missing-bearer case proves rejection before OIDC initialization or provider I/O.
+The only unreachable-source case targets a closed loopback port; no production
+network endpoint is mocked or contacted.
+
+The tests assert route/query/body/response forwarding, provider error and core
+502 behavior, nested request/response OpenAPI references, independent per-action
+ABAC, no automatic role grants, exact all-extension route ownership conflicts,
+replacement/disable/deregister cleanup, and cache cleanup. Teardown closes each
+loopback server and upstream HTTP client, removes only test-owned extension
+routes, and restores dependency, module-registry, validator-cache and OpenAPI
+state even after assertion failure. These generic fixtures are core conformance
+evidence; downstream provider implementers still own provider-specific catalog,
+schema and registration acceptance.
+
+Run the focused suite and adjacent lifecycle/dispatch regressions with the repo's
+existing development environment and Docker:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/integration/test_extension_templates.py -q -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/integration/test_extensions_dispatch.py tests/integration/test_extensions_dynamic_routes.py tests/integration/test_extensions_management_routes.py tests/integration/test_module_schema_lifecycle.py -q -p no:cacheprovider
+```
