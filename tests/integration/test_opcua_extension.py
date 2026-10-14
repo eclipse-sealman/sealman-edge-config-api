@@ -34,6 +34,7 @@ from main import app
 from routers.module_config.registry import module_schema_registry
 from routers.module_config.routes import post_module_twin_config as write_route
 from tests.integration.test_abac_authorization import AbacFixtures
+from tests.integration.test_extension_direct_method_discovery import forbid_discovery_io  # noqa: F401
 from tests.integration.test_module_config import blob_store, iot_hub, post_writes  # noqa: F401
 from tests.integration.test_extensions_management_routes import (  # noqa: F401
     _fresh_http_upstream_client,
@@ -1375,3 +1376,61 @@ async def test_opcua_templates_expose_no_write_delete_or_configuration_facade(
     assert (await client.get("/opcua/config/test-device")).status_code == 404
     assert opcua_provider.calls == calls
     _assert_templates_have_no_module_effects(cloud)
+
+
+@pytest.mark.parametrize("actions, region, expected", [
+    (["opcua.methods.read"], "EU", METHODS - {"writeNode", "writeNodes"}),
+    (["opcua.methods.write"], "EU", {"writeNode", "writeNodes"}),
+    (["opcua.methods.read", "opcua.methods.write"], "EU", METHODS),
+    ([], "EU", set()),
+    (["opcua.methods.read", "opcua.methods.write"], "US", set()),
+])
+async def test_opcua_discovery_actual_handler_subset_full_twelve_and_dto_parity(
+    client, db_session, fake_jwt_user, opcua_provider, lifecycle_state, cloud,
+    forbid_discovery_io, actions, region, expected,
+):
+    manifest = await _register_opcua(client, lifecycle_state, opcua_provider)
+    await AbacFixtures(db_session).setup(
+        users={"caller": "opcua-discovery-caller"},
+        scopes={"eu": {"attr": {"region": "EU"}, "access_rule": "ALL"}},
+        roles={"method-role": actions},
+        teams={"method-team": {"scope": "eu", "roles": ["method-role"], "users": ["caller"]}},
+        devices={DEVICE: {"region": region}},
+    )
+    fake_jwt_user.clear()
+    fake_jwt_user.update({"oid": "opcua-discovery-caller", "name": "OPCUA discovery", "roles": []})
+    assert (await client.get(f"/extensions/{NAME}")).status_code == 403
+    before_calls = opcua_provider.calls.copy()
+    before_requests = copy.deepcopy(opcua_provider.requests)
+    with forbid_discovery_io():
+        response = await client.get(f"/extensions/{NAME}/direct-methods", params={"device_id": DEVICE})
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert (await client.get(f"/extensions/{NAME}/direct-methods", params={"device_id": DEVICE})).json() == result
+    assert result["extension"] == NAME and result["device_id"] == DEVICE and result["enabled"] is True
+    assert {m["method_name"] for m in result["methods"]} == expected
+    assert [m["method_name"] for m in result["methods"]] == sorted(expected)
+    handlers = _artifact("provenance.json")["registeredHandlers"]
+    methods = _artifact("methods.json")
+    routes = {r["iotedge"]["method_name"]: r for r in manifest["routes"] if "iotedge" in r}
+    for method in result["methods"]:
+        name = method["method_name"]
+        assert name in handlers and method["module_id"] == MODULE
+        assert len(method["invocations"]) == 1
+        invocation = method["invocations"][0]
+        binding = routes[name]
+        assert invocation["path"] == binding["path"] == f"/opcua/{name}"
+        assert invocation["http_method"] == binding["method"] == "POST"
+        assert invocation["summary"] == binding.get("summary", f"{NAME}: POST /opcua/{name}")
+        assert invocation["scoped"] is True
+        assert (invocation["scope_param"], invocation["scope_in"]) == ("device_id", "query")
+        assert invocation["query_params"] == [{**binding["query_params"][0], "description": binding["query_params"][0].get("description")}]
+        assert invocation["request_schema"] == binding.get("body") == methods[name]
+        if handlers[name]["readsPayload"]:
+            Draft202012Validator.check_schema(invocation["request_schema"])
+            _assert_refs(invocation["request_schema"], invocation["request_schema"])
+        else:
+            assert invocation["request_schema"] is None
+    assert opcua_provider.calls == before_calls and opcua_provider.requests == before_requests
+    assert cloud.effects == [] and cloud.direct_methods == 0
+    assert cloud.blobs == {} and cloud.twins == {}

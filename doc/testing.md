@@ -215,3 +215,54 @@ existing development environment and Docker:
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/integration/test_extension_templates.py -q -p no:cacheprovider
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/integration/test_extensions_dispatch.py tests/integration/test_extensions_dynamic_routes.py tests/integration/test_extensions_management_routes.py tests/integration/test_module_schema_lifecycle.py -q -p no:cacheprovider
 ```
+
+### IIOT-2913 shared direct-method discovery
+
+`tests/unit/extensions/test_direct_method_discovery.py` covers persisted selection,
+exact module/method grouping, authorized aliases, scoped/unscoped/no-action
+invocation policy, safe projection, typed empty responses and fresh permission
+reads. Local JSON pointers, anchors, recursive definitions and embedded resource
+IDs resolve entirely within the descriptor and are returned unchanged. New public
+IoT Edge registrations still require scoped actions; unscoped/no-action runtime
+semantics are tested with persisted-row unit fixtures, not relaxed registration.
+
+`tests/integration/test_extension_direct_method_discovery.py` uses real management
+lifecycle, PostgreSQL repositories and non-admin ABAC users/roles/device metadata.
+It checks replacement, role/device changes, deregistration, explicit startup
+hydration and static typed OpenAPI uniqueness. Normal JWT is required without
+`Extension.READ`. Missing/invalid authentication or a token without `oid`/`sub`
+keeps the shipped global `401`; discovery user-resolution failure is `403`;
+unknown extension/device is `404`; missing/empty/repeated `device_id` is `400`.
+Only the unresolved-user HTTP test bypasses provisioning with a test-only
+dependency override; production authentication and global handlers are unchanged.
+
+For an **authorized** non-self-contained body, the approved response is exactly
+HTTP `500` with `{"message": "This route's body schema is misconfigured"}`.
+Tests cover remote and dangling references, ID-only server error logging,
+no schema/route ID/exception/traceback in the response, unauthorized/device-filtered
+and disabled non-trigger cases, and unchanged local-reference bodies even when
+another extension owns a bad schema. Fail-on-use mocks guard dispatch, upstream
+schema retrieval, health checks, and Blob/IoT Hub boundaries. No unresolved body
+is returned and no remote reference is fetched.
+
+`test_opcua_discovery_actual_handler_subset_full_twelve_and_dto_parity` in
+`tests/integration/test_opcua_extension.py` consumes the hashed provider manifest,
+DTO exports and captured `src/app.ts` handler inventory in
+`tests/fixtures/opcua/provenance.json`. It asserts the real read-ten/write-two/full-
+twelve subsets, exact module/bindings/body/query metadata, non-admin device-scope
+filtering and zero provider/cloud effects. These are registration-backed local
+contract checks, not live hardware or cloud execution evidence.
+
+Run with the existing pinned Python environment and Docker/Testcontainers:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit/extensions/test_direct_method_discovery.py tests/integration/test_extension_direct_method_discovery.py tests/integration/test_opcua_extension.py -q -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit/extensions/ -q -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/integration/test_extensions_management_routes.py tests/integration/test_extensions_dynamic_routes.py -q -p no:cacheprovider
+git diff --check
+```
+
+The ASGI client does not run full lifespan; hydration is explicitly exercised
+against the isolated session. Synthetic JWT and cloud fixtures do not establish
+live OIDC/Blob/IoT Hub/device readiness. Independent review and whole-plan
+acceptance remain separate from these focused gates.

@@ -12,7 +12,9 @@ from collections import defaultdict
 from typing import DefaultDict, Dict, List, Optional
 
 import uvicorn
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+
+from auth import validate_jwt
 
 from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Extension
@@ -21,15 +23,18 @@ from constants import (
     EXTENSIONS_INTERNAL_API_HOST,
     EXTENSIONS_INTERNAL_API_PORT,
 )
+from db.repos.device import DeviceRepository
 from db.repos.extension import ExtensionRepository
 from db.repos.role import RoleRepository
+from db.repos.user import UserRepository
 from db.session import AsyncSessionLocal, get_repository
 from exceptions import APIError
 from routers.base_api_router import BaseAPIRouter
 from routers.module_config.registry import ModuleSchemaConflictError, module_schema_registry
 
-from . import registry, route_ownership, runtime
+from . import discovery, registry, route_ownership, runtime
 from .schemas import (
+    DirectMethodDiscovery,
     ExtensionDetail,
     ExtensionHealthCheckResult,
     ExtensionRegistration,
@@ -114,6 +119,35 @@ def _build_management_router() -> BaseAPIRouter:
         extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
     ) -> List[ExtensionDetail]:
         return await registry.list_extensions(extension_repo)
+
+    @router.get(
+        "/{name}/direct-methods",
+        summary="List direct methods available to the caller on a device",
+        description=(
+            "Lists enabled public registered invocation bindings allowed by their own "
+            "action and device scope. Requires a public JWT, not extension.read. "
+            "This is capability metadata, not a runtime health check."
+        ),
+        tags=["Extensions – Discovery"],
+        response_model=DirectMethodDiscovery,
+        response_model_exclude_none=False,
+    )
+    async def get_direct_methods(
+        name: str,
+        request: Request,
+        device_id: str = Query(..., min_length=1),
+        auth_context: dict = Depends(validate_jwt),
+        extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
+        user_repo: UserRepository = Depends(get_repository(UserRepository)),
+        device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    ) -> DirectMethodDiscovery:
+        if len(request.query_params.getlist("device_id")) > 1:
+            raise HTTPException(400, "Query parameter 'device_id' must not be repeated")
+        # A lifecycle replacement must not interleave the persisted descriptor reads.
+        async with _extension_locks[name]:
+            return await discovery.list_direct_methods(
+                name, device_id, auth_context, extension_repo, user_repo, device_repo
+            )
 
     @router.get(
         "/{name}",
