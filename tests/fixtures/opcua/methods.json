@@ -1,0 +1,1248 @@
+{
+  "browseNode": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "anyOf": [
+      {
+        "properties": {
+          "clientName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "sessionName": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "clientName",
+          "sessionName",
+          "nodeId"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "credentials": {
+            "anyOf": [
+              {
+                "properties": {
+                  "certificate": {
+                    "type": "string"
+                  },
+                  "privateKey": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "Certificate",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "certificate",
+                  "privateKey"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "UserName",
+                    "type": "string"
+                  },
+                  "userName": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "password",
+                  "userName"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "const": "Anonymous",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "endpoint": {
+            "pattern": "^opc\\.tcp://",
+            "type": "string"
+          },
+          "messageSecurityMode": {
+            "enum": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "Invalid",
+              "None",
+              "Sign",
+              "SignAndEncrypt"
+            ],
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "securityPolicy": {
+            "enum": [
+              "Invalid",
+              "None",
+              "Basic128",
+              "Basic192",
+              "Basic192Rsa15",
+              "Basic256Rsa15",
+              "Basic256Sha256",
+              "Aes128_Sha256_RsaOaep",
+              "Aes256_Sha256_RsaPss",
+              "PubSub_Aes128_CTR",
+              "PubSub_Aes256_CTR",
+              "Basic128Rsa15",
+              "Basic256"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "messageSecurityMode",
+          "securityPolicy",
+          "credentials",
+          "nodeId"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "browseNodes": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "anyOf": [
+      {
+        "properties": {
+          "clientName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "nodeIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sessionName": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "clientName",
+          "sessionName",
+          "nodeIds"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "credentials": {
+            "anyOf": [
+              {
+                "properties": {
+                  "certificate": {
+                    "type": "string"
+                  },
+                  "privateKey": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "Certificate",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "certificate",
+                  "privateKey"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "UserName",
+                    "type": "string"
+                  },
+                  "userName": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "password",
+                  "userName"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "const": "Anonymous",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "endpoint": {
+            "pattern": "^opc\\.tcp://",
+            "type": "string"
+          },
+          "messageSecurityMode": {
+            "enum": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "Invalid",
+              "None",
+              "Sign",
+              "SignAndEncrypt"
+            ],
+            "type": "string"
+          },
+          "nodeIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "securityPolicy": {
+            "enum": [
+              "Invalid",
+              "None",
+              "Basic128",
+              "Basic192",
+              "Basic192Rsa15",
+              "Basic256Rsa15",
+              "Basic256Sha256",
+              "Aes128_Sha256_RsaOaep",
+              "Aes256_Sha256_RsaPss",
+              "PubSub_Aes128_CTR",
+              "PubSub_Aes256_CTR",
+              "Basic128Rsa15",
+              "Basic256"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "messageSecurityMode",
+          "securityPolicy",
+          "credentials",
+          "nodeIds"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "getClients": null,
+  "getEndpoints": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "anyOf": [
+      {
+        "properties": {
+          "clientName": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "clientName"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "endpoint": {
+            "pattern": "^opc\\.tcp://",
+            "type": "string"
+          },
+          "messageSecurityMode": {
+            "enum": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "Invalid",
+              "None",
+              "Sign",
+              "SignAndEncrypt"
+            ],
+            "type": "string"
+          },
+          "securityPolicy": {
+            "enum": [
+              "Invalid",
+              "None",
+              "Basic128",
+              "Basic192",
+              "Basic192Rsa15",
+              "Basic256Rsa15",
+              "Basic256Sha256",
+              "Aes128_Sha256_RsaOaep",
+              "Aes256_Sha256_RsaPss",
+              "PubSub_Aes128_CTR",
+              "PubSub_Aes256_CTR",
+              "Basic128Rsa15",
+              "Basic256"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "messageSecurityMode",
+          "securityPolicy"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "getSessions": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "clientName": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "clientName"
+    ],
+    "type": "object"
+  },
+  "moduleDefinition": null,
+  "monitorItem": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "anyOf": [
+      {
+        "properties": {
+          "clientName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "sessionName": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "clientName",
+          "sessionName",
+          "nodeId"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "credentials": {
+            "anyOf": [
+              {
+                "properties": {
+                  "certificate": {
+                    "type": "string"
+                  },
+                  "privateKey": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "Certificate",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "certificate",
+                  "privateKey"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "UserName",
+                    "type": "string"
+                  },
+                  "userName": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "password",
+                  "userName"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "const": "Anonymous",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "endpoint": {
+            "pattern": "^opc\\.tcp://",
+            "type": "string"
+          },
+          "messageSecurityMode": {
+            "enum": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "Invalid",
+              "None",
+              "Sign",
+              "SignAndEncrypt"
+            ],
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "securityPolicy": {
+            "enum": [
+              "Invalid",
+              "None",
+              "Basic128",
+              "Basic192",
+              "Basic192Rsa15",
+              "Basic256Rsa15",
+              "Basic256Sha256",
+              "Aes128_Sha256_RsaOaep",
+              "Aes256_Sha256_RsaPss",
+              "PubSub_Aes128_CTR",
+              "PubSub_Aes256_CTR",
+              "Basic128Rsa15",
+              "Basic256"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "messageSecurityMode",
+          "securityPolicy",
+          "credentials",
+          "nodeId"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "monitorItems": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "anyOf": [
+      {
+        "properties": {
+          "clientName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "nodeIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sessionName": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "clientName",
+          "sessionName",
+          "nodeIds"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "credentials": {
+            "anyOf": [
+              {
+                "properties": {
+                  "certificate": {
+                    "type": "string"
+                  },
+                  "privateKey": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "Certificate",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "certificate",
+                  "privateKey"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "UserName",
+                    "type": "string"
+                  },
+                  "userName": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "password",
+                  "userName"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "const": "Anonymous",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "endpoint": {
+            "pattern": "^opc\\.tcp://",
+            "type": "string"
+          },
+          "messageSecurityMode": {
+            "enum": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "Invalid",
+              "None",
+              "Sign",
+              "SignAndEncrypt"
+            ],
+            "type": "string"
+          },
+          "nodeIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "securityPolicy": {
+            "enum": [
+              "Invalid",
+              "None",
+              "Basic128",
+              "Basic192",
+              "Basic192Rsa15",
+              "Basic256Rsa15",
+              "Basic256Sha256",
+              "Aes128_Sha256_RsaOaep",
+              "Aes256_Sha256_RsaPss",
+              "PubSub_Aes128_CTR",
+              "PubSub_Aes256_CTR",
+              "Basic128Rsa15",
+              "Basic256"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "messageSecurityMode",
+          "securityPolicy",
+          "credentials",
+          "nodeIds"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "readNode": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "anyOf": [
+      {
+        "properties": {
+          "attributeId": {
+            "default": "Value",
+            "enum": [
+              "NodeId",
+              "NodeClass",
+              "BrowseName",
+              "DisplayName",
+              "Description",
+              "WriteMask",
+              "UserWriteMask",
+              "IsAbstract",
+              "Symmetric",
+              "InverseName",
+              "ContainsNoLoops",
+              "EventNotifier",
+              "Value",
+              "DataType",
+              "ValueRank",
+              "ArrayDimensions",
+              "AccessLevel",
+              "UserAccessLevel",
+              "MinimumSamplingInterval",
+              "Historizing",
+              "Executable",
+              "UserExecutable",
+              "DataTypeDefinition",
+              "RolePermissions",
+              "UserRolePermissions",
+              "AccessRestrictions",
+              "AccessLevelEx"
+            ],
+            "type": "string"
+          },
+          "clientName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "sessionName": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "clientName",
+          "sessionName",
+          "nodeId"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attributeId": {
+            "default": "Value",
+            "enum": [
+              "NodeId",
+              "NodeClass",
+              "BrowseName",
+              "DisplayName",
+              "Description",
+              "WriteMask",
+              "UserWriteMask",
+              "IsAbstract",
+              "Symmetric",
+              "InverseName",
+              "ContainsNoLoops",
+              "EventNotifier",
+              "Value",
+              "DataType",
+              "ValueRank",
+              "ArrayDimensions",
+              "AccessLevel",
+              "UserAccessLevel",
+              "MinimumSamplingInterval",
+              "Historizing",
+              "Executable",
+              "UserExecutable",
+              "DataTypeDefinition",
+              "RolePermissions",
+              "UserRolePermissions",
+              "AccessRestrictions",
+              "AccessLevelEx"
+            ],
+            "type": "string"
+          },
+          "credentials": {
+            "anyOf": [
+              {
+                "properties": {
+                  "certificate": {
+                    "type": "string"
+                  },
+                  "privateKey": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "Certificate",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "certificate",
+                  "privateKey"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "UserName",
+                    "type": "string"
+                  },
+                  "userName": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "password",
+                  "userName"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "const": "Anonymous",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "endpoint": {
+            "pattern": "^opc\\.tcp://",
+            "type": "string"
+          },
+          "messageSecurityMode": {
+            "enum": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "Invalid",
+              "None",
+              "Sign",
+              "SignAndEncrypt"
+            ],
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "securityPolicy": {
+            "enum": [
+              "Invalid",
+              "None",
+              "Basic128",
+              "Basic192",
+              "Basic192Rsa15",
+              "Basic256Rsa15",
+              "Basic256Sha256",
+              "Aes128_Sha256_RsaOaep",
+              "Aes256_Sha256_RsaPss",
+              "PubSub_Aes128_CTR",
+              "PubSub_Aes256_CTR",
+              "Basic128Rsa15",
+              "Basic256"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "messageSecurityMode",
+          "securityPolicy",
+          "credentials",
+          "nodeId"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "readNodes": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "anyOf": [
+      {
+        "properties": {
+          "clientName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "nodeIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sessionName": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "clientName",
+          "sessionName",
+          "nodeIds"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "credentials": {
+            "anyOf": [
+              {
+                "properties": {
+                  "certificate": {
+                    "type": "string"
+                  },
+                  "privateKey": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "Certificate",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "certificate",
+                  "privateKey"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "UserName",
+                    "type": "string"
+                  },
+                  "userName": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "password",
+                  "userName"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "const": "Anonymous",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "endpoint": {
+            "pattern": "^opc\\.tcp://",
+            "type": "string"
+          },
+          "messageSecurityMode": {
+            "enum": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "Invalid",
+              "None",
+              "Sign",
+              "SignAndEncrypt"
+            ],
+            "type": "string"
+          },
+          "nodeIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "securityPolicy": {
+            "enum": [
+              "Invalid",
+              "None",
+              "Basic128",
+              "Basic192",
+              "Basic192Rsa15",
+              "Basic256Rsa15",
+              "Basic256Sha256",
+              "Aes128_Sha256_RsaOaep",
+              "Aes256_Sha256_RsaPss",
+              "PubSub_Aes128_CTR",
+              "PubSub_Aes256_CTR",
+              "Basic128Rsa15",
+              "Basic256"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "messageSecurityMode",
+          "securityPolicy",
+          "credentials",
+          "nodeIds"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "writeNode": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "anyOf": [
+      {
+        "properties": {
+          "clientName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "sessionName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [
+          "clientName",
+          "sessionName",
+          "nodeId",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "credentials": {
+            "anyOf": [
+              {
+                "properties": {
+                  "certificate": {
+                    "type": "string"
+                  },
+                  "privateKey": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "Certificate",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "certificate",
+                  "privateKey"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "UserName",
+                    "type": "string"
+                  },
+                  "userName": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "password",
+                  "userName"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "const": "Anonymous",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "endpoint": {
+            "pattern": "^opc\\.tcp://",
+            "type": "string"
+          },
+          "messageSecurityMode": {
+            "enum": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "Invalid",
+              "None",
+              "Sign",
+              "SignAndEncrypt"
+            ],
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "securityPolicy": {
+            "enum": [
+              "Invalid",
+              "None",
+              "Basic128",
+              "Basic192",
+              "Basic192Rsa15",
+              "Basic256Rsa15",
+              "Basic256Sha256",
+              "Aes128_Sha256_RsaOaep",
+              "Aes256_Sha256_RsaPss",
+              "PubSub_Aes128_CTR",
+              "PubSub_Aes256_CTR",
+              "Basic128Rsa15",
+              "Basic256"
+            ],
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [
+          "endpoint",
+          "messageSecurityMode",
+          "securityPolicy",
+          "credentials",
+          "nodeId",
+          "value"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "writeNodes": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "anyOf": [
+      {
+        "properties": {
+          "clientName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "properties": {
+                "nodeId": {
+                  "type": "string"
+                },
+                "value": {}
+              },
+              "required": [
+                "nodeId",
+                "value"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "sessionName": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "clientName",
+          "sessionName",
+          "nodes"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "credentials": {
+            "anyOf": [
+              {
+                "properties": {
+                  "certificate": {
+                    "type": "string"
+                  },
+                  "privateKey": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "Certificate",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "certificate",
+                  "privateKey"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "UserName",
+                    "type": "string"
+                  },
+                  "userName": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "password",
+                  "userName"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "const": "Anonymous",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "endpoint": {
+            "pattern": "^opc\\.tcp://",
+            "type": "string"
+          },
+          "messageSecurityMode": {
+            "enum": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "Invalid",
+              "None",
+              "Sign",
+              "SignAndEncrypt"
+            ],
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "properties": {
+                "nodeId": {
+                  "type": "string"
+                },
+                "value": {}
+              },
+              "required": [
+                "nodeId",
+                "value"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "securityPolicy": {
+            "enum": [
+              "Invalid",
+              "None",
+              "Basic128",
+              "Basic192",
+              "Basic192Rsa15",
+              "Basic256Rsa15",
+              "Basic256Sha256",
+              "Aes128_Sha256_RsaOaep",
+              "Aes256_Sha256_RsaPss",
+              "PubSub_Aes128_CTR",
+              "PubSub_Aes256_CTR",
+              "Basic128Rsa15",
+              "Basic256"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "messageSecurityMode",
+          "securityPolicy",
+          "credentials",
+          "nodes"
+        ],
+        "type": "object"
+      }
+    ]
+  }
+}

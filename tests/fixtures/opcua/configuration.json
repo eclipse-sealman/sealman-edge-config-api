@@ -1,0 +1,135 @@
+{
+    "fixture": "accept-anonymous-sinks",
+    "expectation": "accept",
+    "description": "Anonymous session with EdgeHub and MQTT sinks, application data and optional monitored item tuning.",
+    "provenance": {
+        "sourceRepository": "edge-opcua-client",
+        "sourceCommit": "1761b5f237a8d177d69f8dabca9f3d70166e9c08",
+        "runtimeVersion": "1.0.0",
+        "sourceFiles": [
+            "edge-opcua-client/src/dtos/configuration/configurationSchema.ts"
+        ],
+        "symbols": [
+            "ConfigurationSchema.safeParse"
+        ],
+        "validator": "zod 4.3.6 ConfigurationSchema.safeParse, as called by the configUpdated handler in edge-opcua-client/src/app.ts"
+    },
+    "notes": [],
+    "literal": {
+        "schemaVersion": "1.0",
+        "clients": {
+            "powerpak-client": {
+                "endpoint": "opc.tcp://localhost:4334",
+                "messageSecurityMode": "None",
+                "securityPolicy": "None",
+                "sessions": {
+                    "session1": {
+                        "credentials": {
+                            "type": "Anonymous"
+                        },
+                        "subscriptions": {
+                            "mqttSubscription": {
+                                "maxNotificationsPerPublish": 100,
+                                "publishingEnabled": true,
+                                "requestedLifetimeCount": 100,
+                                "requestedMaxKeepAliveCount": 10,
+                                "requestedPublishingInterval": 1000,
+                                "priority": 10,
+                                "monitoredItemsDiscardOldest": false,
+                                "monitoredItemsQueueSize": 10,
+                                "monitoredItemsSamplingInterval": 100,
+                                "monitoredItems": {
+                                    "MachineDate": {
+                                        "nodeId": "i=2258",
+                                        "queueSize": 5,
+                                        "samplingInterval": 100,
+                                        "scalingFactor": 1,
+                                        "inverseScalingFactor": 1
+                                    }
+                                },
+                                "edgeHubOutput": [
+                                    {
+                                        "topic": "telemetry",
+                                        "messageFormat": "influx:1.0"
+                                    }
+                                ],
+                                "mqttOutput": [
+                                    {
+                                        "topic": "opcua/telemetry",
+                                        "messageFormat": "csi:1.0",
+                                        "applicationData": {
+                                            "site": {
+                                                "line": "A"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "mqttEndpoint": "mqtt://seal-module-mqtt:1883"
+    },
+    "result": {
+        "success": true,
+        "parsed": {
+            "schemaVersion": "1.0",
+            "mqttEndpoint": "mqtt://seal-module-mqtt:1883",
+            "clients": {
+                "powerpak-client": {
+                    "endpoint": "opc.tcp://localhost:4334",
+                    "messageSecurityMode": "None",
+                    "securityPolicy": "None",
+                    "sessions": {
+                        "session1": {
+                            "credentials": {
+                                "type": "Anonymous"
+                            },
+                            "subscriptions": {
+                                "mqttSubscription": {
+                                    "edgeHubOutput": [
+                                        {
+                                            "topic": "telemetry",
+                                            "messageFormat": "influx:1.0"
+                                        }
+                                    ],
+                                    "mqttOutput": [
+                                        {
+                                            "topic": "opcua/telemetry",
+                                            "messageFormat": "csi:1.0",
+                                            "applicationData": {
+                                                "site": {
+                                                    "line": "A"
+                                                }
+                                            }
+                                        }
+                                    ],
+                                    "maxNotificationsPerPublish": 100,
+                                    "publishingEnabled": true,
+                                    "requestedLifetimeCount": 100,
+                                    "requestedMaxKeepAliveCount": 10,
+                                    "requestedPublishingInterval": 1000,
+                                    "priority": 10,
+                                    "monitoredItemsDiscardOldest": false,
+                                    "monitoredItemsQueueSize": 10,
+                                    "monitoredItemsSamplingInterval": 100,
+                                    "monitoredItems": {
+                                        "MachineDate": {
+                                            "nodeId": "i=2258",
+                                            "queueSize": 5,
+                                            "samplingInterval": 100,
+                                            "scalingFactor": 1,
+                                            "inverseScalingFactor": 1
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
