@@ -77,10 +77,9 @@ async def get_network_scan_range(
 
     # Every endpoint type's configured default IP is probed individually on every scan cycle -
     # a global suggestion, not per-device evidence, so unlike the range above it's never
-    # persisted and never widens it. This is what lets "a type has a default IP" alone lead to
-    # auto-discovery (see post_network_overview.py's default-IP auto-create) for a device with
-    # no matching endpoint yet, without resurrecting the old bug where a stray/placeholder
-    # default permanently bloated every device's stored range.
+    # persisted and never widens it. A host found at such an IP shows up in the overview as a
+    # suggestion with that type pre-selected (see post_network_overview.py); nothing is created
+    # until the user assigns it.
     suggested_ips: List[str] = []
     seen_suggested_ips = set()
     for endpoint_type in endpoint_types.values():

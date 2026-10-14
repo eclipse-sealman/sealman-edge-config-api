@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Union, cast
 
 from sqlalchemy import select, update, delete
 from sqlalchemy.exc import IntegrityError
@@ -6,24 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.service import Service, ServiceType
 from db.registry import register_repository
-from db.repos.service import ServiceRepository
+from db.repos.service import UNSET, ServiceRepository, _Unset
 from db.merge import BlueprintResolver, patch_data, patch_fields, validate_instance_data
+from db.type_roles import SERVICE_ROLE_TYPES, drop_roles_of_missing_fields, validate_type_mapping
 from exceptions import APIError
-
-# Every service type automatically gets this field - required, mapped to the "port" role -
-# rather than letting an admin manually pick/toggle which field plays that role (see
-# routers/service/schemas.py's PORT_FIELD_KEY, which rejects any client-supplied field at this
-# key). Changeable - it's only ever locked in the UI while assigning a type to a port actually
-# detected on the network (see AssignServiceDialog.tsx's `lockedFieldKey`), not as a hard,
-# permanent-after-save rule here.
-PORT_FIELD_KEY = "port"
-_PORT_FIELD_DEFINITION: Dict[str, Any] = {
-    "type": "integer",
-    "label": "Port",
-    "required": True,
-    "changeable": True,
-    "ui": "number",
-}
 
 
 @register_repository(ServiceRepository)
@@ -71,24 +57,18 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         description: Optional[str],
         fields: Dict[str, Any],
         browser_kind: Optional[str] = None,
+        mapping: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         await self._raise_if_label_taken(label)
-        # label/description/default/validation/ui may be admin-supplied (e.g. a default port for
-        # auto-discovery) - type/required/changeable are always forced back to the fixed values
-        # regardless, so the client can't weaken them.
-        port_field = {
-            **_PORT_FIELD_DEFINITION,
-            **(fields.get(PORT_FIELD_KEY) or {}),
-            "type": "integer",
-            "required": True,
-            "changeable": True,
-        }
-        all_fields = {**(fields or {}), PORT_FIELD_KEY: port_field}
+        # Admins define every field; nothing is added or forced here.
+        type_fields = dict(fields or {})
+        type_mapping = dict(mapping or {})
+        validate_type_mapping(type_fields, type_mapping, SERVICE_ROLE_TYPES)
         st = ServiceType(
             label=label,
             description=description,
-            fields=all_fields,
-            mapping={PORT_FIELD_KEY: "port"},
+            fields=type_fields,
+            mapping=type_mapping,
             browser_kind=browser_kind,
         )
         self._session.add(st)
@@ -116,7 +96,8 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         label: Optional[str] = None,
         description: Optional[str] = None,
         fields: Optional[Dict[str, Any]] = None,
-        browser_kind: Optional[str] = None,
+        browser_kind: Union[str, None, _Unset] = UNSET,
+        mapping: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         st = await self._get_service_type_or_raise(type_id)
         values: Dict[str, Any] = {}
@@ -125,22 +106,24 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
             values["label"] = label
         if description is not None:
             values["description"] = description
-        if fields is not None:
-            merged_fields = patch_fields(st.fields or {}, fields)
-            # Restores the built-in field if a patch somehow removed it, and always re-forces
-            # its structural properties - label/description/default/validation/ui stay whatever
-            # the patch (or, failing that, the field's previous state) had.
-            current_port = merged_fields.get(PORT_FIELD_KEY) or st.fields.get(PORT_FIELD_KEY) or _PORT_FIELD_DEFINITION
-            merged_fields[PORT_FIELD_KEY] = {
-                **current_port,
-                "type": "integer",
-                "required": True,
-                "changeable": True,
-            }
-            values["fields"] = merged_fields
-        # Always applied (even when None, to clear it back to "no browse action") - unlike the
-        # fields above, there's no separate signal for "leave this unchanged" here.
-        values["browser_kind"] = browser_kind
+        if fields is not None or mapping is not None:
+            merged_fields = (
+                patch_fields(st.fields or {}, fields) if fields is not None else dict(st.fields or {})
+            )
+            # A sent mapping replaces the stored one as a whole. Otherwise the stored roles stay,
+            # except those whose field this patch removed.
+            new_mapping = (
+                dict(mapping)
+                if mapping is not None
+                else drop_roles_of_missing_fields(st.mapping or {}, merged_fields)
+            )
+            validate_type_mapping(merged_fields, new_mapping, SERVICE_ROLE_TYPES)
+            if fields is not None:
+                values["fields"] = merged_fields
+            values["mapping"] = new_mapping
+        # None clears it back to "no browse action"; UNSET (not sent) leaves it unchanged.
+        if not isinstance(browser_kind, _Unset):
+            values["browser_kind"] = browser_kind
         if values:
             try:
                 await self._session.execute(

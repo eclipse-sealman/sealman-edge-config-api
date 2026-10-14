@@ -1,4 +1,4 @@
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 from typing import Optional, Dict, Any, Union
 from datetime import datetime
 from routers.schemas import ResolvedField, FieldDefinition, FieldDefinitionUpdate
@@ -7,46 +7,26 @@ from routers.schemas import ResolvedField, FieldDefinition, FieldDefinitionUpdat
 # browser kinds (see registerBrowser()), so new kinds can be added there without a backend change.
 BrowserKind = str
 
-# Every service type automatically gets a built-in field at this key (integer, required,
-# non-changeable) mapped to the "port" role - see db/sqlalchemy/service.py. Its structural
-# properties (type/required/changeable) are fixed and enforced server-side regardless of what a
-# client sends, but label/description/default/validation/ui stay admin-editable - in particular
-# `default` is what drives auto-discovery (see post_network_overview.py's default-port lookup),
-# so admins need a way to set it per type.
-PORT_FIELD_KEY = "port"
-
 
 class ServiceTypeCreate(BaseModel):
     label: str
     description: Optional[str] = None
     fields: Dict[str, FieldDefinition] = {}
     browser_kind: Optional[BrowserKind] = None
-
-    @model_validator(mode="after")
-    def _check_reserved_field(self) -> "ServiceTypeCreate":
-        port_field = self.fields.get(PORT_FIELD_KEY)
-        if port_field is not None and port_field.type != "integer":
-            raise ValueError(f"field '{PORT_FIELD_KEY}' is built-in and must be type='integer'")
-        return self
+    # {field_key: role}. Role: "port". Checked against `fields` by db/type_roles.py (422).
+    mapping: Dict[str, str] = {}
 
 
 class ServiceTypeUpdate(BaseModel):
     label: Optional[str] = None
     description: Optional[str] = None
     fields: Optional[Dict[str, Union[FieldDefinitionUpdate, None]]] = None
-    # Unlike the other fields here, this is always applied as given (None clears it back to "no
-    # browse action") rather than "None means leave unchanged" - there's no other way to clear it.
+    # Omitted leaves it unchanged; an explicit null clears it back to "no browse action"
+    # (the router tells them apart with model_fields_set).
     browser_kind: Optional[BrowserKind] = None
-
-    @model_validator(mode="after")
-    def _check_reserved_field(self) -> "ServiceTypeUpdate":
-        if self.fields is not None and PORT_FIELD_KEY in self.fields:
-            port_patch = self.fields[PORT_FIELD_KEY]
-            if port_patch is None:
-                raise ValueError(f"field '{PORT_FIELD_KEY}' is built-in and cannot be removed")
-            if port_patch.type is not None and port_patch.type != "integer":
-                raise ValueError(f"field '{PORT_FIELD_KEY}' is built-in and must stay type='integer'")
-        return self
+    # Replaces the whole mapping when sent. When omitted, the stored roles stay, except those
+    # whose field `fields` removes.
+    mapping: Optional[Dict[str, str]] = None
 
 
 class ServiceTypeResponse(BaseModel):

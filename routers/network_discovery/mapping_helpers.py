@@ -13,3 +13,15 @@ def resolved_value(resolved_data: Dict[str, Any], field_key: Optional[str]) -> O
         return None
     entry = resolved_data.get(field_key)
     return entry.get("value") if isinstance(entry, dict) else entry
+
+
+def stored_role_value(raw_data: Dict[str, Any], field_key: Optional[str]) -> Optional[Any]:
+    """The value actually stored for a role field (`raw_endpoint_data` / `raw_service_data`).
+    Unlike `resolved_value`, a type default is never substituted: discovery must not treat a
+    scan suggestion as the instance's real address. Missing, None and "" count as no value."""
+    if field_key is None:
+        return None
+    value = raw_data.get(field_key)
+    if value is None or value == "":
+        return None
+    return value

@@ -1,5 +1,16 @@
 from typing import List, Dict, Any, Optional
 from abc import ABC, abstractmethod
+from typing import Union
+
+
+class _Unset:
+    """Marks an argument that was not sent, as opposed to an explicit None."""
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+UNSET = _Unset()
 
 
 class ServiceRepository(ABC):
@@ -16,6 +27,7 @@ class ServiceRepository(ABC):
         description: Optional[str],
         fields: Dict[str, Any],
         browser_kind: Optional[str] = None,
+        mapping: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]: ...
 
     @abstractmethod
@@ -25,7 +37,8 @@ class ServiceRepository(ABC):
         label: Optional[str] = None,
         description: Optional[str] = None,
         fields: Optional[Dict[str, Any]] = None,
-        browser_kind: Optional[str] = None,
+        browser_kind: Union[str, None, _Unset] = UNSET,
+        mapping: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]: ...
 
     @abstractmethod

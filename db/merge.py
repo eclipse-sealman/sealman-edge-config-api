@@ -134,6 +134,9 @@ class BlueprintResolver:
                 getattr(entity, data_field) or {},
                 entity_type.fields or {},
             ),
+            # The values actually stored, without type defaults substituted (internal use, e.g.
+            # discovery; not part of the API responses).
+            f"raw_{data_field}": dict(getattr(entity, data_field) or {}),
             "created_at": entity.created_at,
             "updated_at": entity.updated_at,
         }

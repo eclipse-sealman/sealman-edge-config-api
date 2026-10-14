@@ -44,7 +44,8 @@ MappedSource = Literal["configured", "default", "unidentified"]
 
 
 class MappedPort(BaseModel):
-    port: int
+    # None for a configured service without a `port`-role value (status "unknown").
+    port: Optional[int] = None
     status: Literal["online", "offline", "unknown"]
     lastStatusChange: Optional[str] = None
     source: MappedSource
@@ -57,7 +58,8 @@ class MappedPort(BaseModel):
 
 
 class MappedEndpoint(BaseModel):
-    ip: str
+    # None for a configured endpoint without an `ip`-role value (status "unknown").
+    ip: Optional[str] = None
     status: Literal["online", "offline", "unknown"]
     lastStatusChange: Optional[str] = None
     source: MappedSource
