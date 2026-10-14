@@ -1,8 +1,9 @@
-"""OPCUA WP-5 adoption of committed provider artifacts through real management.
+"""OPCUA lifecycle and canonical configuration adoption of committed artifacts.
 
 No sibling-repository imports or live cloud credentials: PostgreSQL is disposable,
 provider OpenAPI travels over real loopback HTTP, and only cloud I/O is replaced.
-Configuration/ABAC, template execution and reported readiness are later stages.
+Configuration uses real core helpers and non-admin ABAC, not a provider callback.
+Template execution and reported readiness remain later stages.
 """
 
 import copy
@@ -15,15 +16,20 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import UUID
 
+from starlette.routing import Match
+
 import pytest
 from jsonschema import Draft202012Validator
 
 import auth
 from db.repos.extension import ExtensionRepository
 from db.session import get_repository
-from extensions import schemas as extension_schemas, setup as extensions_setup
+from extensions import body_validation, schemas as extension_schemas, setup as extensions_setup
 from main import app
 from routers.module_config.registry import module_schema_registry
+from routers.module_config.routes import post_module_twin_config as write_route
+from tests.integration.test_abac_authorization import AbacFixtures
+from tests.integration.test_module_config import blob_store, iot_hub, post_writes  # noqa: F401
 from tests.integration.test_extensions_management_routes import (  # noqa: F401
     _fresh_http_upstream_client,
     _unique_name,
@@ -468,7 +474,7 @@ async def test_opcua_invalid_persisted_contract_hydrates_claimed_unavailable_bef
     for path in (f"/{DEVICE}/twin/config/{MODULE}", f"/{DEVICE}/twin/identity/{MODULE}/reported"):
         response = await client.get(path)
         assert response.status_code == 503 and response.json() == UNAVAILABLE
-    for raw in ("not JSON", " " * (1024 * 1024 + 1)):
+    for raw in (json.dumps(_artifact("configuration.json")["literal"]), "not JSON", " " * (1024 * 1024 + 1)):
         response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", content=raw)
         assert response.status_code == 503 and response.json() == UNAVAILABLE
     assert cloud.effects == [] and cloud.direct_methods == 0 and opcua_provider.calls == calls
@@ -511,3 +517,444 @@ async def test_opcua_management_schema_requires_authentication_without_oidc_io(c
         assert response.status_code == 401 and response.json() == {"message": "Not authenticated"}
     finally:
         app.dependency_overrides[auth.validate_jwt] = previous
+
+
+def _configuration(*, literal_boundaries=False):
+    payload = _artifact("configuration.json")["literal"]
+    if literal_boundaries:
+        # Derived from the runtime-accepted anonymous fixture. Zod's topic default
+        # and unknown-key stripping are parse-output behavior, never persistence
+        # instructions (provider corpus: accept-edgehub-topic-default-not-injected
+        # and accept-extra-top-level-field-stripped). Nulls here are ONLY extras,
+        # not the runtime's optional-but-non-nullable declared fields.
+        subscription = payload["clients"]["powerpak-client"]["sessions"]["session1"]["subscriptions"]["mqttSubscription"]
+        del subscription["edgeHubOutput"][0]["topic"]
+        item = subscription["monitoredItems"]["MachineDate"]
+        del item["samplingInterval"]
+        item["literalNull"] = None
+        payload["extraField"] = {"nullable": None, "items": [None, {"keep": "literal"}]}
+    return payload
+
+
+def _assert_configuration_write(cloud, payload, *, module=MODULE):
+    assert len(cloud.effects) == 4
+    container, blob, upload, patch = cloud.effects
+    assert container == ("container", ("teststorage", "iotedge-device-twin"), {"sas_token": "sig=synthetic"})
+    assert blob == ("blob", f"{DEVICE}/{module}/current")
+    assert upload == ("upload", f"{DEVICE}/{module}/current", json.dumps(payload, separators=(",", ":")), True)
+    config_id = patch[2]["properties"]["desired"]["configId"]
+    assert len(config_id) == 32 and UUID(config_id).version == 4 and UUID(config_id).hex == config_id
+    assert patch == ("patch", f"https://testhub.invalid/twins/{DEVICE}/modules/{module}?api-version=2020-05-31-preview",
+                     {"properties": {"desired": {
+                         "configId": config_id,
+                         "configBlobUrl": f"https://teststorage.blob.core.windows.net/iotedge-device-twin/{DEVICE}/{module}/current?sig=synthetic",
+                     }}}, {"Authorization": "synthetic"})
+    assert json.loads(cloud.blobs[f"{DEVICE}/{module}/current"]) == payload
+
+
+def _assert_configuration_read(cloud, *, module=MODULE, twin=False):
+    expected = [
+        ("container", ("teststorage", "iotedge-device-twin"), {"sas_token": "sig=synthetic"}),
+        ("blob", f"{DEVICE}/{module}/current"),
+        ("download", f"{DEVICE}/{module}/current"),
+    ]
+    if twin:
+        expected.append(("twin_read", DEVICE, module, {"Authorization": "synthetic"}))
+    assert cloud.effects == expected
+
+
+@pytest.mark.parametrize("method,endpoint", [("GET", "get_opcua_client_twin_config"),
+                                             ("POST", "post_module_twin_config_opcua")])
+def test_opcua_canonical_url_really_selects_deprecated_fixed_alias(method, endpoint):
+    # This concrete URL is also matched by the generic route, but routing selects
+    # the fixed alias first. Do not manufacture two independently selectable URLs.
+    scope = {"type": "http", "path": f"/{DEVICE}/twin/config/{MODULE}", "method": method}
+    matches = [route for route in app.routes if route.matches(scope)[0] == Match.FULL]
+    assert matches[0].path == f"/{{device}}/twin/config/{MODULE}"
+    assert matches[0].endpoint.__name__ == endpoint and matches[0].deprecated is True
+    assert any(route.path == CONFIG_PATH and not route.deprecated for route in matches[1:])
+
+
+@pytest.mark.parametrize("literal_boundaries", [False, True], ids=["runtime-1.0-fixture", "literal-nulls-extras-omissions"])
+async def test_opcua_canonical_post_get_real_helpers_keep_literal_json_and_exact_targets(
+    client, db_session, opcua_provider, lifecycle_state, cloud, literal_boundaries,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    rows = await _snapshots(get_repository(ExtensionRepository)(db_session))
+    payload = _configuration(literal_boundaries=literal_boundaries)
+    Draft202012Validator(rows["configuration"]["schema"]).validate(payload)
+    calls = opcua_provider.calls.copy()
+    response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=payload)
+    assert response.status_code == 200 and response.json() == [payload, 200]
+    _assert_configuration_write(cloud, payload)
+    cloud.effects.clear()
+    response = await client.get(f"/{DEVICE}/twin/config/{MODULE}")
+    assert response.status_code == 200 and response.json() == payload
+    _assert_configuration_read(cloud)
+    assert set(cloud.blobs) == {f"{DEVICE}/{MODULE}/current"}
+    assert cloud.twins == {} and cloud.direct_methods == 0 and opcua_provider.calls == calls
+
+
+@pytest.mark.parametrize("actions,region,read_status,write_status", [
+    (["device.read"], "EU", 200, 403),
+    (["device.module_twin_config.write"], "EU", 403, 200),
+    (["device.read", "device.module_twin_config.write"], "US", 403, 403),
+    ([], "EU", 403, 403),
+    (["device.read", "device.module_twin_config.write"], "EU", 200, 200),
+])
+async def test_opcua_non_admin_read_write_and_device_scope_are_independent(
+    client, db_session, opcua_provider, lifecycle_state, cloud, actions, region, read_status, write_status,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    await AbacFixtures(db_session).setup(
+        users={"caller": "opcua-config-caller-oid"},
+        scopes={"eu": {"attr": {"region": "EU"}, "access_rule": "ALL"}},
+        roles={"config-role": actions},
+        teams={"config-team": {"scope": "eu", "roles": ["config-role"], "users": ["caller"]}},
+        devices={DEVICE: {"region": region}},
+    )
+
+    async def caller():
+        return {"oid": "opcua-config-caller-oid", "sub": "opcua-config-caller-oid", "roles": []}
+
+    previous = app.dependency_overrides[auth.validate_jwt]
+    app.dependency_overrides[auth.validate_jwt] = caller
+    try:
+        payload = _configuration()
+        cloud.blobs[f"{DEVICE}/{MODULE}/current"] = json.dumps(payload).encode()
+        calls = opcua_provider.calls.copy()
+        response = await client.get(f"/{DEVICE}/twin/config/{MODULE}")
+        assert response.status_code == read_status
+        if read_status == 403:
+            assert cloud.effects == []
+        else:
+            assert response.json() == payload
+            _assert_configuration_read(cloud)
+        cloud.effects.clear()
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=payload)
+        assert response.status_code == write_status
+        if write_status == 200:
+            assert response.json() == [payload, 200]
+            _assert_configuration_write(cloud, payload)
+        else:
+            assert cloud.effects == []
+            # Auth precedes parser/validator/size checks, even for unavailable
+            # contracts. Denied callers do not learn contract/body diagnostics.
+            for unavailable in (False, True):
+                if unavailable:
+                    module_schema_registry.replace_extension_entries(NAME, [], [MODULE])
+                for raw in ('{"schemaVersion":"configuration-secret"}', "not JSON", " " * (1024 * 1024 + 1)):
+                    denied = await client.post(f"/{DEVICE}/twin/config/{MODULE}", content=raw)
+                    assert denied.status_code == 403 and "errors" not in denied.json()
+                    assert "configuration-secret" not in denied.text and cloud.effects == []
+                if unavailable:
+                    denied = await client.get(f"/{DEVICE}/twin/config/{MODULE}")
+                    assert denied.status_code == (403 if read_status == 403 else 503)
+                    if read_status == 200:
+                        assert denied.json() == UNAVAILABLE
+                    else:
+                        assert "errors" not in denied.json()
+                    assert cloud.effects == []
+        assert cloud.direct_methods == 0 and opcua_provider.calls == calls
+    finally:
+        app.dependency_overrides[auth.validate_jwt] = previous
+
+
+@pytest.mark.parametrize("raw", [b"", b"{", b"\xff", b'{"value":NaN}', b'{"value":Infinity}',
+                                b'{"value":-Infinity}', b'{"value":1e400}'])
+async def test_opcua_malformed_nonfinite_json_is_400_before_helpers(
+    client, opcua_provider, lifecycle_state, cloud, raw,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+    response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", content=raw)
+    assert response.status_code == 400 and response.json() == {"message": "Request body must be valid finite JSON"}
+    assert cloud.effects == [] and cloud.direct_methods == 0 and opcua_provider.calls == calls
+
+
+@pytest.mark.parametrize("streamed", [False, True], ids=["content-length", "stream-without-length"])
+async def test_opcua_over_one_mib_is_413_before_helpers(
+    client, opcua_provider, lifecycle_state, cloud, streamed,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+    raw = json.dumps({**_configuration(), "extraField": "x" * (1024 * 1024)}).encode()
+    assert len(raw) > 1024 * 1024
+
+    async def chunks():
+        yield raw[:1024 * 1024]
+        yield raw[1024 * 1024:]
+
+    response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", content=chunks() if streamed else raw)
+    assert response.status_code == 413 and response.json() == {"message": "Request body exceeds 1048576 bytes"}
+    assert cloud.effects == [] and cloud.direct_methods == 0 and opcua_provider.calls == calls
+
+
+_CLIENT = ("clients", "powerpak-client")
+_SESSION = (*_CLIENT, "sessions", "session1")
+_SUBSCRIPTION = (*_SESSION, "subscriptions", "mqttSubscription")
+_ITEM = (*_SUBSCRIPTION, "monitoredItems", "MachineDate")
+
+
+@pytest.mark.parametrize("path,value,rule", [
+    (("schemaVersion",), "2.0", "const"),
+    (("mqttEndpoint",), None, "type"),
+    ((*_CLIENT, "clientCertificate"), None, "type"),
+    ((*_CLIENT, "endpoint"), "https://configuration-secret", "pattern"),
+    ((*_CLIENT, "securityPolicy"), "configuration-secret", "enum"),
+    ((*_SUBSCRIPTION, "priority"), 256, "maximum"),
+    ((*_ITEM, "queueSize"), "5", "type"),
+    ((*_ITEM, "scalingFactor"), None, "type"),
+    ((*_SUBSCRIPTION, "publishingEnabled"), None, "type"),
+    ((*_SUBSCRIPTION, "edgeHubOutput", 0, "messageFormat"), "configuration-secret", "enum"),
+    ((*_SUBSCRIPTION, "mqttOutput", 0, "applicationData"), None, "type"),
+])
+async def test_opcua_runtime_structural_schema_rejects_without_coercion_or_value_leaks(
+    client, opcua_provider, lifecycle_state, cloud, path, value, rule,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+    payload = _configuration()
+    node = payload
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+    payload["extraField"] = "configuration-secret"
+    response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=payload)
+    assert response.status_code == 422
+    body = response.json()
+    assert body["message"] == "Module configuration does not match its schema"
+    assert 1 <= len(body["errors"]) <= 20
+    assert any(error["loc"] == list(path) and error["rule"] == rule for error in body["errors"])
+    assert all(set(error) == {"loc", "rule", "msg"} for error in body["errors"])
+    for hidden in ("configuration-secret", CONFIG_COMPONENT, "components/schemas", '"input"', '"ctx"'):
+        assert hidden not in response.text
+    assert cloud.effects == [] and cloud.direct_methods == 0 and opcua_provider.calls == calls
+
+
+@pytest.mark.parametrize("payload", [{}, {"schemaVersion": "1.0"}, {"schemaVersion": "1.0", "clients": []}])
+async def test_opcua_required_properties_and_root_shapes_are_safe_422(
+    client, opcua_provider, lifecycle_state, cloud, payload,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+    response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=payload)
+    assert response.status_code == 422
+    assert response.json()["message"] == "Module configuration does not match its schema"
+    assert {error["rule"] for error in response.json()["errors"]} <= {"required", "type"}
+    assert cloud.effects == [] and cloud.direct_methods == 0 and opcua_provider.calls == calls
+
+
+async def test_opcua_unusable_active_write_validator_is_safe_503_before_helpers(
+    client, opcua_provider, lifecycle_state, cloud, monkeypatch,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+
+    def unusable(*args):
+        raise RuntimeError("validator-configuration-secret")
+
+    monkeypatch.setattr(body_validation, "validate_module_snapshot", unusable)
+    response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=_configuration())
+    assert response.status_code == 503 and response.json() == UNAVAILABLE
+    assert cloud.effects == [] and cloud.direct_methods == 0 and opcua_provider.calls == calls
+
+
+@pytest.mark.parametrize("stored", [
+    {"schemaVersion": "2.0", "clients": {}},
+    {"schemaVersion": "1.0", "clients": {}, "mqttEndpoint": None},
+    {"schemaVersion": "configuration-secret", "clients": {}},
+    ["configuration-secret"],
+])
+async def test_opcua_invalid_active_stored_data_is_safe_500_without_writes(
+    client, opcua_provider, lifecycle_state, cloud, stored,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+    cloud.blobs[f"{DEVICE}/{MODULE}/current"] = json.dumps(stored).encode()
+    response = await client.get(f"/{DEVICE}/twin/config/{MODULE}")
+    assert response.status_code == 500 and response.json() == MISMATCH
+    _assert_configuration_read(cloud)
+    assert cloud.direct_methods == 0 and opcua_provider.calls == calls
+
+
+async def test_opcua_unusable_active_read_validator_is_safe_500_after_blob_read(
+    client, opcua_provider, lifecycle_state, cloud, monkeypatch,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+    cloud.blobs[f"{DEVICE}/{MODULE}/current"] = json.dumps(_configuration()).encode()
+
+    def unusable(*args):
+        raise RuntimeError("validator-configuration-secret")
+
+    monkeypatch.setattr(body_validation, "validate_module_snapshot", unusable)
+    response = await client.get(f"/{DEVICE}/twin/config/{MODULE}")
+    assert response.status_code == 500 and response.json() == MISMATCH
+    _assert_configuration_read(cloud)
+    assert cloud.direct_methods == 0 and opcua_provider.calls == calls
+
+
+@pytest.mark.parametrize("state", ["stored-null", "no-blob-module-exists", "no-blob-no-module", "invalid-json"])
+async def test_opcua_active_get_null_and_existing_helper_error_contracts(
+    client, opcua_provider, lifecycle_state, cloud, state,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+    if state == "stored-null":
+        cloud.blobs[f"{DEVICE}/{MODULE}/current"] = b"null"
+    elif state == "no-blob-module-exists":
+        cloud.twins[(DEVICE, MODULE)] = {"properties": {"desired": {"notConfig": "not-returned"}}}
+    elif state == "invalid-json":
+        cloud.blobs[f"{DEVICE}/{MODULE}/current"] = b"{"
+    response = await client.get(f"/{DEVICE}/twin/config/{MODULE}")
+    if state in {"stored-null", "no-blob-module-exists"}:
+        assert response.status_code == 200 and response.json() is None
+    elif state == "no-blob-no-module":
+        assert response.status_code == 404
+        assert response.json() == {"message": f"{{'error': 'IoTBackendAPIError', 'message': 'Module {MODULE} not found on device {DEVICE}'}}"}
+    else:
+        assert response.status_code == 500
+        assert response.json() == {"message": "{'error': 'IoTBackendAPIError', 'message': 'Could not retrieve module twin config: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)'}"}
+    _assert_configuration_read(cloud, twin=state.startswith("no-blob"))
+    assert cloud.direct_methods == 0 and opcua_provider.calls == calls
+
+
+@pytest.mark.parametrize("failure", ["storage", "sas", "upload", "hub"])
+async def test_opcua_registered_write_keeps_helper_error_wrappers_and_partial_effects(
+    client, opcua_provider, lifecycle_state, cloud, post_writes, monkeypatch, failure,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+    payload = _configuration()
+    if failure == "storage":
+        monkeypatch.setattr(write_route, "PUBLIC_STORAGE_ACCOUNT_NAME", "")
+    elif failure == "sas":
+        monkeypatch.setattr(write_route, "BLOB_SAS_TOKEN_MODULE_CONF", "")
+    elif failure == "upload":
+        post_writes.upload_error = RuntimeError("synthetic upload error")
+    else:
+        post_writes.status = 409
+    response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=payload)
+    assert response.status_code == {"storage": 500, "sas": 500, "upload": 400, "hub": 409}[failure]
+    if failure in {"storage", "sas"}:
+        message = ("Public storage account name is not set. Cannot upload file." if failure == "storage" else
+                   "BLOB_SAS_TOKEN_MODULE_CONF is not configured. SAS token is required for Edge Device blob access.")
+        assert response.json() == {"message": str({"error": "IoTBackendAPIError", "message": message})}
+        assert post_writes.contexts == post_writes.blobs == post_writes.uploads == post_writes.patches == []
+    elif failure == "upload":
+        assert response.json() == {"message": "{'error': 'UploadError', 'message': 'could not upload data object to blob storage: synthetic upload error'}"}
+        assert post_writes.uploads == post_writes.patches == []
+    else:
+        # Existing failure is after upload, not an atomic rollback or a second
+        # write through the provider. The failed patch still carries a UUID.
+        assert post_writes.uploads == [(json.dumps(payload, separators=(",", ":")), True)]
+        assert len(post_writes.patches) == 1
+        url, patch, headers = post_writes.patches[0]
+        config_id = patch["properties"]["desired"]["configId"]
+        assert UUID(config_id).version == 4 and len(config_id) == 32
+        assert url == f"https://testhub.invalid/twins/{DEVICE}/modules/{MODULE}?api-version=2020-05-31-preview"
+        assert headers == {"Authorization": "synthetic"}
+        assert response.json() == {"message": str({"error": "IoTBackendAPIError", "message":
+            f"could not update module twin of {MODULE} on {DEVICE} on the Azure IoT Hub. Config-Id: [{config_id}]. Error: synthetic hub error"})}
+    if failure in {"upload", "hub"}:
+        assert post_writes.contexts == [(('teststorage', 'iotedge-device-twin'), {"sas_token": "sig=synthetic"})]
+        assert post_writes.blobs == [f"{DEVICE}/{MODULE}/current"]
+    assert cloud.effects == [] and cloud.direct_methods == 0 and opcua_provider.calls == calls
+
+
+@pytest.mark.parametrize("module", [MODULE, "seal-module-opcua-client-other", "seal-app-net-discover"])
+async def test_opcua_no_schema_and_sibling_modules_keep_literal_object_fallback(
+    client, opcua_provider, lifecycle_state, cloud, module,
+):
+    if module != MODULE:
+        await _register_opcua(client, lifecycle_state, opcua_provider)
+    assert module_schema_registry.get(module, "configuration") is None
+    calls = opcua_provider.calls.copy()
+    payload = {"schemaVersion": "not-runtime-version", "nullable": None, "items": [None]}
+    response = await client.post(f"/{DEVICE}/twin/config/{module}", json=payload)
+    assert response.status_code == 200 and response.json() == [payload, 200]
+    _assert_configuration_write(cloud, payload, module=module)
+    cloud.effects.clear()
+    response = await client.get(f"/{DEVICE}/twin/config/{module}")
+    assert response.status_code == 200 and response.json() == payload
+    _assert_configuration_read(cloud, module=module)
+    cloud.effects.clear()
+    response = await client.post(f"/{DEVICE}/twin/config/{module}", content="null")
+    assert response.status_code == 422 and response.json() == {
+        "message": "Module configuration does not match its schema",
+        "errors": [{"loc": [], "rule": "type", "msg": "must match the declared type"}],
+    }
+    assert cloud.effects == [] and cloud.direct_methods == 0 and opcua_provider.calls == calls
+
+
+async def test_opcua_disabled_removed_module_binding_and_deregistered_use_object_fallback(
+    client, opcua_provider, lifecycle_state, cloud,
+):
+    manifest = await _register_opcua(client, lifecycle_state, opcua_provider)
+    fallback = {"schemaVersion": "not-runtime-version", "keepNull": None}
+    for state in ("disabled", "module-binding-removed", "deregistered"):
+        if state == "disabled":
+            assert (await client.post(f"/extensions/{NAME}/disable")).status_code == 200
+        elif state == "module-binding-removed":
+            # schema_ref is required for a module binding; removing the entire
+            # binding is the real configuration-contract removal operation.
+            del manifest["module_schemas"][MODULE]
+            assert (await client.put(f"/extensions/{NAME}", json=manifest)).status_code == 200
+            assert module_schema_registry.get(MODULE, "reported") is None
+        else:
+            assert (await client.delete(f"/extensions/{NAME}")).status_code == 204
+        assert module_schema_registry.get(MODULE, "configuration") is None
+        calls = opcua_provider.calls.copy()
+        cloud.effects.clear()
+        response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=fallback)
+        assert response.status_code == 200 and response.json() == [fallback, 200]
+        _assert_configuration_write(cloud, fallback)
+        cloud.effects.clear()
+        response = await client.get(f"/{DEVICE}/twin/config/{MODULE}")
+        assert response.status_code == 200 and response.json() == fallback
+        _assert_configuration_read(cloud)
+        assert cloud.direct_methods == 0 and opcua_provider.calls == calls
+        if state != "deregistered":
+            if state == "disabled":
+                assert (await client.post(f"/extensions/{NAME}/enable")).status_code == 200
+            else:
+                assert (await client.put(f"/extensions/{NAME}", json=_manifest(opcua_provider))).status_code == 200
+            assert module_schema_registry.get(MODULE, "configuration") is not None
+            calls = opcua_provider.calls.copy()
+            cloud.effects.clear()
+            assert (await client.get(f"/{DEVICE}/twin/config/{MODULE}")).status_code == 500
+            _assert_configuration_read(cloud)
+            cloud.effects.clear()
+            assert (await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=fallback)).status_code == 422
+            assert cloud.effects == [] and opcua_provider.calls == calls
+
+
+async def test_opcua_nested_session_credentials_are_required_before_helpers(
+    client, opcua_provider, lifecycle_state, cloud,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+    payload = _configuration()
+    del payload["clients"]["powerpak-client"]["sessions"]["session1"]["credentials"]
+    response = await client.post(f"/{DEVICE}/twin/config/{MODULE}", json=payload)
+    assert response.status_code == 422 and response.json() == {
+        "message": "Module configuration does not match its schema",
+        "errors": [{"loc": list(_SESSION), "rule": "required", "msg": "must include the required properties"}],
+    }
+    assert cloud.effects == [] and cloud.direct_methods == 0 and opcua_provider.calls == calls
+
+
+async def test_opcua_active_blob_io_failure_keeps_existing_500_wrapper_and_no_twin_fallback(
+    client, opcua_provider, lifecycle_state, cloud, blob_store, iot_hub,
+):
+    await _register_opcua(client, lifecycle_state, opcua_provider)
+    calls = opcua_provider.calls.copy()
+    blob_store.blobs[f"{DEVICE}/{MODULE}/current"] = RuntimeError("synthetic blob unavailable")
+    response = await client.get(f"/{DEVICE}/twin/config/{MODULE}")
+    assert response.status_code == 500 and response.json() == {
+        "message": "{'error': 'IoTBackendAPIError', 'message': 'Could not retrieve module twin config: synthetic blob unavailable'}",
+    }
+    assert blob_store.requested == [f"{DEVICE}/{MODULE}/current"]
+    assert iot_hub.requested == [] and cloud.effects == []
+    assert cloud.direct_methods == 0 and opcua_provider.calls == calls
