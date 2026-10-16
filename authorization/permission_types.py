@@ -74,6 +74,27 @@ class Device:
     }
 
 
+class Extension:
+    READ = "extension.read"
+    REGISTER = "extension.register"
+    DEREGISTER = "extension.deregister"
+
+    ReadPermissions = [
+        READ,
+    ]
+    EditPermissions = [
+        REGISTER,
+        DEREGISTER,
+    ]
+
+    _is_global = True
+    _descriptions = {
+        READ: "List and view registered extensions",
+        REGISTER: "Register, replace, enable extensions and rotate their internal key",
+        DEREGISTER: "Deregister and disable extensions",
+    }
+
+
 def _get_permission_names(resource_type):
     return {
         attribute_name: attribute_value
@@ -82,7 +103,7 @@ def _get_permission_names(resource_type):
     }
 
 
-RESOURCE_TYPES = [Platform, Device]
+RESOURCE_TYPES = [Platform, Device, Extension]
 
 
 def get_all_permissions() -> list[dict]:

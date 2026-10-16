@@ -5,7 +5,7 @@ from fastapi import Depends, HTTPException, Query
 
 from auth import validate_jwt
 from authorization.abac_permission_check import ABACPermissionCheck, evaluate_permission
-from authorization.permission_types import Device, Platform
+from authorization.permission_types import RESOURCE_TYPES, Device, Platform
 from db.repos.action import ActionRepository
 from db.repos.device import DeviceRepository
 from db.repos.scope import ScopeRepository
@@ -276,9 +276,17 @@ async def get_platform_permissions(
     if user_data is None:
         raise HTTPException(status_code=403, detail="User not found")
 
+    # Every globally-scoped resource type (not just Platform) belongs here.
+    # Device is deliberately excluded, its permissions are only ever meaningful per-device.
+    global_permissions = [
+        permission
+        for resource_type in RESOURCE_TYPES
+        if getattr(resource_type, "_is_global", False)
+        for permission in resource_type.ReadPermissions + resource_type.EditPermissions
+    ]
     permissions = [
         permission
-        for permission in Platform.ReadPermissions + Platform.EditPermissions
+        for permission in global_permissions
         if evaluate_permission(permission, user_data)
     ]
 

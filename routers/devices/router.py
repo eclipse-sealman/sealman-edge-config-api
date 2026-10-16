@@ -11,6 +11,7 @@ from .routes.delete_device import delete_device
 from .routes.get_device_meta_values import get_device_meta_values
 from authorization.abac_permission_check import ABACPermissionCheck
 from .routes.get_device import get_device
+from .schemas import CreateDeviceRequest
 from routers.general.schemas import DeviceDetailResponse
 
 devices = BaseAPIRouter(prefix="/devices", tags=["Devices"])
@@ -30,12 +31,16 @@ async def get_devices_route(
 @devices.put("/{device_id}")
 async def create_device_route(
     device_id: str,
-    request: Request,
+    body: CreateDeviceRequest,
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
     template_repo: DeviceTemplateRepository = Depends(get_repository(DeviceTemplateRepository)),
 ):
-    body = await request.json()
-    return await create_device(device_id, body, repo, template_repo)
+    return await create_device(
+        device_id,
+        body.model_dump(exclude_none=True),
+        repo,
+        template_repo,
+    )
 
 
 @devices.delete("/{device_id}")

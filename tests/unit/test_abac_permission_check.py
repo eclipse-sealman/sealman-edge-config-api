@@ -151,9 +151,11 @@ class TestMatchesScope:
 class TestABACPermissionCheck:
     """Unit tests for the ABACPermissionCheck callable."""
 
-    def _make_request(self, path_params=None):
+    def _make_request(self, path_params=None, query_params=None):
         request = MagicMock()
         request.path_params = path_params or {}
+        request.query_params = MagicMock()
+        request.query_params.get = lambda key, default=None: (query_params or {}).get(key, default)
         return request
 
     def _make_user_data(self, is_admin=False, teams=None):
@@ -378,6 +380,19 @@ class TestABACPermissionCheck:
     async def test_device_path_param_extraction(self, user_repo, device_repo, auth_context):
         checker = ABACPermissionCheck("device.read", device_path="device_id")
         request = self._make_request({"device_id": "my-device"})
+
+        team = self._make_team(actions=["device.read"], scope=None)
+        user_repo.get_teams_with_roles_and_scopes.return_value = self._make_user_data(
+            teams=[team]
+        )
+
+        result = await checker(request, auth_context, user_repo, device_repo)
+        assert result["device_id"] == "my-device"
+
+    @pytest.mark.asyncio
+    async def test_device_query_param_extraction(self, user_repo, device_repo, auth_context):
+        checker = ABACPermissionCheck("device.read", device_path="device_id", device_in="query")
+        request = self._make_request(query_params={"device_id": "my-device"})
 
         team = self._make_team(actions=["device.read"], scope=None)
         user_repo.get_teams_with_roles_and_scopes.return_value = self._make_user_data(

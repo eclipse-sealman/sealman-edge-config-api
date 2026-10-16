@@ -21,12 +21,14 @@ from constants import (
     ALLOW_STARTUP_WITHOUT_OIDC,
     BOOTSTRAP_ENABLED,
     ENABLE_DOCS,
+    EXTENSIONS_ENABLED,
 )
 
 from db.repos.device import DeviceRepository
 from exceptions import APIError
 from db.session import AsyncSessionLocal, get_repository
 from db.migration import run_migrations
+from extensions import hydrate_all_routes, setup_extensions, start_side_apps
 from periodic_task import create_periodic_task
 from routers.devices.routes.get_devices import populate_cache_from_iot_hub_query
 from routers.smart_ems.password_renewal_task_processor import (
@@ -39,7 +41,7 @@ from helper import AuditTrail
 
 from routers.cmd_proxy.router import cmd_proxy
 from routers.general.router import general
-from routers.module_config.router import module_config
+from routers.module_config.router import install_module_config_openapi, module_config
 from routers.smart_ems.router import smart_ems
 from routers.network_discovery.router import network_discovery
 from routers.auth.router import auth
@@ -70,6 +72,20 @@ async def populate_cache_from_iot_hub_query_wrapper():
         repo_factory = get_repository(DeviceRepository)
         repo = repo_factory(session)
         await populate_cache_from_iot_hub_query(repo)
+
+
+def _register_extensions_router(target_app: FastAPI) -> None:
+    if not EXTENSIONS_ENABLED:
+        logger.info("Extensions disabled by EXTENSIONS_ENABLED=false")
+        return
+    setup_extensions(target_app)
+
+
+async def _start_extensions() -> list[asyncio.Task]:
+    if not EXTENSIONS_ENABLED:
+        return []
+    await hydrate_all_routes()
+    return start_side_apps()
 
 
 @asynccontextmanager
@@ -119,6 +135,8 @@ async def lifespan(_: FastAPI):
         )
     )
 
+    background_tasks.update(await _start_extensions())
+
     yield
 
     if jwks_refresh_task is not None:
@@ -149,6 +167,8 @@ app = FastAPI(
         "clientId": SWAGGER_CLIENT_ID,
     },
 )
+
+install_module_config_openapi(app)
 
 allowed_origins = []
 if CORS_ALLOWED_ORIGINS is not None:
@@ -195,6 +215,8 @@ app.include_router(lines)
 app.include_router(platform_config)
 app.include_router(devices)
 
+_register_extensions_router(app)
+
 
 # Register docs routes as plain Starlette routes so they bypass the global JWT dependency
 async def _swagger_ui(_: Request):
@@ -237,7 +259,14 @@ async def handle_http_exception(_: Request, ex: HTTPException):
 @app.exception_handler(RequestValidationError)
 async def handle_fast_api_req_validation_error(_: Request, ex: RequestValidationError):
     logger.error(f"RequestValidationError: [{ex}]")
-    return JSONResponse(status_code=400, content={"message": ex.body})
+    errors = [
+        {
+            "location": ".".join(str(part) for part in error["loc"] if part != "body"),
+            "message": error["msg"],
+        }
+        for error in ex.errors()
+    ]
+    return JSONResponse(status_code=400, content={"message": "Request validation failed", "errors": errors})
 
 
 @app.exception_handler(Exception)

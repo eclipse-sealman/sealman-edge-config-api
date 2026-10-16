@@ -17,3 +17,4 @@ psycopg[binary,pool]==3.3.3
 sqlalchemy[asyncio]==2.0.48
 alembic==1.18.4
 pydantic==2.12.5
+packaging==26.3
