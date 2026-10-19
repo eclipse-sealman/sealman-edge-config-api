@@ -23,8 +23,8 @@ from .routes.post_smart_ems_apply_default_template import post_smart_ems_apply_d
 from .schemas import (DeviceSecretInformation, DeviceSecretValue, SemsInfo2, SemsFirmwareStatus,
                       SemsUpdateLan, SemsUpdateLanRes, SemsGetLan, ConfigCellular, CellularInterface,
                       GeneratedDeviceConfig, NatConfig, DefaultSmartEMSTemplate, ApplyDefaultTemplateResult)
-from .routes.post_smart_ems_config_portforwarding import post_smart_ems_config_portforwarding
-from .routes.get_smart_ems_config_portforwarding import get_smart_ems_config_portforwarding
+from .routes.post_smart_ems_config_port_forwarding import post_smart_ems_config_port_forwarding
+from .routes.get_smart_ems_config_port_forwarding import get_smart_ems_config_port_forwarding
 from .schemas import PortForwardingConfig
 
 smart_ems = BaseAPIRouter()
@@ -120,10 +120,10 @@ async def post_smart_ems_apply_default_template(device: str,
 @smart_ems.post("/{device}/smartems/config/port-forwarding", response_model=PortForwardingConfig, tags=["Smart-EMS"])
 async def set_port_forwarding(device: str, config: PortForwardingConfig,
                               _=Depends(ABACPermissionCheck(Device.NETWORK_WRITE))):
-    return await post_smart_ems_config_portforwarding(device, config)
+    return await post_smart_ems_config_port_forwarding(device, config)
 
 
 @smart_ems.get("/{device}/smartems/config/port-forwarding", response_model=PortForwardingConfig, tags=["Smart-EMS"])
 async def get_port_forwarding(device: str,
                               _=Depends(ABACPermissionCheck(Device.READ))):
-    return await get_smart_ems_config_portforwarding(device)
+    return await get_smart_ems_config_port_forwarding(device)

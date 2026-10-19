@@ -20,32 +20,25 @@ def mock_device_info():
 async def test_get_smart_ems_config_nat(mock_device_info, mocker):
     mock_device_info["variables"] = [
         {
-            "name": "nat_machine_1",
-            "variableValue": "machine1"
-        },
-        {
-            "name": "nat_machine_1_lan2",
-            "variableValue": "192.168.178.201"
-        },
-        {
-            "name": "nat_machine_1_lan3",
-            "variableValue": "172.22.220.100"
-        },
-        {
-            "name": "nat_machine_2",
-            "variableValue": "machine2"
-        },
-        {
-            "name": "nat_machine_2_lan2",
-            "variableValue": "192.168.178.202"
-        },
-        {
-            "name": "nat_machine_2_lan3",
-            "variableValue": "172.22.220.101"
-        },
-        {
-            "name": "nat_enabled",
-            "variableValue": "true"
+            "name": "nat_settings",
+            "variableValue": json.dumps(
+                {
+                    "enabled": True,
+                    "mappings": [
+                        {
+                            "name": "machine1",
+                            "externalIp": "192.168.178.201",
+                            "internalIp": "172.22.220.100",
+                        },
+                        {
+                            "name": "machine2",
+                            "externalIp": "192.168.178.202",
+                            "internalIp": "172.22.220.101",
+                        },
+                    ],
+                }
+            ),
+            "variableType": "jsonObject",
         }
     ]
 

@@ -28,7 +28,6 @@ async def get_smart_ems_default_template(device_type: str) -> DefaultSmartEMSTem
 
     template_name = get_configuration_name(device_type_config)
 
-    parsed_data = {}
     try:
         parsed_data = DeviceConfig.model_validate(device_type_config)
     except JsonSchemaValidationError as e:

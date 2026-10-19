@@ -1,40 +1,36 @@
+import json
 from helper import DeviceInfo
 from smart_ems import SmartEMS
 from ..schemas import NatConfig
 
 
 async def get_smart_ems_config_nat(device: str):
-    # TODO: Do we want to improve the error handling here?
     device_by_serial = await SmartEMS.get_device_by_serial(device)
     device_info = DeviceInfo(device_by_serial)
 
     device_info.check_eligibility()
     device_info.check_nat_support()
 
-    device_variables_dict = device_info.get_device_variables_dict()
     nat_rules = []
 
-    if device_variables_dict.get("nat_enabled", "false") == "true":
+    nat_settings_raw = device_info.get_variable_value("nat_settings")
+    try:
+        nat_settings = json.loads(nat_settings_raw)
+        nat_enabled = bool(nat_settings.get("enabled", False))
 
-        x = 1
-        # Loop to process nat_machine_x elements
-        while True:
-            machine_key = f"nat_machine_{x}"
-            lan2_key = f"{machine_key}_lan2"
-            lan3_key = f"{machine_key}_lan3"
-
-            if machine_key not in device_variables_dict:
-                break
-
-            nat_rules.append({
-                "name": device_variables_dict.get(machine_key, ""),
-                "extIp": device_variables_dict.get(lan2_key, ""),
-                "intIp": device_variables_dict.get(lan3_key, "")
-            })
-
-            x += 1
+        for mapping in nat_settings.get("mappings", []):
+            nat_rules.append(
+                {
+                    "name": mapping.get("name", ""),
+                    "extIp": mapping.get("externalIp", ""),
+                    "intIp": mapping.get("internalIp", ""),
+                }
+            )
+    except (TypeError, ValueError):
+        # If value is malformed, fall back to legacy format.
+        nat_enabled = False
 
     return NatConfig(
-        nat_enabled=device_variables_dict.get("nat_enabled", "false"),
+        nat_enabled=nat_enabled,
         nat_rules=nat_rules
     )
