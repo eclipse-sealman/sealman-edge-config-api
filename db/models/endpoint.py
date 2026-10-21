@@ -21,6 +21,8 @@ class EndpointType(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     fields: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     mapping: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # {field_key: extension name} for fields applied from an extension's manifest.
+    managed_by: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
     )

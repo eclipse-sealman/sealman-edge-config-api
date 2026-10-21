@@ -151,6 +151,12 @@ class FieldDefinition(BaseModel):
         return self
 
 
+def normalize_field_definition(definition: Dict[str, Any]) -> Dict[str, Any]:
+    """Validates a field definition and returns its canonical stored form (defaults
+    filled in, unset optional attributes dropped). Raises pydantic.ValidationError."""
+    return FieldDefinition.model_validate(definition).model_dump(exclude_none=True)
+
+
 class FieldDefinitionUpdate(BaseModel):
     type: Optional[FieldType] = Field(default=None, description="Data type of the field value")
     label: Optional[str] = Field(

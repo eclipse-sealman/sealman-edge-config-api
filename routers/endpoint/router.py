@@ -7,9 +7,12 @@ from authorization.device_access import DeviceAccess, device_access
 from authorization.permission_types import Device, Platform
 from db.repos.device import DeviceRepository
 from db.repos.endpoint import EndpointRepository
+from db.repos.extension import ExtensionRepository
 from db.session import get_repository
 from db.merge import patch_fields
+from extensions.endpoint_fields import resolve_extension_fields
 from routers.schemas import FieldDefinition
+from routers.endpoint.managed_field_lock import check_managed_field_patch
 from routers.endpoint.schemas import (
     EndpointTypeResponse,
     EndpointCreate,
@@ -81,14 +84,20 @@ async def get_endpoint_type(
 async def create_endpoint_type(
     body: EndpointTypeCreate,
     repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
+    extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
     _auth=_type_write,
 ) -> EndpointTypeResponse:
+    own_fields = {k: v.model_dump(exclude_none=True) for k, v in body.fields.items()}
     try:
+        added_fields, added_managed_by = await resolve_extension_fields(
+            extension_repo, body.extension_fields, set(own_fields)
+        )
         result = await repo.create_endpoint_type(
             label=body.label,
             description=body.description,
-            fields={k: v.model_dump(exclude_none=True) for k, v in body.fields.items()},
+            fields={**own_fields, **added_fields},
             mapping=body.mapping,
+            managed_by=added_managed_by,
         )
         return EndpointTypeResponse.model_validate(result)
     except APIError as exc:
@@ -105,6 +114,7 @@ async def update_endpoint_type(
     type_id: str,
     body: EndpointTypeUpdate,
     repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
+    extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
     _auth=_type_write,
 ) -> EndpointTypeResponse:
     field_patch = (
@@ -116,13 +126,20 @@ async def update_endpoint_type(
         else None
     )
     try:
+        # Checked first, so an unknown type gives its own 404 before any extension_fields error.
+        current = await repo.get_endpoint_type(type_id)
+        if current is None:
+            raise HTTPException(
+                status_code=404, detail=f"EndpointType '{type_id}' not found"
+            )
+        added_fields, added_managed_by = await resolve_extension_fields(
+            extension_repo, body.extension_fields or {}, set(body.fields or {})
+        )
         if field_patch is not None:
-            current = await repo.get_endpoint_type(type_id)
-            if current is None:
-                raise HTTPException(
-                    status_code=404, detail=f"EndpointType '{type_id}' not found"
-                )
             merged_fields = patch_fields(current["fields"], field_patch)
+            check_managed_field_patch(
+                current["fields"], merged_fields, current.get("managed_by") or {}
+            )
             for field_key, field_dict in merged_fields.items():
                 try:
                     FieldDefinition.model_validate(field_dict)
@@ -136,6 +153,8 @@ async def update_endpoint_type(
             description=body.description,
             fields=field_patch,
             mapping=body.mapping,
+            add_fields=added_fields,
+            add_managed_by=added_managed_by,
         )
     except APIError as exc:
         _handle_api_error(exc)

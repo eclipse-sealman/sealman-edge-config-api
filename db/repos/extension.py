@@ -64,6 +64,11 @@ class ExtensionRepository(ABC):
         pass
 
     @abstractmethod
+    async def set_endpoint_fields(self, name: str, endpoint_fields: Dict[str, Dict[str, Any]]) -> None:
+        """Replaces the extension's declared endpoint field definitions."""
+        pass
+
+    @abstractmethod
     async def set_internal_key_hash(self, name: str, key_hash: str) -> None:
         pass
 

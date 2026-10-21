@@ -27,6 +27,7 @@ class ExtensionMapper:
             "description": ext.description or "",
             "schema_version": ext.schema_version,
             "enabled": bool(ext.enabled),
+            "endpoint_fields": ext.endpoint_fields or {},
             "internal_key_hash": ext.internal_key_hash,
             "created_at": ext.created_at,
             "updated_at": ext.updated_at,
@@ -151,6 +152,12 @@ class SqlAlchemyExtensionRepository(ExtensionRepository):
         result = await self._session.execute(select(Extension).where(Extension.name == name))
         ext = result.scalar_one()
         ext.enabled = enabled
+        await commit_session(self._session)
+
+    async def set_endpoint_fields(self, name: str, endpoint_fields: Dict[str, Dict[str, Any]]) -> None:
+        result = await self._session.execute(select(Extension).where(Extension.name == name))
+        ext = result.scalar_one()
+        ext.endpoint_fields = dict(endpoint_fields)
         await commit_session(self._session)
 
     async def set_internal_key_hash(self, name: str, key_hash: str) -> None:

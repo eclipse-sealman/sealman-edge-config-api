@@ -47,3 +47,14 @@ async def test_enabled_extensions_hydrate_and_start_side_app(monkeypatch):
     assert tasks == [task]
     hydrate_all_routes.assert_awaited_once_with()
     start_side_apps.assert_called_once_with()
+
+def test_extension_fields_router_is_registered_without_the_extension_flag(monkeypatch):
+    assert "/extension-fields" in {route.path for route in main.app.routes}
+
+    target_app = FastAPI()
+    monkeypatch.setattr(main, "EXTENSIONS_ENABLED", False)
+    monkeypatch.setattr(main, "setup_extensions", Mock())
+
+    main._register_extensions_router(target_app)
+
+    assert "/extension-fields" not in {route.path for route in target_app.routes}

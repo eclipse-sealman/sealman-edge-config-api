@@ -9,12 +9,13 @@ registry.py, not enforced here.
 import keyword
 import re
 from datetime import datetime
-from typing import Annotated, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from constants import EXTENSIONS_HTTP_UPSTREAM_ALLOWLIST
+from routers.schemas import FieldDefinition
 
 _PLACEHOLDER_RE = re.compile(r"{([^{}]*)}")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -198,6 +199,10 @@ class ExtensionRegistration(ManifestModel):
     upstreams: Dict[str, UpstreamSpec]
     actions: List[ActionSpec] = Field(default_factory=list)
     routes: List[RouteSpec]
+    # Field definitions an admin can apply to endpoint types. Typed loosely so that an
+    # invalid definition is reported by registry.py as a 422, not a request-shape 400.
+    # Absent or null on PUT leaves the stored set unchanged; `{}` clears it.
+    endpoint_fields: Optional[Dict[str, Any]] = None
 
 
 class RouteDetail(RouteSpec):
@@ -210,6 +215,7 @@ class ExtensionDetail(ExtensionRegistration):
     upstreams: Dict[str, UpstreamDetail]
     routes: List[RouteDetail]
     enabled: bool = False
+    endpoint_fields: Dict[str, FieldDefinition] = Field(default_factory=dict)
 
 
 class ExtensionHealthCheckResult(BaseModel):
@@ -219,3 +225,30 @@ class ExtensionHealthCheckResult(BaseModel):
 
 class InternalKeyRotateResponse(BaseModel):
     internal_key: str
+
+
+class InternalEndpoint(BaseModel):
+    """An endpoint as an extension sees it on the internal Core routes: `data` holds only the
+    stored values of the keys this extension manages on the endpoint's type."""
+
+    endpoint_id: str
+    device_id: str
+    type_id: str
+    created_at: datetime
+    updated_at: datetime
+    data: Dict[str, Any]
+
+
+class InternalDeviceEndpoints(BaseModel):
+    device_id: str
+    endpoints: List[InternalEndpoint]
+
+
+class InternalEndpointPage(BaseModel):
+    """One page of devices for the cross-device internal Core route; `total_devices` counts all
+    devices with at least one matching endpoint."""
+
+    devices: List[InternalDeviceEndpoints]
+    page: int
+    page_size: int
+    total_devices: int

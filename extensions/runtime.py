@@ -49,21 +49,34 @@ def _operation_id(extension_name: str, method: str, path: str) -> str:
     return f"{extension_name}_{method.lower()}_{slug}"
 
 
+async def verify_internal_key(
+    request: Request,
+    extension_name: str,
+    x_internal_key: Optional[str],
+    extension_repo: ExtensionRepository,
+) -> Dict[str, Any]:
+    """Checks `X-Internal-Key` against the named extension's key hash, audits the
+    access, and returns the extension row. A missing key, an unknown extension or a
+    key that is not this extension's gives 401."""
+    access = f"internal {request.method} {request.url.path}"
+    if not x_internal_key:
+        await AuditTrail.log("unknown", f"{access} rejected: missing X-Internal-Key")
+        raise HTTPException(status_code=401, detail="Missing X-Internal-Key")
+    row = await extension_repo.get_extension_row(extension_name)
+    if row is None or not keys_match(x_internal_key, row.get("internal_key_hash") or ""):
+        await AuditTrail.log("unknown", f"{access} rejected: invalid X-Internal-Key")
+        raise HTTPException(status_code=401, detail="Invalid X-Internal-Key")
+    await AuditTrail.log(f"extension:{extension_name}", access)
+    return row
+
+
 def _internal_key_dependency(extension_name: str):
     async def _check(
         request: Request,
         x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
         extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
     ) -> None:
-        access = f"internal {request.method} {request.url.path}"
-        if not x_internal_key:
-            await AuditTrail.log("unknown", f"{access} rejected: missing X-Internal-Key")
-            raise HTTPException(status_code=401, detail="Missing X-Internal-Key")
-        row = await extension_repo.get_extension_row(extension_name)
-        if row is None or not keys_match(x_internal_key, row.get("internal_key_hash") or ""):
-            await AuditTrail.log("unknown", f"{access} rejected: invalid X-Internal-Key")
-            raise HTTPException(status_code=401, detail="Invalid X-Internal-Key")
-        await AuditTrail.log(f"extension:{extension_name}", access)
+        await verify_internal_key(request, extension_name, x_internal_key, extension_repo)
 
     return _check
 

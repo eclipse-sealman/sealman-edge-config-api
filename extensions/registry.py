@@ -17,15 +17,17 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from jsonschema.exceptions import SchemaError
 
+from db.repos.endpoint import EndpointRepository
 from db.repos.extension import ExtensionActionConflictError, ExtensionRepository
 from db.repos.role import RoleRepository
 from exceptions import APIError
 
 from . import body_validation, health, signature
+from .endpoint_fields import diff_endpoint_fields, validate_endpoint_field_ownership, validate_endpoint_fields
 from .schemas import ExtensionHealthCheckResult, ExtensionRegistration, ExtensionDetail, RouteSpec, UpstreamSpec
 from .security import generate_key, hash_key
 from .upstreams import http as http_upstream
@@ -330,6 +332,7 @@ async def _build_detail(extension_repo: ExtensionRepository, name: str) -> Exten
         actions=actions,
         routes=routes,
         enabled=ext["enabled"],
+        endpoint_fields=ext.get("endpoint_fields") or {},
     )
 
 
@@ -345,6 +348,7 @@ async def register_extension(
     outside that transaction; it only logs a warning and must not undo a save.
     """
     _validate_manifest_cross_references(registration)
+    endpoint_fields = validate_endpoint_fields(registration.endpoint_fields)
     upstreams, routes = await _prepare_persistence(registration)
 
     try:
@@ -352,7 +356,9 @@ async def register_extension(
             if await extension_repo.extension_exists(registration.name):
                 raise APIError(f"Extension '{registration.name}' is already registered", 409)
             await _validate_action_ownership(extension_repo, registration)
+            await validate_endpoint_field_ownership(extension_repo, registration.name, (endpoint_fields or {}).keys())
             await extension_repo.create_extension(registration.name, registration.description, registration.schema_version)
+            await extension_repo.set_endpoint_fields(registration.name, endpoint_fields or {})
             await _enroll_actions(extension_repo, registration)
             await extension_repo.replace_upstreams_and_routes(registration.name, upstreams, routes)
     except ExtensionActionConflictError as exc:
@@ -362,12 +368,38 @@ async def register_extension(
     return await _build_detail(extension_repo, registration.name)
 
 
+async def _apply_endpoint_field_diff(
+    endpoint_repo: EndpointRepository,
+    name: str,
+    old: Dict[str, Dict[str, Any]],
+    new: Dict[str, Dict[str, Any]],
+) -> None:
+    """Brings the endpoint types in line with a manifest's new declared fields (spec 4.4).
+
+    Managed fields never carry a role, so a changed definition cannot invalidate a mapping.
+    """
+    diff = diff_endpoint_fields(old, new)
+    if diff.removed:
+        await endpoint_repo.release_managed_fields(name, diff.removed)
+    if diff.changed:
+        await endpoint_repo.update_managed_field_definitions(
+            name, {key: old[key] for key in diff.changed}, {key: new[key] for key in diff.changed}
+        )
+
+
 async def replace_extension(
     extension_repo: ExtensionRepository,
     name: str,
     registration: ExtensionRegistration,
+    endpoint_repo: EndpointRepository,
 ) -> ExtensionDetail:
     """Replaces `name`'s manifest in one database transaction. Never changes `enabled`.
+
+    When the manifest has an `endpoint_fields` section, the same transaction updates the
+    endpoint types the fields are applied to, enabled or not: a removed key stops being
+    managed (the definition stays as an admin field), a changed definition is rewritten on
+    the types (keeping the admin's label, description and show_in_list), and a new key is
+    only stored. `endpoint_repo` must share `extension_repo`'s session.
 
     Refuses (409) to drop an action that is still granted to a role that check
     runs before any write. Live route remount, if the extension is enabled, is
@@ -382,6 +414,7 @@ async def replace_extension(
         raise APIError(f"Extension '{name}' not found", 404)
 
     _validate_manifest_cross_references(registration)
+    endpoint_fields = validate_endpoint_fields(registration.endpoint_fields)
     old_actions = set(await extension_repo.list_extension_actions(name))
     new_actions = {action.name for action in registration.actions}
     for removed in old_actions - new_actions:
@@ -391,13 +424,21 @@ async def replace_extension(
                 409,
             )
 
+    old_endpoint_fields = existing.get("endpoint_fields") or {}
+
     await extension_repo.release_connection()
     upstreams, routes = await _prepare_persistence(registration)
     try:
         async with extension_repo.atomic():
             await _validate_action_ownership(extension_repo, registration, current_extension=name)
+            if endpoint_fields is not None:
+                await validate_endpoint_field_ownership(extension_repo, name, endpoint_fields.keys())
             await extension_repo.set_description(name, registration.description)
             await extension_repo.set_schema_version(name, registration.schema_version)
+            # An absent section leaves the stored fields unchanged (clients may drop it).
+            if endpoint_fields is not None:
+                await extension_repo.set_endpoint_fields(name, endpoint_fields)
+                await _apply_endpoint_field_diff(endpoint_repo, name, old_endpoint_fields, endpoint_fields)
             # A route's required_action FK depends on the action row already existing.
             await extension_repo.clear_extension_actions(name)
             await _enroll_actions(extension_repo, registration)
@@ -457,12 +498,15 @@ async def deregister_extension(
     extension_repo: ExtensionRepository,
     role_repo: RoleRepository,
     name: str,
+    endpoint_repo: EndpointRepository,
 ) -> None:
     """Removes the extension. Unlike PUT, DELETE *does* strip the extension's
     actions from every role that holds them, then deletes leftover Action rows.
     PUT is an in-place edit of a still-live catalog entry (don't silently revoke);
     DELETE is "this extension is gone" (the actions it introduced go with it).
-    All three steps commit together or not at all."""
+    Fields it applied to endpoint types stay as plain admin fields: only their
+    managed markers are released, and endpoint values are never touched.
+    All steps commit together or not at all."""
     existing = await extension_repo.get_extension_row(name)
     if existing is None:
         raise APIError(f"Extension '{name}' not found", 404)
@@ -470,6 +514,7 @@ async def deregister_extension(
     async with extension_repo.atomic():
         action_names = await extension_repo.list_extension_actions(name)
         await _strip_actions_from_all_roles(role_repo, action_names)
+        await endpoint_repo.release_managed_fields(name)
         await extension_repo.delete_extension(name)  # cascades upstreams/routes/actions
         await extension_repo.delete_orphaned_actions(action_names)
 
