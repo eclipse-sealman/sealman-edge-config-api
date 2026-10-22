@@ -4,20 +4,24 @@ from fastapi import Depends
 from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Device
 from db.repos.device import DeviceRepository
+from db.repos.compose import ComposeRepository
 from db.session import get_repository
 from routers.base_api_router import BaseAPIRouter
 from routers.general.schemas import (
     DeploymentTag,
     DeviceMetadataResponse,
+    DeviceRetypeRequest,
     ResponseDeploymentList,
     DeviceModuleList,
     DeviceConnectionStatus,
     DeviceModuleMethodReq,
     ModuleDeploymentStatus,
+    ComposeDeploymentStatus,
 )
 from common_schemas import DirectMethod
 from .routes.get_device_metadata import get_device_metadata as _get_device_metadata
 from .routes.patch_device_metadata import patch_device_metadata as _patch_device_metadata
+from .routes.patch_device_metadata import patch_device_type as _patch_device_type
 from .routes.get_device_modules import get_device_modules as _get_device_modules
 from .routes.get_deployments_list import get_deployment_list as _get_deployment_list
 from .routes.get_deployment_tag import get_deployment_tag as _get_deployment_tag
@@ -25,6 +29,7 @@ from .routes.put_deployment_tag import put_deployment_tag as _put_deployment_tag
 from .routes.get_device_connection_status import get_device_connection_status as _get_device_connection_status
 from .routes.post_module_method import post_module_method as _post_module_method
 from .routes.get_module_deployment_status import get_module_deployment_status as _get_module_deployment_status
+from .routes.get_compose_deployment_status import get_compose_deployment_status as _get_compose_deployment_status
 
 general = BaseAPIRouter()
 logger = logging.getLogger("EdgeConfigAPI")
@@ -40,6 +45,12 @@ async def patch_device_metadata(device: str, metadata: Dict[str, Any],
                                 _ = Depends(ABACPermissionCheck(Device.METADATA_WRITE))):
     device_metadata = await _patch_device_metadata(device, metadata=metadata, repo=repo)
     return device_metadata
+
+@general.patch("/{device}/type", response_model=DeviceMetadataResponse, tags=["General"])
+async def patch_device_type(device: str, body: DeviceRetypeRequest,
+                            repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+                            _ = Depends(ABACPermissionCheck(Device.METADATA_WRITE))):
+    return await _patch_device_type(device, body=body, repo=repo)
 
 @general.put("/{device}/deployment", response_model=DeploymentTag, tags=["General"])
 async def put_deployment_tag(device: str, deployment: DeploymentTag,
@@ -89,3 +100,9 @@ async def get_device_connection_status(device: str,
 async def get_module_deployment_status(device: str,
                                        _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _get_module_deployment_status(device)
+
+@general.get("/{device}/compose-deployment/status", response_model=ComposeDeploymentStatus, tags=["General"])
+async def get_compose_deployment_status(device: str,
+                                        repo: ComposeRepository = Depends(get_repository(ComposeRepository)),
+                                        _ = Depends(ABACPermissionCheck(Device.READ))):
+    return await _get_compose_deployment_status(device, repo)

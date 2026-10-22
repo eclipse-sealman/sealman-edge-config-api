@@ -218,6 +218,32 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
 
         return await self.get_device_metadata(device_id=device_id)
 
+    async def update_device_type(
+        self,
+        device_id: str,
+        type_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        device = await self._get_device(device_id)
+        if not device:
+            return None
+
+        # Retyping keeps all existing data: the optional patch is merged onto the stored
+        # device_data and the result is validated against the new type's effective fields.
+        # Keys the new type doesn't define stay visible as custom fields.
+        new_type = await self._get_device_type_or_raise(type_id)
+        merged_data = patch_data(device.device_data or {}, metadata or {})
+        validate_instance_data(merged_data, await self._effective_fields_for(new_type))
+
+        await self._session.execute(
+            update(Device)
+            .where(Device.device_id == device_id)
+            .values(type_id=type_id, device_data=merged_data)
+        )
+        await self._session.commit()
+
+        return await self.get_device_metadata(device_id=device_id)
+
     async def get_device_ids_by_metadata_filters(
         self,
         metadata_filters: Dict[str, Optional[str]],

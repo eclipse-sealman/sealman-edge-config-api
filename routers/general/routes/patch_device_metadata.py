@@ -3,9 +3,24 @@ from typing import Any, Dict
 from db.repos.device import DeviceRepository
 from exceptions import IoTBackendAPIError
 
-from routers.general.schemas import DeviceMetadataResponse
+from routers.general.schemas import DeviceMetadataResponse, DeviceRetypeRequest
 
 logger = logging.getLogger("EdgeConfigAPI")
+
+async def patch_device_type(device, body: DeviceRetypeRequest, repo: DeviceRepository):
+    result = await repo.update_device_type(device_id=device, type_id=body.typeId, metadata=body.deviceMetadata)
+    if result is None:
+        raise IoTBackendAPIError(
+            f"Could not find device {device} from database to update",
+            404
+        )
+    return DeviceMetadataResponse(
+        deviceId=result["device_id"],
+        typeId=result["type_id"],
+        deviceMetadata=result["device_metadata"],
+        createdAt=result["created_at"],
+        updatedAt=result["updated_at"]
+    )
 
 async def patch_device_metadata(device, metadata: Dict[str, Any], repo: DeviceRepository):
     result = await repo.update_device_metadata(device_id=device, metadata=metadata)

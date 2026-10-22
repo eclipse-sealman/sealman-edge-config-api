@@ -45,6 +45,15 @@ class DeviceRepository(ABC):
         pass
 
     @abstractmethod
+    async def update_device_type(
+        self,
+        device_id: str,
+        type_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        pass
+
+    @abstractmethod
     async def get_device_ids_by_metadata_filters(
         self,
         metadata_filters: Dict[str, Optional[str]],

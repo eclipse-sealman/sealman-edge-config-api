@@ -21,6 +21,10 @@ class DeviceMetadataResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class DeviceRetypeRequest(BaseModel):
+    typeId: str
+    deviceMetadata: Optional[Dict[str, Any]] = None
+
 class DeviceStatus(DeviceMetadataResponse):
     deviceStatus: Literal["Connected", "Disconnected", "Unknown"]
     lastSeenAt: str | None = None
@@ -98,6 +102,12 @@ class DeviceConnectionStatus(BaseModel):
 class DeviceModuleMethodReq(BaseModel):
     methodName: str
     methodPayload: dict
+
+class ComposeDeploymentStatus(BaseModel):
+    deviceId: str
+    deploymentId: str | None = None
+    applied: bool = False
+    success: bool = False
 
 class ModuleDeploymentStatus(BaseModel):
     deviceId: str
