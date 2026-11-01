@@ -56,6 +56,15 @@ class ExtensionRepository(ABC):
         pass
 
     @abstractmethod
+    async def find_extension_by_ui_remote_name(self, remote_name: str, exclude_name: Optional[str] = None) -> Optional[str]:
+        """Name of an extension (other than `exclude_name`) whose stored ui uses `remote_name`."""
+        pass
+
+    @abstractmethod
+    async def set_ui(self, name: str, ui: Optional[Dict[str, Any]]) -> None:
+        pass
+
+    @abstractmethod
     async def set_schema_version(self, name: str, schema_version: int) -> None:
         pass
 
