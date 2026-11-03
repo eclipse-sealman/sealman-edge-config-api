@@ -6,7 +6,7 @@ business rules (RBAC enrollment, key issuance, lifecycle) in extensions/registry
 
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, Text, TIMESTAMP, UniqueConstraint, func
+from sqlalchemy import Boolean, Column, ForeignKey, Index, Integer, Text, TIMESTAMP, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from db.base import Base
@@ -21,6 +21,8 @@ class Extension(Base):
     schema_version = Column(Integer, nullable=False, default=1)
     enabled = Column(Boolean, nullable=False, default=False)
     internal_key_hash = Column(Text, nullable=True)
+    internal_key_created_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    internal_key_rotated_at = Column(TIMESTAMP(timezone=True), nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
@@ -121,9 +123,20 @@ class ExtensionDeviceKey(Base):
     hash is stored. Namespace-locked to the owning extension; the raw key is shown once."""
 
     __tablename__ = "extension_device_keys"
-
-    extension_id = Column(UUID(as_uuid=True), ForeignKey("extensions.id", ondelete="CASCADE"), primary_key=True)
-    device_id = Column(Text, ForeignKey("devices.device_id", ondelete="CASCADE"), primary_key=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
+    extension_id = Column(UUID(as_uuid=True), ForeignKey("extensions.id", ondelete="CASCADE"), nullable=False)
+    device_id = Column(Text, ForeignKey("devices.device_id", ondelete="CASCADE"), nullable=False)
     module_id = Column(Text, nullable=True)
+    label = Column(Text, nullable=True)
+    description = Column(Text, nullable=True)
     key_hash = Column(Text, nullable=False, index=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    revoked_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    __table_args__ = (
+        Index(
+            "uq_extension_device_keys_active",
+            "extension_id", "device_id",
+            unique=True,
+            postgresql_where=revoked_at.is_(None),
+        ),
+    )

@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 
 class ExtensionActionConflictError(Exception):
@@ -156,16 +157,17 @@ class ExtensionRepository(ABC):
 
     # --- device keys (field-ingress credentials) --------------------------
     @abstractmethod
-    async def upsert_device_key(
-        self, extension_name: str, device_id: str, module_id: Optional[str], key_hash: str
-    ) -> None:
-        """Creates or replaces the (single) key for one extension/device pair.
+    async def create_device_key(
+        self, extension_name: str, device_id: str, module_id: Optional[str], key_hash: str,
+        label: Optional[str] = None, description: Optional[str] = None,
+    ) -> str:
+        """Revokes the active key and creates a new record atomically, returning its UUID.
         Raises ValueError if the extension or device does not exist."""
         pass
 
     @abstractmethod
     async def list_device_keys(self, extension_name: str) -> List[Dict[str, Any]]:
-        """Non-secret key metadata only; hashes are never returned."""
+        """Active and revoked key metadata only; hashes are never returned."""
         pass
 
     @abstractmethod
@@ -173,6 +175,10 @@ class ExtensionRepository(ABC):
         pass
 
     @abstractmethod
+    async def revoke_device_key_by_id(self, extension_name: str, key_id: UUID) -> bool:
+        pass
+
+    @abstractmethod
     async def resolve_device_key(self, extension_name: str, key_hash: str) -> Optional[str]:
-        """Returns the device id the key was issued for, scoped to this extension."""
+        """Returns the active key's device id, scoped to this extension."""
         pass

@@ -11,6 +11,7 @@ import re
 from datetime import datetime
 from typing import Annotated, Dict, List, Literal, Optional, Union
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -212,6 +213,8 @@ class ExtensionDetail(ExtensionRegistration):
     upstreams: Dict[str, UpstreamDetail]
     routes: List[RouteDetail]
     enabled: bool = False
+    internal_key_created_at: Optional[datetime] = Field(default=None, json_schema_extra={"readOnly": True})
+    internal_key_rotated_at: Optional[datetime] = Field(default=None, json_schema_extra={"readOnly": True})
 
 
 class ExtensionRegistered(ExtensionDetail):
@@ -230,14 +233,21 @@ class InternalKeyRotateResponse(BaseModel):
 class DeviceKeyRequest(BaseModel):
     device_id: str = Field(min_length=1, max_length=128)
     module_id: Optional[str] = Field(default=None, max_length=128)
+    label: Optional[str] = None
+    description: Optional[str] = None
 
 
 class DeviceKeyIssueResponse(BaseModel):
+    id: UUID
     device_id: str
     device_key: str
 
 
 class DeviceKeyInfo(BaseModel):
+    id: UUID
     device_id: str
     module_id: Optional[str] = None
-    created_at: Optional[str] = None
+    label: Optional[str] = None
+    description: Optional[str] = None
+    created_at: datetime
+    revoked_at: Optional[datetime] = None

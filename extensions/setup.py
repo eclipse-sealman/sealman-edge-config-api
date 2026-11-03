@@ -10,6 +10,7 @@ import asyncio
 import logging
 from collections import defaultdict
 from typing import DefaultDict, List, Optional
+from uuid import UUID
 
 import uvicorn
 from fastapi import Depends, FastAPI
@@ -282,7 +283,8 @@ def _build_management_router() -> BaseAPIRouter:
         summary="Issue a device key",
         description=(
             "Issues (or replaces) the X-Device-Key one device uses for this extension's "
-            "`device` routes. The device must exist. The raw key is only ever returned here."
+            "`device` routes. Replacement atomically revokes the previous record and preserves "
+            "its metadata in history. The device must exist. The raw key is only ever returned here."
         ),
         response_model=DeviceKeyIssueResponse,
         status_code=201,
@@ -293,12 +295,14 @@ def _build_management_router() -> BaseAPIRouter:
         payload: DeviceKeyRequest,
         extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
     ) -> DeviceKeyIssueResponse:
-        raw_key = await registry.issue_device_key(extension_repo, name, payload.device_id, payload.module_id)
-        return DeviceKeyIssueResponse(device_id=payload.device_id, device_key=raw_key)
+        issued = await registry.issue_device_key(
+            extension_repo, name, payload.device_id, payload.module_id, payload.label, payload.description,
+        )
+        return DeviceKeyIssueResponse(**issued)
 
     @router.get(
         "/{name}/device-keys",
-        summary="List device keys (metadata only)",
+        summary="List active and revoked device keys (metadata only)",
         response_model=List[DeviceKeyInfo],
         dependencies=[read_dep],
     )
@@ -312,7 +316,7 @@ def _build_management_router() -> BaseAPIRouter:
 
     @router.delete(
         "/{name}/device-keys/{device_id}",
-        summary="Revoke a device key",
+        summary="Revoke the active key for a device",
         status_code=204,
         dependencies=[register_dep],
     )
@@ -323,6 +327,20 @@ def _build_management_router() -> BaseAPIRouter:
     ) -> None:
         if not await extension_repo.revoke_device_key(name, device_id):
             raise APIError(f"No device key for '{device_id}' on extension '{name}'", 404)
+
+    @router.delete(
+        "/{name}/device-keys/by-id/{key_id}",
+        summary="Revoke a device key by its record ID",
+        status_code=204,
+        dependencies=[register_dep],
+    )
+    async def revoke_device_key_by_id(
+        name: str,
+        key_id: UUID,
+        extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
+    ) -> None:
+        if not await extension_repo.revoke_device_key_by_id(name, key_id):
+            raise APIError(f"No active device key '{key_id}' on extension '{name}'", 404)
 
     return router
 

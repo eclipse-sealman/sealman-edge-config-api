@@ -353,6 +353,8 @@ async def _build_detail(extension_repo: ExtensionRepository, name: str) -> Exten
         actions=actions,
         routes=routes,
         enabled=ext["enabled"],
+        internal_key_created_at=ext.get("internal_key_created_at"),
+        internal_key_rotated_at=ext.get("internal_key_rotated_at"),
     )
 
 
@@ -534,8 +536,9 @@ async def rotate_internal_key(extension_repo: ExtensionRepository, name: str) ->
 
 
 async def issue_device_key(
-    extension_repo: ExtensionRepository, name: str, device_id: str, module_id: Optional[str]
-) -> str:
+    extension_repo: ExtensionRepository, name: str, device_id: str, module_id: Optional[str],
+    label: Optional[str] = None, description: Optional[str] = None,
+) -> Dict[str, str]:
     """Issues (or replaces) the field-ingress key for one device of this extension.
     The raw key is only ever returned here; only its hash is stored."""
     existing = await extension_repo.get_extension_row(name)
@@ -544,10 +547,10 @@ async def issue_device_key(
 
     raw_key = generate_key()
     try:
-        await extension_repo.upsert_device_key(name, device_id, module_id, hash_key(raw_key))
+        key_id = await extension_repo.create_device_key(name, device_id, module_id, hash_key(raw_key), label, description)
     except ValueError as exc:
         raise APIError(str(exc), 404)
-    return raw_key
+    return {"id": key_id, "device_id": device_id, "device_key": raw_key}
 
 
 async def verify_device_key(extension_repo: ExtensionRepository, name: str, presented: str) -> Optional[str]:

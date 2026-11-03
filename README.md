@@ -69,6 +69,14 @@ independent fastapi apps:
   Sealman resolves the device from the key and forwards it to the upstream as a
   trusted `X-Device-Id`. Expose this port only to the device network path.
 
+Extension details expose initial internal-key issuance and latest rotation timestamps
+when known. Device-key listings include UUIDs, optional labels/descriptions and
+revocation history, never secrets or hashes. Reissuing atomically revokes the previous
+key: only one key per extension/device is active. Revoke a specific record through
+`DELETE /extensions/{name}/device-keys/by-id/{key_id}`; the existing device-based
+revoke route remains supported. Revoked credentials are rejected immediately.
+History is removed with its owning device or extension.
+
 Set `EXTENSIONS_ENABLED=false` to disable extensions completely. The
 `/extensions` management API is not registered, persisted routes and fetched schemas
 are not hydrated/refreshed, and the internal side app is not started. Persisted data is

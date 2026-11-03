@@ -260,6 +260,17 @@ class TestDeviceIngressDispatch:
                 assert body["x_device_id"] == "dev-ingress-01"
                 assert body["x_device_key"] is None
 
+                replacement = await client.post(
+                    f"/extensions/{name}/device-keys", json={"device_id": "dev-ingress-01"},
+                )
+                new_key = replacement.json()["device_key"]
+                assert (await field_client.get(url, headers={"X-Device-Key": raw_key})).status_code == 401
+                assert (await field_client.get(url, headers={"X-Device-Key": new_key})).status_code == 200
+                assert (await client.delete(
+                    f"/extensions/{name}/device-keys/by-id/{replacement.json()['id']}",
+                )).status_code == 204
+                assert (await field_client.get(url, headers={"X-Device-Key": new_key})).status_code == 401
+
             # the device channel is not reachable through the public app
             assert (await client.get(f"/{name}/route", headers={"X-Device-Key": raw_key})).status_code == 404
         finally:
