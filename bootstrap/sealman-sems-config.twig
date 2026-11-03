@@ -10,11 +10,11 @@
                 "name": "edgeAgent",
                 "type": "docker",
                 "config": {
-                    "image": "{{edge_agent_image}}",
+                    "image": "{{ edge_agent_image | default('mcr.microsoft.com/azureiotedge-agent:1.4') }}",
                     "auth": {
-                        "serveraddress": "{{container_registry_address}}",
-                        "username": "{{container_registry_username}}",
-                        "password": "{{container_registry_password}}"
+                        "serveraddress": "{{ iotedge_registry_url | default('docker.io') }}",
+                        "username": "{{ iotedge_registry_username | default('') }}",
+                        "password": "{{ iotedge_registry_password | default('') }}"
                     }
                 }
             }
@@ -543,12 +543,12 @@
         "dockerdns": [],
         "params": {},        
         "compose_files": {
-            "seal-app-connection-check": "version: \"3.8\"\n\nservices:\n  backend:\n    image: {{container_registry_address}}/seal-app-connection-check-backend:1.0.1\n    container_name: seal-app-conn-check-api\n    restart: unless-stopped\n    ports:\n      - \"9091:9091\"\n    networks:\n      - \"local-network\"\n    environment:\n      - FLASK_APP=main.py\n      - FLASK_RUN_HOST=0.0.0.0\n      - FLASK_RUN_PORT=9091\n    volumes:\n      - /run/mgmtd:/run/mgmtd\n    tty: true\n    stdin_open: true\n\n  frontend:\n    image: {{container_registry_address}}/seal-app-connection-check-frontend:1.0.1\n    container_name: seal-app-conn-check-ui\n    ports:\n      - \"9090:9090\"\n    networks:\n      - \"local-network\"\n    restart: unless-stopped\n\nnetworks:\n  local-network:\n    driver: \"bridge\""
+            "seal-app-connection-check": "version: \"3.8\"\n\nservices:\n  backend:\n    image: {{ container_registry_address | default('docker.io') }}/seal-app-connection-check-backend:1.0.1\n    container_name: seal-app-conn-check-api\n    restart: unless-stopped\n    ports:\n      - \"9091:9091\"\n    networks:\n      - \"local-network\"\n    environment:\n      - FLASK_APP=main.py\n      - FLASK_RUN_HOST=0.0.0.0\n      - FLASK_RUN_PORT=9091\n    volumes:\n      - /run/mgmtd:/run/mgmtd\n    tty: true\n    stdin_open: true\n\n  frontend:\n    image: {{ container_registry_address | default('docker.io') }}/seal-app-connection-check-frontend:1.0.1\n    container_name: seal-app-conn-check-ui\n    ports:\n      - \"9090:9090\"\n    networks:\n      - \"local-network\"\n    restart: unless-stopped\n\nnetworks:\n  local-network:\n    driver: \"bridge\""
 			},
         "compose_docker_config": {
             "auths": {
-                "{{container_registry_address}}": {
-                    "auth": "{{container_registry_credentials_encoded}}"
+                "{{ container_registry_address | default('docker.io') }}": {
+                    "auth": {% if container_registry_credentials_encoded is defined and container_registry_credentials_encoded %}"{{ container_registry_credentials_encoded }}"{% else %}null{% endif %}
                 }
             }
         }
@@ -556,7 +556,7 @@
     "smartems": {
         "username": "{{sems_device_user | default('edgeGateway')}}",
         "password": "{{sems_device_password | default('123456')}}",
-        "url": "{{sems_device_url}}",
+        "url": "{{ sems_device_url | default('sems.localhost') }}",
         "pollingInterval": {{ sems_polling_interval | default('600') }},
         "edgegatewayvcc": {{ sems_edgegatewayvcc | default('false') }},
         "certificate": "{{ sems_certificate | default('') }}"
