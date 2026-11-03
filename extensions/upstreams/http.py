@@ -75,6 +75,8 @@ _REQUEST_HEADER_DENYLIST = _HOP_BY_HOP | {
     "x-internal-key",
     "x-device-key",
     "x-device-id",
+    "x-sealman-user-id",
+    "x-sealman-user-name",
 }
 _RESPONSE_HEADER_DENYLIST = _HOP_BY_HOP | {"date", "server", "set-cookie"}
 
@@ -112,7 +114,19 @@ def _request_headers(request: Request) -> List[Tuple[str, str]]:
         if name.lower() in _REQUEST_HEADER_ALLOWLIST and name.lower() not in denied
     ]
     _add_forwarding_headers(request, headers)
+    _add_caller_identity_headers(request, headers)
     return headers
+
+
+def _add_caller_identity_headers(request: Request, headers: List[Tuple[str, str]]) -> None:
+    """Adds the authenticated caller (set by the runtime's `_caller_identity` dependency),
+    percent-encoded so non-ASCII names stay valid header values. Client-supplied
+    `x-sealman-*` headers are denied above, so these are the only ones upstreams see."""
+    caller = getattr(request.state, "sealman_caller", None)
+    if caller:
+        user_id, user_name = caller
+        headers.append(("x-sealman-user-id", quote(str(user_id), safe="")))
+        headers.append(("x-sealman-user-name", quote(str(user_name), safe="")))
 
 
 def _add_forwarding_headers(request: Request, headers: List[Tuple[str, str]]) -> None:

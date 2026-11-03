@@ -7,13 +7,16 @@ stub), and re-hydrates persisted routes at startup.
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 from collections import defaultdict
 from typing import DefaultDict, List, Optional
 
 import uvicorn
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request, Response
 
+from auth import validate_jwt
 from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Extension
 from constants import (
@@ -25,6 +28,7 @@ from constants import (
 )
 from db.repos.extension import ExtensionRepository
 from db.repos.role import RoleRepository
+from db.repos.user import UserRepository
 from db.session import AsyncSessionLocal, get_repository
 from exceptions import APIError
 from routers.base_api_router import BaseAPIRouter
@@ -38,6 +42,7 @@ from .schemas import (
     ExtensionHealthCheckResult,
     ExtensionRegistered,
     ExtensionRegistration,
+    ExtensionUiEntry,
     InternalKeyRotateResponse,
 )
 
@@ -133,6 +138,37 @@ def _build_management_router() -> BaseAPIRouter:
         extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
     ) -> List[ExtensionDetail]:
         return await registry.list_extensions(extension_repo)
+
+    # Before "/{name}" so the literal segment is not captured as a name.
+    @router.get(
+        "/ui",
+        summary="UI sections of enabled extensions",
+        description=(
+            "Open to any authenticated user (no ABAC action). Lists the `ui` section of every "
+            "enabled extension; a contribution with `requiredAction` is returned only to users "
+            "who hold that action in any team role (scope ignored). Cached privately for 60s; "
+            "honours `If-None-Match`."
+        ),
+        response_model=List[ExtensionUiEntry],
+    )
+    async def list_extension_uis(
+        request: Request,
+        auth_context: dict = Depends(validate_jwt),
+        extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
+        user_repo: UserRepository = Depends(get_repository(UserRepository)),
+    ) -> Response:
+        user_id = auth_context.get("oid") or auth_context.get("sub")
+        user_data = await user_repo.get_teams_with_roles_and_scopes(user_id)
+        entries = await registry.list_extension_uis(extension_repo, user_data)
+        body = json.dumps(
+            [e.model_dump(mode="json", by_alias=True, exclude_none=True) for e in entries],
+            separators=(",", ":"),
+        )
+        etag = f'"{hashlib.sha256(body.encode()).hexdigest()}"'
+        headers = {"Cache-Control": "private, max-age=60", "ETag": etag}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        return Response(content=body, media_type="application/json", headers=headers)
 
     @router.get(
         "/{name}",

@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Tuple
 from jsonschema.exceptions import SchemaError
 
 from db.repos.extension import ExtensionActionConflictError, ExtensionRepository
+from authorization.abac_permission_check import evaluate_permission
 from db.repos.role import RoleRepository
 from exceptions import APIError
 
@@ -31,6 +32,8 @@ from .schemas import (
     ExtensionHealthCheckResult,
     ExtensionRegistered,
     ExtensionRegistration,
+    ExtensionUi,
+    ExtensionUiEntry,
     RouteSpec,
     UpstreamSpec,
 )
@@ -41,6 +44,49 @@ from .upstreams.iotedge import probe_registration_health
 logger = logging.getLogger("EdgeConfigAPI")
 
 _PATH_PARAM_RE = re.compile(r"{([^}]+)}")
+_REMOTE_NAME_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
+_OUTLET_NAME_RE = re.compile(r"^[a-z][a-z0-9.:-]*$")
+_UI_MODULE_RE = re.compile(r"^\./[A-Za-z0-9_./-]+$")
+_UI_PATH_RE = re.compile(r"^[a-z0-9-]+$")
+
+
+def _validate_ui(registration: ExtensionRegistration) -> None:
+    """Format rules for the `ui` section. Core does not know which targets/placements
+    exist (the app owns its outlets), so only their format is checked."""
+    ui = registration.ui
+    if ui is None:
+        return
+    entry = ui.entry
+    if (
+        not entry.startswith("/")
+        or entry.startswith("//")
+        or "\\" in entry
+        or "?" in entry
+        or "#" in entry
+        or any(ch.isspace() for ch in entry)
+        or not entry.endswith(".js")
+    ):
+        raise APIError("ui.entry must be a same-origin absolute path ending in .js", 422)
+    if not _REMOTE_NAME_RE.fullmatch(ui.remote_name):
+        raise APIError("ui.remoteName must be a JavaScript identifier", 422)
+    seen_paths = set()
+    for contribution in ui.contributions:
+        if not _OUTLET_NAME_RE.fullmatch(contribution.target) or not _OUTLET_NAME_RE.fullmatch(contribution.placement):
+            raise APIError("ui contribution target and placement must match ^[a-z][a-z0-9.:-]*$", 422)
+        if not _UI_MODULE_RE.fullmatch(contribution.module):
+            raise APIError(f"ui contribution module '{contribution.module}' must match ^\\./[A-Za-z0-9_./-]+$", 422)
+        if not 1 <= len(contribution.label) <= 60 or not contribution.label.strip():
+            raise APIError("ui contribution label must be 1-60 characters and not blank", 422)
+        if contribution.path is None:
+            continue
+        if not _UI_PATH_RE.fullmatch(contribution.path):
+            raise APIError(f"ui contribution path '{contribution.path}' must match ^[a-z0-9-]+$", 422)
+        key = (contribution.target, contribution.path)
+        if key in seen_paths:
+            raise APIError(
+                f"Duplicate ui contribution path '{contribution.path}' for target '{contribution.target}'", 422
+            )
+        seen_paths.add(key)
 
 
 def _validate_manifest_cross_references(registration: ExtensionRegistration) -> None:
@@ -58,6 +104,8 @@ def _validate_manifest_cross_references(registration: ExtensionRegistration) -> 
         seen_actions.add(action.name)
     if duplicate_actions:
         raise APIError(f"Duplicate action names in manifest: {sorted(duplicate_actions)}", 422)
+
+    _validate_ui(registration)
 
     for route in registration.routes:
         upstream = registration.upstreams.get(route.upstream)
@@ -175,6 +223,67 @@ async def _validate_action_ownership(
             )
         if not await extension_repo.action_exists(action_name):
             raise APIError(f"Route '{route.path}' references unknown action '{action_name}'", 422)
+
+
+async def _validate_ui_required_actions(
+    extension_repo: ExtensionRepository,
+    registration: ExtensionRegistration,
+    current_extension: Optional[str] = None,
+) -> None:
+    if registration.ui is None:
+        return
+    other = await extension_repo.find_extension_by_ui_remote_name(registration.ui.remote_name, current_extension)
+    if other is not None:
+        raise APIError(f"ui.remoteName '{registration.ui.remote_name}' is already used by extension '{other}'", 409)
+    manifest_actions = {action.name for action in registration.actions}
+    for contribution in registration.ui.contributions:
+        action_name = contribution.required_action
+        if not action_name or action_name in manifest_actions:
+            continue
+        if not await extension_repo.action_exists(action_name):
+            raise APIError(f"UI contribution '{contribution.label}' references unknown action '{action_name}'", 422)
+
+
+def _when_overlaps(a: Optional[Dict[str, List[str]]], b: Optional[Dict[str, List[str]]]) -> bool:
+    """True when two `when` filters can match the same context.
+
+    A missing filter matches everything. Otherwise every field present on both
+    sides must share a value; a field present on one side only does not separate them.
+    """
+    if a is None or b is None:
+        return True
+    return all(set(a[field]) & set(b[field]) for field in a.keys() & b.keys())
+
+
+async def _check_replace_conflicts(extension_repo: ExtensionRepository, name: str, ui: Optional[ExtensionUi]) -> None:
+    """409 when an enabled extension already holds an overlapping `replace:*` contribution
+    for the same target and placement as one of `ui`'s."""
+    if ui is None:
+        return
+    mine = [c for c in ui.contributions if c.placement.startswith("replace:")]
+    if not mine:
+        return
+    for row in await extension_repo.list_extensions_rows():
+        if row["name"] == name or not row["enabled"] or not row.get("ui"):
+            continue
+        for other in row["ui"].get("contributions", []):
+            for contribution in mine:
+                if (
+                    other.get("target") == contribution.target
+                    and other.get("placement") == contribution.placement
+                    and _when_overlaps(contribution.when, other.get("when"))
+                ):
+                    raise APIError(
+                        f"UI contribution '{contribution.label}' replaces '{contribution.target}' "
+                        f"'{contribution.placement}' which enabled extension '{row['name']}' already replaces",
+                        409,
+                    )
+
+
+def _ui_to_row(registration: ExtensionRegistration) -> Optional[dict]:
+    if registration.ui is None:
+        return None
+    return registration.ui.model_dump(by_alias=True, exclude_none=True)
 
 
 async def _fetch_openapi_documents(base_urls: List[str]) -> Dict[str, Optional[dict]]:
@@ -352,6 +461,7 @@ async def _build_detail(extension_repo: ExtensionRepository, name: str) -> Exten
         upstreams=upstreams,
         actions=actions,
         routes=routes,
+        ui=ext.get("ui"),
         enabled=ext["enabled"],
     )
 
@@ -377,9 +487,11 @@ async def register_extension(
             if await extension_repo.extension_exists(registration.name):
                 raise APIError(f"Extension '{registration.name}' is already registered", 409)
             await _validate_action_ownership(extension_repo, registration)
+            await _validate_ui_required_actions(extension_repo, registration)
             await extension_repo.create_extension(registration.name, registration.description, registration.schema_version)
             internal_key = generate_key()
             await extension_repo.set_internal_key_hash(registration.name, hash_key(internal_key))
+            await extension_repo.set_ui(registration.name, _ui_to_row(registration))
             await _enroll_actions(extension_repo, registration)
             await extension_repo.replace_upstreams_and_routes(registration.name, upstreams, routes)
     except ExtensionActionConflictError as exc:
@@ -424,7 +536,11 @@ async def replace_extension(
     try:
         async with extension_repo.atomic():
             await _validate_action_ownership(extension_repo, registration, current_extension=name)
+            await _validate_ui_required_actions(extension_repo, registration, current_extension=name)
+            if existing["enabled"]:
+                await _check_replace_conflicts(extension_repo, name, registration.ui)
             await extension_repo.set_description(name, registration.description)
+            await extension_repo.set_ui(name, _ui_to_row(registration))
             await extension_repo.set_schema_version(name, registration.schema_version)
             # A route's required_action FK depends on the action row already existing.
             await extension_repo.clear_extension_actions(name)
@@ -445,6 +561,33 @@ async def get_extension(extension_repo: ExtensionRepository, name: str) -> Exten
 async def list_extensions(extension_repo: ExtensionRepository) -> List[ExtensionDetail]:
     rows = await extension_repo.list_extensions_rows()
     return [await _build_detail(extension_repo, row["name"]) for row in rows]
+
+
+async def list_extension_uis(extension_repo: ExtensionRepository, user_data: Optional[dict]) -> List[ExtensionUiEntry]:
+    """UI sections of enabled extensions, sorted by name. A contribution with a
+    `requiredAction` is kept only when the user holds that action in any team role
+    (scope ignored); a user without teams keeps none of them."""
+    entries = []
+    for row in sorted(await extension_repo.list_extensions_rows(), key=lambda r: r["name"]):
+        if not row["enabled"] or not row.get("ui"):
+            continue
+        ui = ExtensionUi.model_validate(row["ui"])
+        contributions = [
+            c
+            for c in ui.contributions
+            if c.required_action is None
+            or (user_data is not None and evaluate_permission(c.required_action, user_data, device_meta=None))
+        ]
+        entries.append(
+            ExtensionUiEntry(
+                name=row["name"],
+                contractVersion=ui.contract_version,
+                entry=ui.entry,
+                remoteName=ui.remote_name,
+                contributions=contributions,
+            )
+        )
+    return entries
 
 
 async def check_extension_health(extension_repo: ExtensionRepository, name: str) -> ExtensionHealthCheckResult:
@@ -507,7 +650,11 @@ async def enable_extension(extension_repo: ExtensionRepository, name: str) -> Ex
     if existing is None:
         raise APIError(f"Extension '{name}' not found", 404)
 
-    await extension_repo.set_enabled(name, True)
+    async with extension_repo.atomic():
+        row = await extension_repo.get_extension_row(name)
+        ui = ExtensionUi.model_validate(row["ui"]) if row and row.get("ui") else None
+        await _check_replace_conflicts(extension_repo, name, ui)
+        await extension_repo.set_enabled(name, True)
     return await _build_detail(extension_repo, name)
 
 

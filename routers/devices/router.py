@@ -6,6 +6,7 @@ from db.repos.device import DeviceRepository
 from db.repos.device_template import DeviceTemplateRepository
 from db.session import get_repository
 from .routes.get_devices import get_devices, populate_cache_from_iot_hub_query
+from .routes.get_devices_with_data import get_devices_with_data
 from .routes.create_device import create_device
 from .routes.delete_device import delete_device
 from .routes.get_device_meta_values import get_device_meta_values
@@ -25,6 +26,23 @@ async def get_devices_route(
         repo=repo,
         filter_device=abac_context["filter_device"],
         query_params=request.query_params,
+    )
+
+@devices.get("/with-data")
+async def get_devices_with_data_route(
+    request: Request,
+    device_read: ABACDeviceListFilterResult = Depends(ABACDeviceListFilter(Device.READ)),
+    endpoint_read: ABACDeviceListFilterResult = Depends(ABACDeviceListFilter(Device.ENDPOINT_READ)),
+    repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+):
+    def visible(device_data: dict) -> bool:
+        return device_read["filter_device"](device_data) and endpoint_read["filter_device"](device_data)
+
+    return await get_devices_with_data(
+        repo=repo,
+        query_params=request.query_params,
+        is_unrestricted=device_read["is_unrestricted"] and endpoint_read["is_unrestricted"],
+        filter_device=visible,
     )
 
 @devices.put("/{device_id}")
