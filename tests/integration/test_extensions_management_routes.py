@@ -3,12 +3,10 @@ Integration tests for the /extensions management routes: DB-backed
 persistence, RBAC action enrollment, the enable/disable route-mounting lifecycle,
 and internal-key rotation.
 
-The field-ingress side app and its device-key auth channel are deliberately not
-implemented (skipped for now, not just deferred to a later stage) so there is no
-device-key coverage here.
+Device keys (the field-ingress channel) are covered by `TestDeviceKeys` below.
 
-Route mounting is verified by inspecting the live route tables of the two apps
-(`main.app`, `extensions.setup.internal_app`) rather than by calling the mounted
+Route mounting is verified by inspecting the live route tables of the apps
+(`main.app`, `extensions.setup.internal_app`, `extensions.setup.field_app`) rather than by calling the mounted
 routes themselves — actual dispatch through a mounted route is covered separately
 in test_extensions_dispatch.py (see extensions/upstreams/http.py, extensions/upstreams/iotedge.py).
 """
@@ -20,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 
 from db.models.action import Action
 from db.models.extension import Extension as ExtensionModel, ExtensionAction
-from extensions.setup import internal_app
+from extensions.setup import field_app, internal_app
 from tests.integration.test_abac_authorization import AbacFixtures
 
 
@@ -262,6 +260,15 @@ class TestExtensionsManagementRoutesAsAdmin:
         await client.post(f"/extensions/{name}/disable")
         assert not _live_route_names(public_app, name)
         assert not _live_route_names(internal_app, name)
+
+    async def test_register_returns_internal_key_once(self, client):
+        name = _unique_name("issued_ext")
+        created = await client.post("/extensions", json=_sample_registration(name))
+        assert created.status_code == 201
+        assert created.json()["internal_key"]
+
+        fetched = await client.get(f"/extensions/{name}")
+        assert "internal_key" not in fetched.json()
 
     async def test_rotate_internal_key_invalidates_previous_key(self, client):
         name = _unique_name("keyed_ext")
@@ -520,3 +527,101 @@ class TestExtensionsManagementRoutesAuthorization:
 
         assert (await client.post(f"/extensions/{name}/disable")).status_code == 403
         assert (await client.delete(f"/extensions/{name}")).status_code == 403
+
+
+
+class TestDeviceKeys:
+    async def _register_with_device_route(self, client, name: str) -> None:
+        registration = _sample_registration(name)
+        registration["routes"].append(
+            {
+                "upstream": "svc",
+                "path": f"/{name}/ingest",
+                "method": "POST",
+                "upstream_path": "/ingest",
+                "visibility": "device",
+            }
+        )
+        assert (await client.post("/extensions", json=registration)).status_code == 201
+
+    async def test_device_route_mounts_only_on_field_app(self, client):
+        from main import app as public_app
+
+        name = _unique_name("field_ext")
+        await self._register_with_device_route(client, name)
+        await client.post(f"/extensions/{name}/enable")
+
+        assert len(_live_route_names(field_app, name)) == 1
+        assert len(_live_route_names(public_app, name)) == 1
+        assert not _live_route_names(internal_app, name)
+
+        await client.post(f"/extensions/{name}/disable")
+        assert not _live_route_names(field_app, name)
+
+    @pytest.mark.parametrize("override", [{"scoped": True, "required_action": "device.read"}, {"required_action": "device.read"}])
+    async def test_device_route_cannot_declare_user_authorization(self, client, override):
+        name = _unique_name("bad_field_ext")
+        registration = _sample_registration(name, visibility="device")
+        registration["routes"][0].update(override)
+        response = await client.post("/extensions", json=registration)
+        assert response.status_code == 422
+
+    async def test_issue_list_and_revoke_device_key(self, client, db_session):
+        await AbacFixtures(db_session).setup(devices={"dev-keyed-01": {"region": "EU"}})
+        name = _unique_name("keyed_dev_ext")
+        await self._register_with_device_route(client, name)
+
+        issued = await client.post(
+            f"/extensions/{name}/device-keys", json={"device_id": "dev-keyed-01", "module_id": "m1"}
+        )
+        assert issued.status_code == 201
+        raw_key = issued.json()["device_key"]
+        assert raw_key
+
+        listed = await client.get(f"/extensions/{name}/device-keys")
+        assert listed.status_code == 200
+        assert [k["device_id"] for k in listed.json()] == ["dev-keyed-01"]
+        assert raw_key not in listed.text and "key_hash" not in listed.text
+
+        reissued = await client.post(f"/extensions/{name}/device-keys", json={"device_id": "dev-keyed-01"})
+        assert reissued.json()["device_key"] != raw_key
+
+        assert (await client.delete(f"/extensions/{name}/device-keys/dev-keyed-01")).status_code == 204
+        assert (await client.get(f"/extensions/{name}/device-keys")).json() == []
+        assert (await client.delete(f"/extensions/{name}/device-keys/dev-keyed-01")).status_code == 404
+
+    async def test_issue_device_key_rejects_unknown_device_and_extension(self, client):
+        name = _unique_name("keyed_dev_ext")
+        await self._register_with_device_route(client, name)
+
+        unknown_device = await client.post(f"/extensions/{name}/device-keys", json={"device_id": "no-such-device"})
+        assert unknown_device.status_code == 404
+        unknown_ext = await client.post("/extensions/nope/device-keys", json={"device_id": "x"})
+        assert unknown_ext.status_code == 404
+
+    async def test_device_key_is_namespace_locked_and_removed_on_deregister(self, client, db_session):
+        from db.repos.extension import ExtensionRepository
+        from db.session import get_repository
+        from extensions.security import hash_key
+
+        await AbacFixtures(db_session).setup(devices={"dev-keyed-02": {"region": "EU"}})
+        first, second = _unique_name("ns_a"), _unique_name("ns_b")
+        for name in (first, second):
+            await self._register_with_device_route(client, name)
+        raw_key = (await client.post(f"/extensions/{first}/device-keys", json={"device_id": "dev-keyed-02"})).json()[
+            "device_key"
+        ]
+
+        repo = get_repository(ExtensionRepository)(db_session)
+        assert await repo.resolve_device_key(first, hash_key(raw_key)) == "dev-keyed-02"
+        assert await repo.resolve_device_key(second, hash_key(raw_key)) is None
+
+        await client.delete(f"/extensions/{first}")
+        assert await repo.resolve_device_key(first, hash_key(raw_key)) is None
+
+    async def test_device_route_cannot_take_device_id_from_path(self, client):
+        name = _unique_name("path_dev_ext")
+        registration = _sample_registration(name, visibility="device")
+        registration["routes"][0]["path"] = f"/{name}/{{device_id}}/ping"
+        registration["routes"][0]["upstream_path"] = "/ping"
+        assert (await client.post("/extensions", json=registration)).status_code == 422

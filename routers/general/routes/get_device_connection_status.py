@@ -5,7 +5,7 @@ from constants import IOT_HUB_NAME, SEMS_LOOKUP_INTERVAL
 from async_requests import get_async
 from exceptions import IoTBackendAPIError
 from smart_ems import SmartEMS
-from helper import get_iothub_auth_headers
+from helper import encode_iothub_id, get_iothub_auth_headers
 
 
 logger = logging.getLogger("EdgeConfigAPI")
@@ -15,12 +15,13 @@ async def get_iot_hub_connection_status(device_id):
     """
         Returns iotEdgeRuntime / iotHub connection states from IoT Hub twins.
     """
+    encoded_device = encode_iothub_id(device_id)
     responses = {}
     headers = get_iothub_auth_headers()
     # runtime_connection_status
-    url1 = f"https://{IOT_HUB_NAME}/twins/{device_id}?api-version=2021-04-12"
+    url1 = f"https://{IOT_HUB_NAME}/twins/{encoded_device}?api-version=2021-04-12"
     # data_connection_status
-    url2 = f"https://{IOT_HUB_NAME}/twins/{device_id}/modules/$edgeHub?api-version=2020-05-31-preview"
+    url2 = f"https://{IOT_HUB_NAME}/twins/{encoded_device}/modules/%24edgeHub?api-version=2020-05-31-preview"
 
     await asyncio.gather(get_async(url1, responses, headers=headers),
                          get_async(url2, responses, headers=headers))

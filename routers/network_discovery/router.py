@@ -1,6 +1,6 @@
 from typing import List, Optional, Union
 from authorization.abac_permission_check import ABACPermissionCheck
-from authorization.permission_types import Device
+from authorization.permission_types import Device, Platform
 from fastapi import Depends
 
 from routers.base_api_router import BaseAPIRouter
@@ -40,7 +40,7 @@ async def post_network_discover(device: str, network_discover: NetworkDiscover,
 @network_discovery.get("/{device}/network/topology", tags=["Network Discovery"],
                        response_model=Union[NetworkScan, None])
 async def get_network_topology(device: str,
-                                _ = Depends(ABACPermissionCheck(Device.READ))):
+                                _ = Depends(ABACPermissionCheck(Device.ENDPOINT_READ))):
     return await _get_network_topology(device)
 
 
@@ -50,7 +50,8 @@ async def post_network_overview(device: str, scan: NetworkScan,
                                  endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
                                  service_repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
                                  host_status_repo: HostStatusRepository = Depends(get_repository(HostStatusRepository)),
-                                 _ = Depends(ABACPermissionCheck(Device.READ))):
+                                 _discover = Depends(ABACPermissionCheck(Device.NETWORK_DISCOVER)),
+                                 _read = Depends(ABACPermissionCheck(Device.ENDPOINT_READ))):
     return await _build_network_overview(device, scan, endpoint_repo, service_repo, host_status_repo)
 
 
@@ -60,7 +61,7 @@ async def get_network_last_known(device: str,
                                   endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
                                   service_repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
                                   host_status_repo: HostStatusRepository = Depends(get_repository(HostStatusRepository)),
-                                  _ = Depends(ABACPermissionCheck(Device.READ))):
+                                  _ = Depends(ABACPermissionCheck(Device.ENDPOINT_READ))):
     return await _build_last_known_network_overview(device, endpoint_repo, service_repo, host_status_repo)
 
 
@@ -70,7 +71,7 @@ async def get_network_scan_ports(device: str,
                                   endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
                                   service_repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
                                   scan_ports_repo: ScanPortsRepository = Depends(get_repository(ScanPortsRepository)),
-                                  _ = Depends(ABACPermissionCheck(Device.READ))):
+                                  _ = Depends(ABACPermissionCheck(Device.ENDPOINT_READ))):
     return await _get_network_scan_ports(device, endpoint_repo, service_repo, scan_ports_repo)
 
 
@@ -87,7 +88,8 @@ async def post_network_scan_ports(device: str, body: DeviceScanPortsAdd,
 async def get_network_scan_range(device: str,
                                   endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
                                   network_range_repo: NetworkRangeRepository = Depends(get_repository(NetworkRangeRepository)),
-                                  _ = Depends(ABACPermissionCheck(Device.READ))):
+                                  _discover = Depends(ABACPermissionCheck(Device.NETWORK_DISCOVER)),
+                                  _read = Depends(ABACPermissionCheck(Device.ENDPOINT_READ))):
     return await _get_network_scan_range(device, endpoint_repo, network_range_repo)
 
 
@@ -95,7 +97,7 @@ async def get_network_scan_range(device: str,
 # `device_path=None` pattern used for service types, which this list lives alongside in the
 # Settings UI.
 _scan_ports_read = Depends(ABACPermissionCheck(Device.ENDPOINT_READ, device_path=None))
-_scan_ports_write = Depends(ABACPermissionCheck(Device.ENDPOINT_WRITE, device_path=None))
+_scan_ports_write = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None))
 
 
 @network_discovery.get("/network/default-scan-ports", tags=["Network"],

@@ -3,7 +3,7 @@ from constants import IOT_HUB_NAME
 from async_requests import get_async
 from exceptions import IoTBackendAPIError
 from smart_ems import SmartEMS
-from helper import get_iothub_auth_headers
+from helper import encode_iothub_id, get_iothub_auth_headers
 
 
 async def get_device_modules(device: str):
@@ -11,9 +11,10 @@ async def get_device_modules(device: str):
         Returns all modules and their status from a device.
     """
     responses = {}
-    url1 = f"https://{IOT_HUB_NAME}/devices/{device}/modules?api-version=2020-05-31-preview"
-    url2 = f"https://{IOT_HUB_NAME}/twins/{device}/modules/$edgeAgent?api-version=2020-05-31-preview"
-    url3 = f"https://{IOT_HUB_NAME}/twins/{device}?api-version=2020-05-31-preview"
+    encoded_device = encode_iothub_id(device)
+    url1 = f"https://{IOT_HUB_NAME}/devices/{encoded_device}/modules?api-version=2020-05-31-preview"
+    url2 = f"https://{IOT_HUB_NAME}/twins/{encoded_device}/modules/%24edgeAgent?api-version=2020-05-31-preview"
+    url3 = f"https://{IOT_HUB_NAME}/twins/{encoded_device}?api-version=2020-05-31-preview"
 
     headers = get_iothub_auth_headers()
 

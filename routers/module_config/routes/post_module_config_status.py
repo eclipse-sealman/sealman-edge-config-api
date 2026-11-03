@@ -1,7 +1,7 @@
 import asyncio
 from constants import IOT_HUB_NAME
 from async_requests import get_async
-from helper import get_iothub_auth_headers
+from helper import encode_iothub_id, get_iothub_auth_headers
 
 
 async def post_module_config_status(device, module_list):
@@ -21,12 +21,14 @@ async def post_module_config_status(device, module_list):
 
     _requests = []
     responses = {}
+    encoded_device = encode_iothub_id(device)
     urls = []
+    for module in modules:
+        encoded_module = encode_iothub_id(module)
+        urls.append(f"https://{IOT_HUB_NAME}/twins/{encoded_device}/modules/{encoded_module}?api-version=2020-05-31-preview")
     module_by_url = {}
 
-    for module in modules:
-        url = f"https://{IOT_HUB_NAME}/twins/{device}/modules/{module}?api-version=2020-05-31-preview"
-        urls.append(url)
+    for module, url in zip(modules, urls):
         module_by_url[url] = module
         headers = get_iothub_auth_headers()
         _requests.append(get_async(url, responses, headers=headers))

@@ -2,7 +2,8 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
-from sqlalchemy import delete, exists, select
+from sqlalchemy import delete, exists, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +11,7 @@ from db.models.action import Action
 from db.models.extension import (
     Extension,
     ExtensionAction,
+    ExtensionDeviceKey,
     ExtensionRoute,
     ExtensionUpstream,
 )
@@ -355,3 +357,67 @@ class SqlAlchemyExtensionRepository(ExtensionRepository):
                 continue
             await self._session.execute(delete(Action).where(Action.name == action_name))
         await commit_session(self._session)
+
+    # --- device keys ------------------------------------------------------
+    async def upsert_device_key(
+        self, extension_name: str, device_id: str, module_id: Optional[str], key_hash: str
+    ) -> None:
+        extension_id = await self._get_extension_id(extension_name)
+        if extension_id is None:
+            raise ValueError(f"Extension '{extension_name}' not found")
+        stmt = pg_insert(ExtensionDeviceKey).values(
+            extension_id=extension_id, device_id=device_id, module_id=module_id, key_hash=key_hash
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["extension_id", "device_id"],
+            set_={"key_hash": key_hash, "module_id": module_id, "created_at": func.now()},
+        )
+        try:
+            await self._session.execute(stmt)
+            await commit_session(self._session)
+        except IntegrityError:
+            await self._session.rollback()
+            raise ValueError(f"Device '{device_id}' not found")
+
+    async def list_device_keys(self, extension_name: str) -> List[Dict[str, Any]]:
+        extension_id = await self._get_extension_id(extension_name)
+        if extension_id is None:
+            return []
+        result = await self._session.execute(
+            select(ExtensionDeviceKey)
+            .where(ExtensionDeviceKey.extension_id == extension_id)
+            .order_by(ExtensionDeviceKey.device_id)
+        )
+        return [
+            {
+                "device_id": key.device_id,
+                "module_id": key.module_id,
+                "created_at": str(key.created_at) if key.created_at else None,
+            }
+            for key in result.scalars().all()
+        ]
+
+    async def revoke_device_key(self, extension_name: str, device_id: str) -> bool:
+        extension_id = await self._get_extension_id(extension_name)
+        if extension_id is None:
+            return False
+        result = await self._session.execute(
+            delete(ExtensionDeviceKey).where(
+                ExtensionDeviceKey.extension_id == extension_id,
+                ExtensionDeviceKey.device_id == device_id,
+            )
+        )
+        await commit_session(self._session)
+        return result.rowcount > 0
+
+    async def resolve_device_key(self, extension_name: str, key_hash: str) -> Optional[str]:
+        extension_id = await self._get_extension_id(extension_name)
+        if extension_id is None:
+            return None
+        result = await self._session.execute(
+            select(ExtensionDeviceKey.device_id).where(
+                ExtensionDeviceKey.extension_id == extension_id,
+                ExtensionDeviceKey.key_hash == key_hash,
+            )
+        )
+        return result.scalar_one_or_none()

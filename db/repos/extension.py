@@ -153,3 +153,26 @@ class ExtensionRepository(ABC):
         gone must revoke role grants first (PUT refuses; DELETE strips grants then
         calls this). Silently skips any action that's still referenced or granted."""
         pass
+
+    # --- device keys (field-ingress credentials) --------------------------
+    @abstractmethod
+    async def upsert_device_key(
+        self, extension_name: str, device_id: str, module_id: Optional[str], key_hash: str
+    ) -> None:
+        """Creates or replaces the (single) key for one extension/device pair.
+        Raises ValueError if the extension or device does not exist."""
+        pass
+
+    @abstractmethod
+    async def list_device_keys(self, extension_name: str) -> List[Dict[str, Any]]:
+        """Non-secret key metadata only; hashes are never returned."""
+        pass
+
+    @abstractmethod
+    async def revoke_device_key(self, extension_name: str, device_id: str) -> bool:
+        pass
+
+    @abstractmethod
+    async def resolve_device_key(self, extension_name: str, key_hash: str) -> Optional[str]:
+        """Returns the device id the key was issued for, scoped to this extension."""
+        pass

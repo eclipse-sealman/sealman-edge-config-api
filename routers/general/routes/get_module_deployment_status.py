@@ -3,7 +3,7 @@ import logging
 from constants import IOT_HUB_NAME
 from async_requests import get_async
 from exceptions import IoTBackendAPIError
-from helper import get_iothub_auth_headers
+from helper import encode_iothub_id, get_iothub_auth_headers
 
 logger = logging.getLogger(__name__)
 
@@ -12,10 +12,11 @@ async def get_module_deployment_status(device_id: str):
     """
         Returns the deployment status of the iotedge module deployment
     """
+    encoded_device = encode_iothub_id(device_id)
     resp = {}
     url_get_config = f"https://{IOT_HUB_NAME}/configurations?api-version=2020-05-31-preview"
-    url_get_device_tags = f"https://{IOT_HUB_NAME}/twins/{device_id}?api-version=2021-04-12"
-    url_get_deployment_applied = (f"https://{IOT_HUB_NAME}/twins/{device_id}/modules/$edgeAgent"
+    url_get_device_tags = f"https://{IOT_HUB_NAME}/twins/{encoded_device}?api-version=2021-04-12"
+    url_get_deployment_applied = (f"https://{IOT_HUB_NAME}/twins/{encoded_device}/modules/%24edgeAgent"
                                   f"?api-version=2021-04-12")
     headers = get_iothub_auth_headers()
     await asyncio.gather(

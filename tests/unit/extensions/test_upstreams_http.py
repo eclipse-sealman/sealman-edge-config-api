@@ -395,3 +395,44 @@ async def test_dispatch_filters_response_headers_and_preserves_repeats(monkeypat
     assert response.headers.getlist("vary") == ["Accept-Encoding", "Origin"]
     for denied in ("etag", "connection", "set-cookie", "server", "date", "x-custom"):
         assert denied not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_dispatch_replaces_caller_device_identity_with_trusted_headers(monkeypatch):
+    request = _make_request(
+        headers=[("X-Device-Key", "device-secret"), ("X-Device-Id", "spoofed"), ("Accept", "application/json")]
+    )
+
+    class FakeStreamResponse:
+        status_code = 200
+        headers = httpx.Headers({})
+
+        async def aiter_raw(self):
+            return
+            yield  # pragma: no cover
+
+        async def aclose(self):
+            pass
+
+    captured = {}
+
+    class FakeClient:
+        def build_request(self, method, url, params=None, headers=None, content=None):
+            captured["headers"] = headers
+            return {}
+
+        async def send(self, req, stream=False):
+            return FakeStreamResponse()
+
+    monkeypatch.setattr(http_upstream, "_client", FakeClient())
+
+    await http_upstream.dispatch(
+        request,
+        {"base_url": "https://upstream.example.com"},
+        {"upstream_path": "/foo"},
+        trusted_headers={"X-Device-Id": "dev-1"},
+    )
+
+    headers = httpx.Headers(captured["headers"])
+    assert headers.get_list("x-device-id") == ["dev-1"]
+    assert "x-device-key" not in headers

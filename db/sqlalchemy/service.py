@@ -4,6 +4,7 @@ from sqlalchemy import select, update, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from db.models.endpoint import Endpoint
 from db.models.service import Service, ServiceType
 from db.registry import register_repository
 from db.repos.service import UNSET, ServiceRepository, _Unset
@@ -174,6 +175,14 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
             self._serialize_resolved(service, service_type)
             for service, service_type in result.all()
         ]
+
+    async def get_service_device_id(self, service_id: str) -> Optional[str]:
+        result = await self._session.execute(
+            select(Endpoint.device_id)
+            .join(Service, Service.endpoint_id == Endpoint.endpoint_id)
+            .where(Service.service_id == service_id)
+        )
+        return result.scalar_one_or_none()
 
     async def get_service(self, service_id: str) -> Optional[Dict[str, Any]]:
         result = await self._session.execute(

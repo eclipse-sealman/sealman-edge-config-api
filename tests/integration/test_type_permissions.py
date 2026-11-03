@@ -1,5 +1,5 @@
-"""Type management permissions (spec §3): writes need platform.config.write, reads of
-endpoint/service types stay at device.endpoint.read, /device-types needs platform.config.*."""
+"""Type writes require platform.config.write. Endpoint/service types need endpoint read;
+device types also support device readers and creators that need their schemas."""
 import pytest
 
 from tests.integration.endpoint_fixtures import seed_endpoint_type, seed_service_type, unique_label
@@ -91,18 +91,20 @@ class TestServiceTypePermissions(_NonAdmin):
 
 
 class TestDeviceTypePermissions(_NonAdmin):
-    async def test_without_platform_config_read_cannot_list_or_get(self, client, db_session):
-        await _grant(db_session, "device.read")
+    async def test_without_catalog_read_permission_cannot_list_or_get(self, client, db_session):
+        await _grant(db_session, "device.endpoint.read")
         assert (await client.get("/device-types")).status_code == 403
         assert (await client.get("/device-types/default")).status_code == 403
 
-    async def test_platform_config_read_can_list_and_get(self, client, db_session):
-        await _grant(db_session, "platform.config.read")
+    @pytest.mark.parametrize("action", ["platform.config.read", "device.read", "device.create"])
+    async def test_catalog_read_permission_can_list_and_get(self, client, db_session, action):
+        await _grant(db_session, action)
         assert (await client.get("/device-types")).status_code == 200
         assert (await client.get("/device-types/default")).status_code == 200
 
-    async def test_platform_config_read_cannot_write(self, client, db_session):
-        await _grant(db_session, "platform.config.read")
+    @pytest.mark.parametrize("action", ["platform.config.read", "device.read", "device.create"])
+    async def test_catalog_read_permission_cannot_write(self, client, db_session, action):
+        await _grant(db_session, action)
         assert (await client.post("/device-types", json={"label": unique_label()})).status_code == 403
         assert (await client.patch("/device-types/default", json={"label": unique_label()})).status_code == 403
         assert (await client.delete("/device-types/default")).status_code == 403

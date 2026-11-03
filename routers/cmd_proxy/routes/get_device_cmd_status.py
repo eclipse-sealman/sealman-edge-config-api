@@ -2,12 +2,13 @@ import asyncio
 from constants import IOT_HUB_NAME
 from async_requests import get_async
 from exceptions import ModuleNotFound, IoTBackendAPIError
-from helper import get_iothub_auth_headers
+from helper import encode_iothub_id, get_iothub_auth_headers, validate_iothub_id
 
 
 async def get_device_module_status(device: str, module: str):
+    validate_iothub_id(module)
     responses = {}
-    url1 = f"https://{IOT_HUB_NAME}/devices/{device}/modules?api-version=2020-05-31-preview"
+    url1 = f"https://{IOT_HUB_NAME}/devices/{encode_iothub_id(device)}/modules?api-version=2020-05-31-preview"
     headers = get_iothub_auth_headers()
 
     await asyncio.gather(

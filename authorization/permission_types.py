@@ -24,6 +24,8 @@ class Platform:
 
 class Device:
     READ = "device.read"
+    CREATE = "device.create"
+    DELETE = "device.delete"
     METADATA_WRITE = "device.metadata.write"
     DEPLOYMENT_WRITE = "device.deployment.write"
     MODULE_EXECUTE_METHOD = "device.module.execute_method"
@@ -44,6 +46,8 @@ class Device:
     ]
 
     EditPermissions = [
+        CREATE,
+        DELETE,
         METADATA_WRITE,
         DEPLOYMENT_WRITE,
         NETWORK_WRITE,
@@ -59,6 +63,8 @@ class Device:
     _is_global = False
     _descriptions = {
         READ: "Read device details",
+        CREATE: "Create (register) a device",
+        DELETE: "Delete a device",
         METADATA_WRITE: "Update device metadata",
         DEPLOYMENT_WRITE: "Create or update device deployments",
         MODULE_EXECUTE_METHOD: "Execute direct methods on a device module",

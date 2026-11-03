@@ -1,15 +1,21 @@
 from fastapi import Depends, Request
 import logging
-from typing import Any, Callable, Dict, List, Optional, TypedDict
+from typing import Any, Awaitable, Callable, Dict, List, Optional, TypedDict
 
 from auth import get_current_user, validate_jwt
+from db.merge import patch_data
 from db.repos.device import DeviceRepository
+from db.repos.endpoint import EndpointRepository
+from db.repos.service import ServiceRepository
 from db.repos.user import UserRepository
 from db.session import get_repository
-from exceptions import InsufficientPermissions
+from authorization.permission_types import get_all_permissions
+from exceptions import APIError, InsufficientPermissions
 
 
 logger = logging.getLogger("EdgeConfigAPI")
+
+_GLOBAL_PERMISSIONS = frozenset(p["name"] for p in get_all_permissions() if p["is_global"])
 
 
 class ABACBaseResult(TypedDict):
@@ -126,6 +132,34 @@ class ABACPermissionCheck:
                 device_id = request.query_params.get(self.device_path)
             else:
                 device_id = request.path_params.get(self.device_path)
+
+        # A device permission on a route whose path lacks the expected parameter would
+        # silently skip scope evaluation, so treat it as a misconfiguration and deny.
+        if self.device_path and not device_id and self.permission not in _GLOBAL_PERMISSIONS:
+            logger.error(
+                f"ABAC misconfiguration: {self.device_in} parameter '{self.device_path}' not found "
+                f"for permission '{self.permission}' on {request.url.path}"
+            )
+            raise InsufficientPermissions("Device identifier could not be resolved", status_code=403)
+
+        return await self._authorize(auth_context, user_repo, device_repo, device_id)
+
+    async def _authorize(
+        self,
+        auth_context: dict,
+        user_repo: UserRepository,
+        device_repo: DeviceRepository,
+        device_id: Optional[str],
+        require_device: bool = False,
+        resulting_meta: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+        resolve_device: Optional[Callable[[], Awaitable[Optional[str]]]] = None,
+    ) -> ABACPermissionCheckResult:
+        """
+        Single role + scope evaluation shared by all device-aware checks. With
+        ``require_device`` a scope-restricted caller is denied when ``device_id`` is None.
+        ``resulting_meta`` maps the stored metadata to the metadata after the operation, which
+        must also be within scope (so a write cannot move a device out of the caller's scope).
+        """
         user_id = auth_context.get("oid") or auth_context.get("sub")
         user_name = get_current_user(auth_context)
 
@@ -139,6 +173,7 @@ class ABACPermissionCheck:
             raise InsufficientPermissions("User not found", status_code=403)
 
         device_meta = None
+        scope_required = False
 
         if not user_data.get("is_admin"):
             teams = user_data.get("teams", [])
@@ -158,17 +193,29 @@ class ABACPermissionCheck:
                 )
 
             # Fetch device metadata only when scope filtering is required
-            if device_id is not None and not any(team.get("scope") is None for team in teams_with_permission):
-                device_meta = await device_repo.get_device_meta_raw(device_id)
-                if device_meta is None:
-                    raise InsufficientPermissions(
-                        f"Device '{device_id}' not found", status_code=403
-                    )
+            scope_required = not any(team.get("scope") is None for team in teams_with_permission)
+
+        if resolve_device is not None:
+            device_id = await resolve_device()
+        if scope_required and device_id is None and require_device:
+            raise InsufficientPermissions("Device identifier could not be resolved", status_code=403)
+        if device_id is not None and scope_required:
+            device_meta = await device_repo.get_device_meta_raw(device_id)
+            if device_meta is None:
+                raise InsufficientPermissions(
+                    f"Device '{device_id}' not found", status_code=403
+                )
 
         if not evaluate_permission(self.permission, user_data, device_meta):
             raise InsufficientPermissions(
                 "Device is not within any assigned scope", status_code=403
             )
+
+        if resulting_meta is not None and device_meta is not None:
+            if not evaluate_permission(self.permission, user_data, resulting_meta(device_meta)):
+                raise InsufficientPermissions(
+                    "Resulting device metadata would be outside the assigned scope", status_code=403
+                )
 
         return self._build_result(user_name, user_id, device_id)
 
@@ -181,6 +228,200 @@ class ABACPermissionCheck:
             "permission": self.permission,
             "device_id": device_id,
         }
+
+
+class ABACMetadataPatchCheck(ABACPermissionCheck):
+    """
+    Like ABACPermissionCheck, but for a metadata patch: besides the device being in scope
+    now, the metadata after applying the patch body must still be in scope.
+    """
+
+    async def __call__(
+        self,
+        request: Request,
+        auth_context: dict = Depends(validate_jwt),
+        user_repo: UserRepository = Depends(get_repository(UserRepository)),
+        device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    ) -> ABACPermissionCheckResult:
+        device_id = request.path_params.get(self.device_path)
+        if device_id is None:
+            raise InsufficientPermissions("Device identifier could not be resolved", status_code=403)
+
+        try:
+            body = await request.json()
+        except ValueError:
+            raise APIError("Request body must be valid JSON", 400)
+        if not isinstance(body, dict):
+            raise APIError("Request body must be a JSON object", 400)
+
+        return await self._authorize(
+            auth_context,
+            user_repo,
+            device_repo,
+            device_id,
+            resulting_meta=lambda current: patch_data(current, body),
+        )
+
+
+class ABACResolvedDeviceCheck(ABACPermissionCheck):
+    """
+    ABAC dependency for routes that identify a device indirectly. The owning device is
+    resolved from a path or query parameter, then the shared role + scope evaluation
+    of ``ABACPermissionCheck`` runs on it.
+
+    ``owner`` selects what the parameter identifies:
+      - "device":   the parameter is the device ID itself (e.g. ``?device_id=``)
+      - "endpoint": the parameter is an endpoint ID (endpoint -> device)
+      - "service":  the parameter is a service ID (service -> endpoint -> device)
+
+    The action is checked before ownership lookup. Missing endpoints/services return 404;
+    scope-restricted callers get 403 when the owning device is outside their scope.
+    """
+
+    def __init__(self, permission: str, owner: str, param: str):
+        if owner not in ("device", "endpoint", "service"):
+            raise ValueError(f"Unsupported owner type '{owner}'")
+        super().__init__(permission, device_path=None)
+        self.owner = owner
+        self.param = param
+
+    async def _resolve_device_id(
+        self,
+        value: str,
+        endpoint_repo: EndpointRepository,
+        service_repo: ServiceRepository,
+    ) -> Optional[str]:
+        if self.owner == "device":
+            return value
+        if self.owner == "endpoint":
+            return await endpoint_repo.get_endpoint_device_id(value)
+        return await service_repo.get_service_device_id(value)
+
+    async def __call__(
+        self,
+        request: Request,
+        auth_context: dict = Depends(validate_jwt),
+        user_repo: UserRepository = Depends(get_repository(UserRepository)),
+        device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+        endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
+        service_repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    ) -> ABACPermissionCheckResult:
+        async def resolve_device() -> Optional[str]:
+            value = request.path_params.get(self.param) or request.query_params.get(self.param)
+            if not value:
+                return None
+            device_id = await self._resolve_device_id(value, endpoint_repo, service_repo)
+            if device_id is None and self.owner != "device":
+                raise APIError(f"{self.owner.capitalize()} '{value}' not found", 404)
+            return device_id
+
+        return await self._authorize(
+            auth_context, user_repo, device_repo, None,
+            require_device=True, resolve_device=resolve_device,
+        )
+
+
+class ABACDeviceCreateCheck:
+    """
+    ABAC dependency for creating a device. The device does not exist yet, so the
+    scope is evaluated against the proposed ``meta`` from the request body instead
+    of stored metadata. Requires a role granting the permission and, unless the
+    caller is an admin or has an unscoped team, a scope matching the proposed meta.
+    """
+
+    def __init__(self, permission: str):
+        self.permission = permission
+
+    async def __call__(
+        self,
+        request: Request,
+        auth_context: dict = Depends(validate_jwt),
+        user_repo: UserRepository = Depends(get_repository(UserRepository)),
+    ) -> ABACPermissionCheckResult:
+        user_id = auth_context.get("oid") or auth_context.get("sub")
+        user_name = get_current_user(auth_context)
+
+        if not user_id:
+            raise InsufficientPermissions("User identifier missing from token", status_code=403)
+
+        user_data = await user_repo.get_teams_with_roles_and_scopes(user_id)
+        if user_data is None:
+            raise InsufficientPermissions("User not found", status_code=403)
+
+        if not user_data.get("is_admin"):
+            teams = user_data.get("teams", [])
+            if not teams:
+                raise InsufficientPermissions("User has no team assignments", status_code=403)
+
+            if not evaluate_permission(self.permission, user_data):
+                raise InsufficientPermissions(
+                    f"No role grants permission '{self.permission}'", status_code=403
+                )
+
+            try:
+                body = await request.json()
+            except ValueError:
+                raise APIError("Request body must be valid JSON", 400)
+            if not isinstance(body, dict):
+                raise APIError("Request body must be a JSON object", 400)
+
+            meta = body.get("meta")
+            if meta is None:
+                meta = {}
+            if not isinstance(meta, dict):
+                raise APIError("'meta' must be a JSON object", 400)
+
+            if not evaluate_permission(self.permission, user_data, meta):
+                raise InsufficientPermissions(
+                    "Device metadata is not within any assigned scope", status_code=403
+                )
+
+        return {
+            "user_name": user_name,
+            "user_id": user_id,
+            "permission": self.permission,
+            "device_id": request.path_params.get("device_id"),
+        }
+
+
+class ABACAnyPermissionCheck:
+    """
+    ABAC dependency for global (non device-scoped) routes that any one of several
+    actions may unlock, e.g. a resource that both a platform reader and a device
+    creator need. Admins pass; everyone else needs a role granting at least one action.
+    """
+
+    def __init__(self, *permissions: str):
+        if not permissions:
+            raise ValueError("At least one permission is required")
+        self.permissions = permissions
+
+    async def __call__(
+        self,
+        auth_context: dict = Depends(validate_jwt),
+        user_repo: UserRepository = Depends(get_repository(UserRepository)),
+    ) -> ABACBaseResult:
+        user_id = auth_context.get("oid") or auth_context.get("sub")
+        user_name = get_current_user(auth_context)
+
+        if not user_id:
+            raise InsufficientPermissions("User identifier missing from token", status_code=403)
+
+        user_data = await user_repo.get_teams_with_roles_and_scopes(user_id)
+        if user_data is None:
+            raise InsufficientPermissions("User not found", status_code=403)
+
+        granted = self.permissions[0]
+        if not user_data.get("is_admin"):
+            if not user_data.get("teams"):
+                raise InsufficientPermissions("User has no team assignments", status_code=403)
+            granted = next((p for p in self.permissions if evaluate_permission(p, user_data)), None)
+            if granted is None:
+                raise InsufficientPermissions(
+                    f"No role grants any of: {', '.join(self.permissions)}", status_code=403
+                )
+
+        return {"user_name": user_name, "user_id": user_id, "permission": granted}
 
 
 class ABACDeviceListFilter:

@@ -9,7 +9,7 @@ from .routes.get_devices import get_devices, populate_cache_from_iot_hub_query
 from .routes.create_device import create_device
 from .routes.delete_device import delete_device
 from .routes.get_device_meta_values import get_device_meta_values
-from authorization.abac_permission_check import ABACPermissionCheck
+from authorization.abac_permission_check import ABACPermissionCheck, ABACDeviceCreateCheck
 from .routes.get_device import get_device
 from routers.general.schemas import DeviceDetailResponse
 
@@ -33,6 +33,7 @@ async def create_device_route(
     request: Request,
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
     template_repo: DeviceTemplateRepository = Depends(get_repository(DeviceTemplateRepository)),
+    _=Depends(ABACDeviceCreateCheck(Device.CREATE)),
 ):
     body = await request.json()
     return await create_device(device_id, body, repo, template_repo)
@@ -42,6 +43,7 @@ async def create_device_route(
 async def delete_device_route(
     device_id: str,
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    _=Depends(ABACPermissionCheck(Device.DELETE, device_path="device_id")),
 ):
     await delete_device(device_id, repo)
     return {"status": "deleted"}
@@ -49,15 +51,16 @@ async def delete_device_route(
 
 @devices.get("/meta-values")
 async def get_device_meta_values_route(
+    abac_context: ABACDeviceListFilterResult = Depends(ABACDeviceListFilter(Device.READ)),
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
 ):
-    return await get_device_meta_values(repo)
+    return await get_device_meta_values(repo, abac_context["filter_device"])
 
 
 @devices.get("/{device_id}", response_model=DeviceDetailResponse)
 async def get_device_route(
     device_id: str,
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
-    _=Depends(ABACPermissionCheck(Device.READ)),
+    _=Depends(ABACPermissionCheck(Device.READ, device_path="device_id")),
 ):
     return await get_device(device_id, repo)

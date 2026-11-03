@@ -58,8 +58,16 @@ OpenAPI docs: <http://localhost:5000/docs>
 
 ## Extension system side apps
 
-Alongside the public app, the extension system starts one additional,
-independent fastapi app:
+Alongside the public app, the extension system starts two additional,
+independent fastapi apps:
+
+- **internal** (`EXTENSIONS_INTERNAL_API_HOST`/`PORT`, default `127.0.0.1:8500`):
+  service-to-service routes, authenticated with `X-Internal-Key`.
+- **field ingress** (`EXTENSIONS_FIELD_API_HOST`/`PORT`, default `127.0.0.1:8501`):
+  `device` routes called by edge modules, authenticated with a per-extension,
+  per-device `X-Device-Key` (issued via `POST /extensions/{name}/device-keys`).
+  Sealman resolves the device from the key and forwards it to the upstream as a
+  trusted `X-Device-Id`. Expose this port only to the device network path.
 
 Set `EXTENSIONS_ENABLED=false` to disable extensions completely. The
 `/extensions` management API is not registered, persisted routes and fetched schemas
@@ -85,6 +93,7 @@ multiple replicas.
 | Topic | File |
 |---|---|
 | Architecture & module config mechanism | [doc/architecture.md](doc/architecture.md) |
-| Authentication (Entra ID / Keycloak / RBAC) | [doc/authentication.md](doc/authentication.md) |
+| Authentication (Entra ID / Keycloak) | [doc/authentication.md](doc/authentication.md) |
+| Authorization (actions, teams, scopes, extension keys) | [doc/authorization.md](doc/authorization.md) |
 | Database setup & migrations | [doc/database.md](doc/database.md) |
 | Running tests & coverage | [doc/testing.md](doc/testing.md) |

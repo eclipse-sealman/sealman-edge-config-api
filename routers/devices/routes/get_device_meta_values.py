@@ -1,4 +1,5 @@
 import logging
+from typing import Any, Callable, Dict
 from db.repos.device import DeviceRepository
 
 logger = logging.getLogger("EdgeConfigAPI")
@@ -6,6 +7,7 @@ logger = logging.getLogger("EdgeConfigAPI")
 
 async def get_device_meta_values(
     repo: DeviceRepository,
+    filter_device: Callable[[Dict[str, Any]], bool],
 ) -> dict:
     devices = await repo.get_all_devices_raw()
 
@@ -13,6 +15,8 @@ async def get_device_meta_values(
 
     for device in devices:
         device_data = device.get("device_data") or {}
+        if not filter_device(device_data):
+            continue
         for key, value in device_data.items():
             if value is None or str(value).strip() == "":
                 continue

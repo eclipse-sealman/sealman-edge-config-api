@@ -3,15 +3,15 @@ import json
 from constants import IOT_HUB_NAME
 from async_requests import get_async
 from exceptions import IoTBackendAPIError
-from helper import get_iothub_auth_headers
+from helper import encode_iothub_id, get_iothub_auth_headers
 
 
 async def get_module_twin_identity_reported(device, module):
     """
         Returns the reported section of the module twin.
     """
+    get_module_identity_twin_url = f"https://{IOT_HUB_NAME}/twins/{encode_iothub_id(device)}/modules/{encode_iothub_id(module)}?api-version=2020-05-31-preview"
     try:
-        get_module_identity_twin_url = f"https://{IOT_HUB_NAME}/twins/{device}/modules/{module}?api-version=2020-05-31-preview"
         twin_responses = {}
         headers = get_iothub_auth_headers()
         await asyncio.gather(

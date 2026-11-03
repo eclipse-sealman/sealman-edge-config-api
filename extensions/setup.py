@@ -18,6 +18,8 @@ from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Extension
 from constants import (
     EXTENSIONS_ENABLED,
+    EXTENSIONS_FIELD_API_HOST,
+    EXTENSIONS_FIELD_API_PORT,
     EXTENSIONS_INTERNAL_API_HOST,
     EXTENSIONS_INTERNAL_API_PORT,
 )
@@ -29,8 +31,12 @@ from routers.base_api_router import BaseAPIRouter
 
 from . import registry, runtime
 from .schemas import (
+    DeviceKeyInfo,
+    DeviceKeyIssueResponse,
+    DeviceKeyRequest,
     ExtensionDetail,
     ExtensionHealthCheckResult,
+    ExtensionRegistered,
     ExtensionRegistration,
     InternalKeyRotateResponse,
 )
@@ -58,6 +64,20 @@ async def _internal_liveness():
     return {"app": "internal", "status": "ok"}
 
 
+field_app = FastAPI(
+    title="Edge Configuration API — Extension Field Ingress Router",
+    description="Device-to-microservice router for extension routes, authenticated via a per-device X-Device-Key. Expose only to the device network path.",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+
+
+@field_app.get("/", include_in_schema=False)
+async def _field_liveness():
+    return {"app": "field-ingress", "status": "ok"}
+
+
 def _build_management_router() -> BaseAPIRouter:
     """Builds the /extensions management router.
 
@@ -76,14 +96,14 @@ def _build_management_router() -> BaseAPIRouter:
             "Persists an extension's manifest with enabled=false. A freshly-registered "
             "extension is disabled by default; no routes are mounted until it is enabled."
         ),
-        response_model=ExtensionDetail,
+        response_model=ExtensionRegistered,
         status_code=201,
         dependencies=[register_dep],
     )
     async def register_extension(
         registration: ExtensionRegistration,
         extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
-    ) -> ExtensionDetail:
+    ) -> ExtensionRegistered:
         return await registry.register_extension(extension_repo, registration)
 
     # Registered before "/{name}". A literal "/schema" path segment must be matched
@@ -152,10 +172,10 @@ def _build_management_router() -> BaseAPIRouter:
                 built = await _build_persisted_routes(extension_repo, name)
             except Exception as exc:
                 logger.exception(f"Replaced extension '{name}' could not be mounted; disabling it")
-                runtime.publish_routes(_public_app, internal_app, name, None)
+                runtime.publish_routes(_public_app, internal_app, field_app, name, None)
                 await registry.disable_extension(extension_repo, name)
                 raise APIError(f"Extension '{name}' was saved but could not be mounted and was disabled: {exc}", 500)
-            runtime.publish_routes(_public_app, internal_app, name, built)
+            runtime.publish_routes(_public_app, internal_app, field_app, name, built)
             return detail
 
     @router.delete(
@@ -175,7 +195,7 @@ def _build_management_router() -> BaseAPIRouter:
     ) -> None:
         async with _extension_locks[name]:
             await registry.deregister_extension(extension_repo, role_repo, name)
-            runtime.publish_routes(_public_app, internal_app, name, None)
+            runtime.publish_routes(_public_app, internal_app, field_app, name, None)
 
     @router.post(
         "/{name}/enable",
@@ -202,7 +222,7 @@ def _build_management_router() -> BaseAPIRouter:
                 logger.exception(f"Extension '{name}' could not be mounted; it stays disabled")
                 raise APIError(f"Extension '{name}' could not be mounted: {exc}", 500)
             detail = await registry.enable_extension(extension_repo, name)
-            runtime.publish_routes(_public_app, internal_app, name, built)
+            runtime.publish_routes(_public_app, internal_app, field_app, name, built)
             return detail
 
     @router.post(
@@ -218,7 +238,7 @@ def _build_management_router() -> BaseAPIRouter:
     ) -> ExtensionDetail:
         async with _extension_locks[name]:
             detail = await registry.disable_extension(extension_repo, name)
-            runtime.publish_routes(_public_app, internal_app, name, None)
+            runtime.publish_routes(_public_app, internal_app, field_app, name, None)
             return detail
 
     @router.post(
@@ -257,6 +277,53 @@ def _build_management_router() -> BaseAPIRouter:
         raw_key = await registry.rotate_internal_key(extension_repo, name)
         return InternalKeyRotateResponse(internal_key=raw_key)
 
+    @router.post(
+        "/{name}/device-keys",
+        summary="Issue a device key",
+        description=(
+            "Issues (or replaces) the X-Device-Key one device uses for this extension's "
+            "`device` routes. The device must exist. The raw key is only ever returned here."
+        ),
+        response_model=DeviceKeyIssueResponse,
+        status_code=201,
+        dependencies=[register_dep],
+    )
+    async def issue_device_key(
+        name: str,
+        payload: DeviceKeyRequest,
+        extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
+    ) -> DeviceKeyIssueResponse:
+        raw_key = await registry.issue_device_key(extension_repo, name, payload.device_id, payload.module_id)
+        return DeviceKeyIssueResponse(device_id=payload.device_id, device_key=raw_key)
+
+    @router.get(
+        "/{name}/device-keys",
+        summary="List device keys (metadata only)",
+        response_model=List[DeviceKeyInfo],
+        dependencies=[read_dep],
+    )
+    async def list_device_keys(
+        name: str,
+        extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
+    ) -> List[DeviceKeyInfo]:
+        if not await extension_repo.extension_exists(name):
+            raise APIError(f"Extension '{name}' not found", 404)
+        return await extension_repo.list_device_keys(name)
+
+    @router.delete(
+        "/{name}/device-keys/{device_id}",
+        summary="Revoke a device key",
+        status_code=204,
+        dependencies=[register_dep],
+    )
+    async def revoke_device_key(
+        name: str,
+        device_id: str,
+        extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
+    ) -> None:
+        if not await extension_repo.revoke_device_key(name, device_id):
+            raise APIError(f"No device key for '{device_id}' on extension '{name}'", 404)
+
     return router
 
 
@@ -269,7 +336,7 @@ _extension_locks: DefaultDict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 async def _build_persisted_routes(extension_repo: ExtensionRepository, name: str) -> runtime.BuiltRoutes:
     upstreams = await extension_repo.list_upstreams(name)
     routes = await extension_repo.list_routes(name)
-    return runtime.build_routes(_public_app, internal_app, name, upstreams, routes)
+    return runtime.build_routes(_public_app, internal_app, field_app, name, upstreams, routes)
 
 
 def setup_extensions(app: FastAPI) -> None:
@@ -295,32 +362,35 @@ async def hydrate_all_routes() -> None:
             logger.exception("Startup refresh of extension body schemas failed; mounting stored schemas")
             await session.rollback()
         try:
-            await runtime.load_all_routes(_public_app, internal_app, extension_repo)
+            await runtime.load_all_routes(_public_app, internal_app, field_app, extension_repo)
         except Exception:
             logger.exception("Could not load extension routes; the API starts without them")
 
 
 def start_side_apps() -> List[asyncio.Task]:
-    """Starts the internal side app as a task on the caller's running event loop."""
+    """Starts the internal and field-ingress side apps as tasks on the caller's running event loop."""
     if not EXTENSIONS_ENABLED:
         return []
 
-    config = uvicorn.Config(internal_app, host=EXTENSIONS_INTERNAL_API_HOST, port=EXTENSIONS_INTERNAL_API_PORT, log_level="info")
-    server = uvicorn.Server(config)
-    server.install_signal_handlers = lambda: None  # the public app's uvicorn already owns this
+    tasks = []
+    for side_app, host, port, label in (
+        (internal_app, EXTENSIONS_INTERNAL_API_HOST, EXTENSIONS_INTERNAL_API_PORT, "internal"),
+        (field_app, EXTENSIONS_FIELD_API_HOST, EXTENSIONS_FIELD_API_PORT, "field ingress"),
+    ):
+        server = uvicorn.Server(uvicorn.Config(side_app, host=host, port=port, log_level="info"))
+        server.install_signal_handlers = lambda: None  # the public app's uvicorn already owns this
+        logger.info(f"Starting extension side app: {label} on {host}:{port}")
+        tasks.append(asyncio.create_task(_serve_side_app(server, label, host, port)))
+    return tasks
 
-    logger.info(f"Starting extension side app: internal on {EXTENSIONS_INTERNAL_API_HOST}:{EXTENSIONS_INTERNAL_API_PORT}")
-    return [asyncio.create_task(_serve_internal_app(server))]
 
-
-async def _serve_internal_app(server: uvicorn.Server) -> None:
+async def _serve_side_app(server: uvicorn.Server, label: str, host: str, port: int) -> None:
     try:
         await server.serve()
     except SystemExit:
         # uvicorn calls sys.exit() when startup fails, e.g. the port is already bound.
         logger.error(
-            f"Internal extension app could not start on {EXTENSIONS_INTERNAL_API_HOST}:"
-            f"{EXTENSIONS_INTERNAL_API_PORT} (port in use by another worker or a stale process?). "
-            "Internal extension routes are unavailable in this process; the public API keeps running."
+            f"Extension {label} app could not start on {host}:{port} "
+            f"(port in use by another worker or a stale process?). "
+            f"Its extension routes are unavailable in this process; the public API keeps running."
         )
-

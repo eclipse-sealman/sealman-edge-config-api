@@ -26,7 +26,14 @@ from db.repos.role import RoleRepository
 from exceptions import APIError
 
 from . import body_validation, health, signature
-from .schemas import ExtensionHealthCheckResult, ExtensionRegistration, ExtensionDetail, RouteSpec, UpstreamSpec
+from .schemas import (
+    ExtensionDetail,
+    ExtensionHealthCheckResult,
+    ExtensionRegistered,
+    ExtensionRegistration,
+    RouteSpec,
+    UpstreamSpec,
+)
 from .security import generate_key, hash_key
 from .upstreams import http as http_upstream
 from .upstreams.iotedge import probe_registration_health
@@ -83,6 +90,22 @@ def _validate_manifest_cross_references(registration: ExtensionRegistration) -> 
             raise APIError(
                 f"Public iotedge route '{route.path}' must be scoped so ABAC checks the target device", 422
             )
+
+        if route.visibility == "device":
+            if upstream.type != "http":
+                raise APIError(f"Device route '{route.path}' must target an http upstream", 422)
+            if "device_id" in _PATH_PARAM_RE.findall(route.path):
+                raise APIError(
+                    f"Device route '{route.path}' must not take device_id from the path; "
+                    "the device identity is forwarded as X-Device-Id",
+                    422,
+                )
+            if route.scoped or route.required_action:
+                raise APIError(
+                    f"Device route '{route.path}' is authenticated by X-Device-Key and "
+                    "cannot set scoped or required_action",
+                    422,
+                )
 
         if route.body_ref and upstream.type != "http":
             raise APIError(
@@ -336,8 +359,10 @@ async def _build_detail(extension_repo: ExtensionRepository, name: str) -> Exten
 async def register_extension(
     extension_repo: ExtensionRepository,
     registration: ExtensionRegistration,
-) -> ExtensionDetail:
+) -> ExtensionRegistered:
     """Persists a brand-new extension with `enabled=false`. No routes are mounted.
+    Also issues the initial internal key; the raw value is returned once and only its
+    hash is stored.
 
     Schema fetches run before the write. The insert itself is one database
     transaction (`extension_repo.atomic`): a failure rolls the extension, its
@@ -353,13 +378,16 @@ async def register_extension(
                 raise APIError(f"Extension '{registration.name}' is already registered", 409)
             await _validate_action_ownership(extension_repo, registration)
             await extension_repo.create_extension(registration.name, registration.description, registration.schema_version)
+            internal_key = generate_key()
+            await extension_repo.set_internal_key_hash(registration.name, hash_key(internal_key))
             await _enroll_actions(extension_repo, registration)
             await extension_repo.replace_upstreams_and_routes(registration.name, upstreams, routes)
     except ExtensionActionConflictError as exc:
         raise APIError(str(exc), 409) from exc
 
     await _probe_iotedge_upstreams(registration)
-    return await _build_detail(extension_repo, registration.name)
+    detail = await _build_detail(extension_repo, registration.name)
+    return ExtensionRegistered(**detail.model_dump(), internal_key=internal_key)
 
 
 async def replace_extension(
@@ -503,3 +531,28 @@ async def rotate_internal_key(extension_repo: ExtensionRepository, name: str) ->
     raw_key = generate_key()
     await extension_repo.set_internal_key_hash(name, hash_key(raw_key))
     return raw_key
+
+
+async def issue_device_key(
+    extension_repo: ExtensionRepository, name: str, device_id: str, module_id: Optional[str]
+) -> str:
+    """Issues (or replaces) the field-ingress key for one device of this extension.
+    The raw key is only ever returned here; only its hash is stored."""
+    existing = await extension_repo.get_extension_row(name)
+    if existing is None:
+        raise APIError(f"Extension '{name}' not found", 404)
+
+    raw_key = generate_key()
+    try:
+        await extension_repo.upsert_device_key(name, device_id, module_id, hash_key(raw_key))
+    except ValueError as exc:
+        raise APIError(str(exc), 404)
+    return raw_key
+
+
+async def verify_device_key(extension_repo: ExtensionRepository, name: str, presented: str) -> Optional[str]:
+    """Resolves the device an `X-Device-Key` was issued for, within this extension only.
+    Returns None for a missing/unknown key."""
+    if not presented:
+        return None
+    return await extension_repo.resolve_device_key(name, hash_key(presented))

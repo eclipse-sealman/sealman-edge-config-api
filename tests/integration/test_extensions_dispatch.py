@@ -82,6 +82,8 @@ class _EchoHandler(BaseHTTPRequestHandler):
                     "connection_header_value": self.headers.get("Connection"),
                     "x_forwarded_for": self.headers.get("X-Forwarded-For"),
                     "x_forwarded_proto": self.headers.get("X-Forwarded-Proto"),
+                    "x_device_id": self.headers.get("X-Device-Id"),
+                    "x_device_key": self.headers.get("X-Device-Key"),
                 },
             )
         else:
@@ -217,3 +219,48 @@ class TestHttpUpstreamDispatch:
         response = await client.get(f"/{name}/route")
 
         assert response.status_code == 502
+
+
+class TestDeviceIngressDispatch:
+    async def test_device_key_resolves_identity_and_replaces_spoofed_header(
+        self, client, db_session, mock_http_upstream
+    ):
+        from db.session import get_db
+        from extensions.setup import field_app
+        from tests.integration.test_abac_authorization import AbacFixtures
+
+        await AbacFixtures(db_session).setup(devices={"dev-ingress-01": {"region": "EU"}})
+        name = _unique_name("ingress_ext")
+        registration = _registration(name, mock_http_upstream, upstream_path="/echo")
+        registration["routes"][0]["visibility"] = "device"
+        assert (await client.post("/extensions", json=registration)).status_code == 201
+        assert (await client.post(f"/extensions/{name}/enable")).status_code == 200
+        issued = await client.post(f"/extensions/{name}/device-keys", json={"device_id": "dev-ingress-01"})
+        raw_key = issued.json()["device_key"]
+
+        async def _override_get_db():
+            yield db_session
+
+        field_app.dependency_overrides[get_db] = _override_get_db
+        try:
+            transport = httpx.ASGITransport(app=field_app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://field") as field_client:
+                url = f"/{name}/route"
+                assert (await field_client.get(url)).status_code == 401
+                assert (await field_client.get(url, headers={"X-Device-Key": "wrong"})).status_code == 401
+                assert (
+                    await field_client.get(url, headers={"X-Device-Key": raw_key}, params={"device_id": "other"})
+                ).status_code == 400
+
+                response = await field_client.get(
+                    url, headers={"X-Device-Key": raw_key, "X-Device-Id": "spoofed"}
+                )
+                assert response.status_code == 200
+                body = response.json()
+                assert body["x_device_id"] == "dev-ingress-01"
+                assert body["x_device_key"] is None
+
+            # the device channel is not reachable through the public app
+            assert (await client.get(f"/{name}/route", headers={"X-Device-Key": raw_key})).status_code == 404
+        finally:
+            field_app.dependency_overrides.clear()

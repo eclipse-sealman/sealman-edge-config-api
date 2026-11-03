@@ -2,12 +2,28 @@ from datetime import datetime, timezone
 import ipaddress
 import os
 from typing import List
+from urllib.parse import quote
 import re
 import aiofiles
 import logging
 from azure.identity import WorkloadIdentityCredential
 from exceptions import APIError, UnmatchedDependency, IoTBackendAPIError
 from constants import SAS_TOKEN, LAN_EDGE_TEMPLATE_VERSIONS, NAT_TEMPLATE_SUPPORT, DEVICE_SERIAL_NUMBER_PATTERN
+
+# IoT Hub identity registry characters; dot segments need an additional URL-safety check.
+_IOTHUB_ID_RE = re.compile(r"[A-Za-z0-9\-.%_*?!(),:=@$']{1,128}")
+
+
+def validate_iothub_id(value: str) -> str:
+    if not isinstance(value, str) or value in (".", "..") or not _IOTHUB_ID_RE.fullmatch(value):
+        raise APIError("Invalid IoT Hub identifier", status_code=400)
+    return value
+
+
+def encode_iothub_id(value: str) -> str:
+    # quote() leaves standalone dot segments unchanged; validate before encoding.
+    return quote(validate_iothub_id(value), safe="")
+
 
 def validate_and_extract_serial_number(device: str) -> str:
     """Return True if device id matches expected pattern (eg-<serial>, fht-<serial>, e-<serial> or <serial>)."""

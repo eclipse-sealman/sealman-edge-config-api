@@ -5,7 +5,7 @@ from async_requests import delete_async, get_async
 from smart_ems import SmartEMS
 from db.repos.device import DeviceRepository
 from constants import IOT_HUB_NAME
-from helper import get_iothub_auth_headers
+from helper import encode_iothub_id, get_iothub_auth_headers
 from exceptions import APIError, IoTBackendAPIError
 
 logger = logging.getLogger("EdgeConfigAPI")
@@ -17,6 +17,7 @@ async def delete_device(
     device_id: str,
     repo: DeviceRepository,
 ):
+    encoded_device = encode_iothub_id(device_id)
     if not await repo.device_exists(device_id):
         raise APIError(f"Device {device_id} not found", 404)
 
@@ -26,7 +27,7 @@ async def delete_device(
         await SmartEMS.delete_device(sems_device["id"])
 
     # 2. DELETE FROM IoTHub
-    url = f"https://{IOT_HUB_NAME}/devices/{device_id}?api-version={IOT_HUB_API_VERSION}"
+    url = f"https://{IOT_HUB_NAME}/devices/{encoded_device}?api-version={IOT_HUB_API_VERSION}"
     headers = get_iothub_auth_headers()
 
     responses = {}

@@ -74,3 +74,7 @@ class ServiceRepository(ABC):
 
     @abstractmethod
     async def delete_service(self, service_id: str) -> None: ...
+
+    @abstractmethod
+    async def get_service_device_id(self, service_id: str) -> Optional[str]:
+        """Returns only the ID of the device owning the service (via its endpoint), or None if it does not exist."""

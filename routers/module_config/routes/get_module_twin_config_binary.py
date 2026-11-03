@@ -3,13 +3,14 @@ import base64
 from constants import BLOB_SAS_TOKEN_MODULE_CONF_INTERNAL, INTERNAL_STORAGE_ACCOUNT_NAME
 from exceptions import IoTBackendAPIError
 from blob_service import BlobContainerContext
+from helper import validate_iothub_id
 
 
 async def get_module_twin_config_binary(device: str, module: str):
     """
     Returns exactly one module config file from blob storage as base64 payload.
     """
-    prefix = f"{device}/{module}/"
+    prefix = f"{validate_iothub_id(device)}/{validate_iothub_id(module)}/"
 
     try:
         async with BlobContainerContext(
@@ -48,4 +49,3 @@ async def get_module_twin_config_binary(device: str, module: str):
         raise
     except Exception as ex:
         raise IoTBackendAPIError(f"Could not retrieve module twin binary config: {str(ex)}", 500)
-

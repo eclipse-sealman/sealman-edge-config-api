@@ -73,6 +73,8 @@ _REQUEST_HEADER_DENYLIST = _HOP_BY_HOP | {
     "x-forwarded-host",
     "x-forwarded-proto",
     "x-internal-key",
+    "x-device-key",
+    "x-device-id",
 }
 _RESPONSE_HEADER_DENYLIST = _HOP_BY_HOP | {"date", "server", "set-cookie"}
 
@@ -155,15 +157,22 @@ def _upstream_error(exc: httpx.RequestError) -> Tuple[int, str]:
 
 
 async def dispatch(
-    request: Request, upstream: Dict[str, Any], route: Dict[str, Any], body: Optional[bytes] = None
+    request: Request,
+    upstream: Dict[str, Any],
+    route: Dict[str, Any],
+    body: Optional[bytes] = None,
+    trusted_headers: Optional[Dict[str, str]] = None,
 ) -> Response:
     """Forwards the live request to `upstream['base_url'] + route['upstream_path']` and
     streams the response straight back. `body` is only set when the caller already had
-    to buffer it (declared-mode validation); otherwise the request body is streamed."""
+    to buffer it (declared-mode validation); otherwise the request body is streamed.
+    `trusted_headers` are set by Sealman after sanitization (e.g. the device identity
+    resolved from `X-Device-Key`); caller-supplied copies are never forwarded."""
     upstream_path = _resolve_upstream_path(route["upstream_path"], request)
     target = upstream["base_url"].rstrip("/") + upstream_path
 
     headers = _request_headers(request)
+    headers.extend((name, value) for name, value in (trusted_headers or {}).items())
     content = body if body is not None else _streamed_body(request, headers)
     req = _client.build_request(
         request.method,

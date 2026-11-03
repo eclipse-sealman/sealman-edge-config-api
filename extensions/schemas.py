@@ -154,7 +154,9 @@ class RouteSpec(ManifestModel):
     # `{base_url}/openapi.json` instead of being declared here (`upstream_declared` /
     # `unreachable_ref` validation_mode, see `RouteDetail`).
     body_ref: bool = False
-    visibility: Literal["public", "internal"] = "public"
+    # public: user JWT + RBAC/ABAC; internal: X-Internal-Key; device: per-device
+    # X-Device-Key on the field-ingress app (http upstreams only).
+    visibility: Literal["public", "internal", "device"] = "public"
     required_action: Optional[str] = None
     scoped: bool = False
     scope_param: str = Field(default="device_id", pattern=r"^[A-Za-z0-9_.~\-\[\]]{1,128}$")
@@ -212,6 +214,10 @@ class ExtensionDetail(ExtensionRegistration):
     enabled: bool = False
 
 
+class ExtensionRegistered(ExtensionDetail):
+    internal_key: str
+
+
 class ExtensionHealthCheckResult(BaseModel):
     name: str
     upstreams: Dict[str, UpstreamHealthStatus]
@@ -219,3 +225,19 @@ class ExtensionHealthCheckResult(BaseModel):
 
 class InternalKeyRotateResponse(BaseModel):
     internal_key: str
+
+
+class DeviceKeyRequest(BaseModel):
+    device_id: str = Field(min_length=1, max_length=128)
+    module_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class DeviceKeyIssueResponse(BaseModel):
+    device_id: str
+    device_key: str
+
+
+class DeviceKeyInfo(BaseModel):
+    device_id: str
+    module_id: Optional[str] = None
+    created_at: Optional[str] = None

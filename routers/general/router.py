@@ -1,8 +1,8 @@
 import logging
 from typing import Any, Dict
 from fastapi import Depends
-from authorization.abac_permission_check import ABACPermissionCheck
-from authorization.permission_types import Device
+from authorization.abac_permission_check import ABACPermissionCheck, ABACMetadataPatchCheck
+from authorization.permission_types import Device, Platform
 from db.repos.device import DeviceRepository
 from db.session import get_repository
 from routers.base_api_router import BaseAPIRouter
@@ -37,7 +37,7 @@ logger = logging.getLogger("EdgeConfigAPI")
 @general.patch("/{device}/metadata", response_model=DeviceMetadataResponse, tags=["General"])
 async def patch_device_metadata(device: str, metadata: Dict[str, Any],
                                 repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
-                                _ = Depends(ABACPermissionCheck(Device.METADATA_WRITE))):
+                                _ = Depends(ABACMetadataPatchCheck(Device.METADATA_WRITE))):
     device_metadata = await _patch_device_metadata(device, metadata=metadata, repo=repo)
     return device_metadata
 
@@ -72,7 +72,7 @@ async def get_deployment_tag(device: str,
     return await _get_deployment_tag(device)
 
 @general.get("/deployments", response_model=ResponseDeploymentList, tags=["General"])
-async def get_deployment_list():
+async def get_deployment_list(_=Depends(ABACPermissionCheck(Platform.CONFIG_READ, device_path=None))):
     return await _get_deployment_list()
 
 @general.get("/{device}/modules", response_model=DeviceModuleList, tags=["General"])

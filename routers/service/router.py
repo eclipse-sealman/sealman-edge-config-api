@@ -1,11 +1,9 @@
-from typing import Any, Dict, List, Optional, Never
+from typing import List, Optional, Never
 from fastapi import HTTPException, Depends, Query, APIRouter
 from pydantic import ValidationError as PydanticValidationError
 from exceptions import APIError
-from authorization.abac_permission_check import ABACPermissionCheck
-from authorization.device_access import DeviceAccess, device_access
+from authorization.abac_permission_check import ABACPermissionCheck, ABACResolvedDeviceCheck
 from authorization.permission_types import Device, Platform
-from db.repos.endpoint import EndpointRepository
 from db.repos.service import UNSET, ServiceRepository
 from db.repos.scan_ports import ScanPortsRepository
 from db.session import get_repository
@@ -26,32 +24,10 @@ services = APIRouter()
 _type_read = Depends(ABACPermissionCheck(Device.ENDPOINT_READ, device_path=None))
 _type_write = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None))
 
-# Service routes are checked against the device of the service's endpoint
-# (service -> endpoint -> device), see authorization/device_access.py.
-_read = Depends(device_access(Device.ENDPOINT_READ))
-_write = Depends(device_access(Device.ENDPOINT_WRITE))
-
-
-async def _check_endpoint_access(
-    endpoint_id: str, endpoint_repo: EndpointRepository, access: DeviceAccess
-) -> None:
-    endpoint = await endpoint_repo.get_endpoint(endpoint_id)
-    if endpoint is None:
-        raise HTTPException(status_code=404, detail=f"Endpoint '{endpoint_id}' not found")
-    await access.check(endpoint["device_id"])
-
-
-async def _get_service_checked(
-    service_id: str,
-    repo: ServiceRepository,
-    endpoint_repo: EndpointRepository,
-    access: DeviceAccess,
-) -> Dict[str, Any]:
-    service = await repo.get_service(service_id=service_id)
-    if service is None:
-        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found")
-    await _check_endpoint_access(service["endpoint_id"], endpoint_repo, access)
-    return service
+_endpoint_read = Depends(ABACResolvedDeviceCheck(Device.ENDPOINT_READ, "endpoint", "endpoint_id"))
+_endpoint_write = Depends(ABACResolvedDeviceCheck(Device.ENDPOINT_WRITE, "endpoint", "endpoint_id"))
+_service_read = Depends(ABACResolvedDeviceCheck(Device.ENDPOINT_READ, "service", "service_id"))
+_service_write = Depends(ABACResolvedDeviceCheck(Device.ENDPOINT_WRITE, "service", "service_id"))
 
 
 def _handle_api_error(exc: APIError) -> Never:
@@ -208,10 +184,8 @@ async def list_services(
     endpoint_id: str = Query(description="Endpoint to list services for"),
     type_id: Optional[str] = Query(default=None, description="Filter by service type"),
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
-    endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
-    access: DeviceAccess = _read,
+    _auth=_endpoint_read,
 ) -> List[ServiceResponse]:
-    await _check_endpoint_access(endpoint_id, endpoint_repo, access)
     results = await repo.get_services(endpoint_id=endpoint_id, type_id=type_id)
     return [ServiceResponse.model_validate(r) for r in results]
 
@@ -225,10 +199,11 @@ async def list_services(
 async def get_service(
     service_id: str,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
-    endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
-    access: DeviceAccess = _read,
+    _auth=_service_read,
 ) -> ServiceResponse:
-    service = await _get_service_checked(service_id, repo, endpoint_repo, access)
+    service = await repo.get_service(service_id=service_id)
+    if service is None:
+        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found")
     return ServiceResponse.model_validate(service)
 
 
@@ -243,10 +218,8 @@ async def create_service(
     body: ServiceCreate,
     endpoint_id: str = Query(description="Endpoint to create the service on"),
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
-    endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
-    access: DeviceAccess = _write,
+    _auth=_endpoint_write,
 ) -> ServiceResponse:
-    await _check_endpoint_access(endpoint_id, endpoint_repo, access)
     try:
         result = await repo.create_service(
             endpoint_id=endpoint_id,
@@ -268,10 +241,8 @@ async def update_service(
     service_id: str,
     body: ServiceUpdate,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
-    endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
-    access: DeviceAccess = _write,
+    _auth=_service_write,
 ) -> ServiceResponse:
-    await _get_service_checked(service_id, repo, endpoint_repo, access)
     try:
         result = await repo.update_service(
             service_id=service_id,
@@ -295,8 +266,6 @@ async def update_service(
 async def delete_service(
     service_id: str,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
-    endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
-    access: DeviceAccess = _write,
+    _auth=_service_write,
 ) -> None:
-    await _get_service_checked(service_id, repo, endpoint_repo, access)
     await repo.delete_service(service_id=service_id)

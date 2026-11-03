@@ -63,3 +63,7 @@ class EndpointRepository(ABC):
 
     @abstractmethod
     async def delete_endpoint(self, endpoint_id: str) -> None: ...
+
+    @abstractmethod
+    async def get_endpoint_device_id(self, endpoint_id: str) -> Optional[str]:
+        """Returns only the owning device ID of the endpoint, or None if it does not exist."""

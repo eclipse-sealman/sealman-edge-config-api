@@ -2,8 +2,8 @@ from typing import List, Never
 from fastapi import HTTPException, Depends, APIRouter
 from pydantic import ValidationError as PydanticValidationError
 from exceptions import APIError
-from authorization.abac_permission_check import ABACPermissionCheck
-from authorization.permission_types import Platform
+from authorization.abac_permission_check import ABACAnyPermissionCheck, ABACPermissionCheck
+from authorization.permission_types import Device, Platform
 from db.repos.device_type import DeviceTypeRepository
 from db.session import get_repository
 from db.merge import patch_fields
@@ -16,8 +16,8 @@ from routers.device_type.schemas import (
 
 device_types = APIRouter()
 
-# Device types are platform configuration (global, not device-scoped).
-_read = Depends(ABACPermissionCheck(Platform.CONFIG_READ, device_path=None))
+# Global definitions are also needed by device readers and creators.
+_read = Depends(ABACAnyPermissionCheck(Platform.CONFIG_READ, Device.READ, Device.CREATE))
 _write = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None))
 
 

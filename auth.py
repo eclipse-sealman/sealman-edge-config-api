@@ -241,6 +241,14 @@ async def ensure_user_exists(
     return auth_context
 
 
+async def require_admin(
+    auth_context: dict = Depends(ensure_user_exists),
+) -> dict:
+    if Role.EDGE_CONFIG_ADMIN not in (auth_context.get("roles") or []):
+        raise InsufficientPermissions("Administrator role required", status_code=403)
+    return auth_context
+
+
 async def get_user_with_provisioning(
     auth_context: dict = Depends(ensure_user_exists),
 ) -> dict:

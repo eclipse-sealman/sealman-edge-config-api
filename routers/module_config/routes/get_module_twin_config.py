@@ -5,13 +5,14 @@ from async_requests import get_async
 from exceptions import IoTBackendAPIError
 from blob_service import BlobContainerContext
 from azure.core.exceptions import ResourceNotFoundError
-from helper import get_iothub_auth_headers
+from helper import encode_iothub_id, get_iothub_auth_headers
 
 
 async def get_module_twin_config(device, module):
     """
         Returns the current configuration from the module-twin.
     """
+    get_module_twin_url = f"https://{IOT_HUB_NAME}/twins/{encode_iothub_id(device)}/modules/{encode_iothub_id(module)}?api-version=2020-05-31-preview"
     try:
         async with BlobContainerContext(PUBLIC_STORAGE_ACCOUNT_NAME, "iotedge-device-twin", sas_token=BLOB_SAS_TOKEN_MODULE_CONF) as container:
             blob = container.get_blob_client(f"{device}/{module}/current")
@@ -22,7 +23,6 @@ async def get_module_twin_config(device, module):
         # If the blob twin does not exist we check whether the module exists. If the module does exist we return an empty configuration.
         # The server should not carelessly throw 404 for client requests that are absolutely justified.
         # Also the client doesn't care whether the underlying blob is there or not
-        get_module_twin_url = f"https://{IOT_HUB_NAME}/twins/{device}/modules/{module}?api-version=2020-05-31-preview"
         twin_responses = {}
         headers = get_iothub_auth_headers()
         await asyncio.gather(

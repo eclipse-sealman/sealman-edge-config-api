@@ -584,3 +584,494 @@ class TestDeviceListScopeFiltering:
         ids = {d["deviceId"] for d in response.json()}
         assert "berlin-01" in ids
         assert "new-york-01" in ids
+
+
+_DEVICE_DETAIL = {
+    "deviceId": "ok",
+    "connectionStatus": {
+        "deviceStatus": "Unknown",
+        "iotEdgeRuntime": "Unknown",
+        "iotHub": "Unknown",
+        "sems": "Unknown",
+        "vpn": "Unknown",
+    },
+    "deviceMetadata": {},
+}
+
+
+_DEVICE_DETAIL = {
+    "deviceId": "ok",
+    "connectionStatus": {
+        "deviceStatus": "Unknown",
+        "iotEdgeRuntime": "Unknown",
+        "iotHub": "Unknown",
+        "sems": "Unknown",
+        "vpn": "Unknown",
+    },
+    "deviceMetadata": {},
+}
+
+
+# ===========================================================================
+# Tests: device lifecycle routes (GET/PUT/DELETE /devices/{device_id})
+# ===========================================================================
+
+class TestDeviceLifecycleAuthorization:
+    """
+    Authorization for GET, PUT and DELETE on a single device. The downstream
+    handlers (IoT Hub / SEMS) are mocked; only the ABAC outcome is under test.
+    """
+
+    @pytest.fixture
+    def fake_jwt_user(self):
+        return {
+            "oid": "lifecycle-oid",
+            "sub": "lifecycle-oid",
+            "preferred_username": "lifecycle@test.com",
+            "name": "Lifecycle Tester",
+            "roles": [],
+        }
+
+    @pytest.fixture(autouse=True)
+    def mock_handlers(self, monkeypatch):
+        from unittest.mock import AsyncMock
+        import routers.devices.router as device_router
+
+        monkeypatch.setattr(device_router, "get_device", AsyncMock(return_value=_DEVICE_DETAIL))
+        monkeypatch.setattr(device_router, "create_device", AsyncMock(return_value={"device_id": "ok"}))
+        monkeypatch.setattr(device_router, "delete_device", AsyncMock(return_value=None))
+
+    async def _world(self, db_session, actions, scoped=True):
+        return await AbacFixtures(db_session).setup(
+            users={"tester": "lifecycle-oid"},
+            scopes={"eu-scope": {"attr": {"region": "EU"}, "access_rule": "ALL"}},
+            roles={"r": actions},
+            teams={"t": {"scope": "eu-scope" if scoped else None, "roles": ["r"], "users": ["tester"]}},
+            devices={"berlin-01": {"region": "EU"}, "new-york-01": {"region": "US"}},
+        )
+
+    # --- GET ---
+
+    async def test_get_in_scope_device_allowed(self, client, db_session):
+        await self._world(db_session, ["device.read"])
+        assert (await client.get("/devices/berlin-01")).status_code == 200
+
+    async def test_get_out_of_scope_device_denied(self, client, db_session):
+        await self._world(db_session, ["device.read"])
+        assert (await client.get("/devices/new-york-01")).status_code == 403
+
+    async def test_get_without_action_denied(self, client, db_session):
+        await self._world(db_session, ["device.delete"])
+        assert (await client.get("/devices/berlin-01")).status_code == 403
+
+    # --- DELETE ---
+
+    async def test_delete_in_scope_device_allowed(self, client, db_session):
+        await self._world(db_session, ["device.delete"])
+        assert (await client.delete("/devices/berlin-01")).status_code == 200
+
+    async def test_delete_out_of_scope_device_denied(self, client, db_session):
+        await self._world(db_session, ["device.delete"])
+        assert (await client.delete("/devices/new-york-01")).status_code == 403
+
+    async def test_delete_with_only_read_or_metadata_write_denied(self, client, db_session):
+        await self._world(db_session, ["device.read", "device.metadata.write"])
+        assert (await client.delete("/devices/berlin-01")).status_code == 403
+
+    # --- PUT (create) ---
+
+    async def test_create_without_action_denied(self, client, db_session):
+        await self._world(db_session, ["device.read", "device.delete"])
+        response = await client.put("/devices/brand-new", json={"meta": {"region": "EU"}})
+        assert response.status_code == 403
+
+    async def test_create_matching_meta_allowed(self, client, db_session):
+        await self._world(db_session, ["device.create"])
+        response = await client.put("/devices/brand-new", json={"meta": {"region": "EU"}})
+        assert response.status_code == 200
+
+    async def test_create_nonmatching_meta_denied(self, client, db_session):
+        await self._world(db_session, ["device.create"])
+        response = await client.put("/devices/brand-new", json={"meta": {"region": "US"}})
+        assert response.status_code == 403
+
+    async def test_create_missing_meta_denied_for_scoped_user(self, client, db_session):
+        await self._world(db_session, ["device.create"])
+        assert (await client.put("/devices/brand-new", json={})).status_code == 403
+
+    async def test_create_any_meta_allowed_for_unscoped_team(self, client, db_session):
+        await self._world(db_session, ["device.create"], scoped=False)
+        response = await client.put("/devices/brand-new", json={"meta": {"region": "US"}})
+        assert response.status_code == 200
+
+
+class TestDeviceLifecycleAdminBypass:
+    """Default fake user is an admin: bypass applies to all lifecycle routes."""
+
+    @pytest.fixture(autouse=True)
+    def mock_handlers(self, monkeypatch):
+        from unittest.mock import AsyncMock
+        import routers.devices.router as device_router
+
+        monkeypatch.setattr(device_router, "get_device", AsyncMock(return_value=_DEVICE_DETAIL))
+        monkeypatch.setattr(device_router, "create_device", AsyncMock(return_value={"device_id": "ok"}))
+        monkeypatch.setattr(device_router, "delete_device", AsyncMock(return_value=None))
+
+    async def test_admin_can_use_lifecycle_routes(self, client):
+        assert (await client.get("/devices/any")).status_code == 200
+        assert (await client.put("/devices/any", json={"meta": {"region": "XX"}})).status_code == 200
+        assert (await client.delete("/devices/any")).status_code == 200
+
+
+# ===========================================================================
+# Tests: endpoint and service instance routes (owning-device scope)
+# ===========================================================================
+
+class TestEndpointServiceScope:
+    """
+    /endpoints and /services identify a device directly (?device_id=) or
+    indirectly (endpoint_id / service_id). Scope is evaluated on the owning device.
+    Type routes are global and are not scope-checked.
+    """
+
+    @pytest.fixture
+    def fake_jwt_user(self):
+        return {
+            "oid": "ep-oid",
+            "sub": "ep-oid",
+            "preferred_username": "ep@test.com",
+            "name": "Endpoint Tester",
+            "roles": [],
+        }
+
+    async def _world(self, db_session, actions=("device.endpoint.read", "device.endpoint.write"), scoped=True):
+        from db.models.endpoint import Endpoint, EndpointType
+        from db.models.service import Service, ServiceType
+
+        await AbacFixtures(db_session).setup(
+            users={"tester": "ep-oid"},
+            scopes={"eu-scope": {"attr": {"region": "EU"}, "access_rule": "ALL"}},
+            roles={"r": list(actions)},
+            teams={"t": {"scope": "eu-scope" if scoped else None, "roles": ["r"], "users": ["tester"]}},
+            devices={"berlin-01": {"region": "EU"}, "new-york-01": {"region": "US"}},
+        )
+        db_session.add_all([
+            EndpointType(type_id="et", label="et", description=None, fields={}, mapping={}),
+            ServiceType(type_id="st", label="st", description=None, fields={}, mapping={}),
+        ])
+        await db_session.flush()
+        db_session.add_all([
+            Endpoint(endpoint_id="ep-eu", device_id="berlin-01", type_id="et", endpoint_data={}),
+            Endpoint(endpoint_id="ep-us", device_id="new-york-01", type_id="et", endpoint_data={}),
+        ])
+        await db_session.flush()
+        db_session.add_all([
+            Service(service_id="svc-eu", endpoint_id="ep-eu", type_id="st", service_data={}),
+            Service(service_id="svc-us", endpoint_id="ep-us", type_id="st", service_data={}),
+        ])
+        await db_session.flush()
+
+    # --- endpoints ---
+
+    async def test_list_endpoints_in_scope_allowed(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.get("/endpoints", params={"device_id": "berlin-01"})).status_code == 200
+
+    async def test_list_endpoints_out_of_scope_denied(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.get("/endpoints", params={"device_id": "new-york-01"})).status_code == 403
+
+    async def test_create_endpoint_out_of_scope_denied(self, client, db_session):
+        await self._world(db_session)
+        response = await client.post(
+            "/endpoints", params={"device_id": "new-york-01"}, json={"type_id": "et", "endpoint_data": {}}
+        )
+        assert response.status_code == 403
+
+    async def test_endpoint_by_id_in_scope_allowed(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.get("/endpoints/ep-eu")).status_code == 200
+
+    @pytest.mark.parametrize("method", ["get", "patch", "delete"])
+    async def test_endpoint_by_id_out_of_scope_denied(self, client, db_session, method):
+        await self._world(db_session)
+        kwargs = {"json": {"endpoint_data": {}}} if method == "patch" else {}
+        assert (await getattr(client, method)("/endpoints/ep-us", **kwargs)).status_code == 403
+
+    async def test_endpoint_unknown_id_returns_404_for_authorized_scoped_user(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.get("/endpoints/does-not-exist")).status_code == 404
+
+    @pytest.mark.parametrize("path,patch", [
+        ("/endpoints/does-not-exist", {"endpoint_data": {}}),
+        ("/services/does-not-exist", {"service_data": {}}),
+    ])
+    @pytest.mark.parametrize("method,action", [
+        ("GET", "device.read"),
+        ("PATCH", "device.endpoint.read"),
+        ("DELETE", "device.endpoint.read"),
+    ])
+    async def test_missing_action_denied_before_missing_resource_lookup(
+        self, client, db_session, path, patch, method, action
+    ):
+        await self._world(db_session, actions=(action,))
+        response = await client.request(method, path, json=patch if method == "PATCH" else None)
+        assert response.status_code == 403
+
+    async def test_endpoint_write_requires_write_action(self, client, db_session):
+        await self._world(db_session, actions=("device.endpoint.read",))
+        assert (await client.delete("/endpoints/ep-eu")).status_code == 403
+
+    async def test_endpoint_unscoped_team_reaches_any_device(self, client, db_session):
+        await self._world(db_session, scoped=False)
+        assert (await client.get("/endpoints/ep-us")).status_code == 200
+
+    # --- services ---
+
+    async def test_list_services_in_scope_allowed(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.get("/services", params={"endpoint_id": "ep-eu"})).status_code == 200
+
+    async def test_list_services_out_of_scope_denied(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.get("/services", params={"endpoint_id": "ep-us"})).status_code == 403
+
+    async def test_create_service_out_of_scope_denied(self, client, db_session):
+        await self._world(db_session)
+        response = await client.post(
+            "/services", params={"endpoint_id": "ep-us"}, json={"type_id": "st", "service_data": {}}
+        )
+        assert response.status_code == 403
+
+    async def test_service_by_id_in_scope_allowed(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.get("/services/svc-eu")).status_code == 200
+
+    @pytest.mark.parametrize("method", ["get", "patch", "delete"])
+    async def test_service_by_id_out_of_scope_denied(self, client, db_session, method):
+        await self._world(db_session)
+        kwargs = {"json": {"service_data": {}}} if method == "patch" else {}
+        assert (await getattr(client, method)("/services/svc-us", **kwargs)).status_code == 403
+
+    async def test_service_unknown_id_returns_404_for_authorized_scoped_user(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.get("/services/does-not-exist")).status_code == 404
+
+    # --- global types are not device scoped ---
+
+    async def test_type_routes_not_scope_checked(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.get("/endpoint-types")).status_code == 200
+        assert (await client.get("/service-types")).status_code == 200
+
+
+class TestEndpointServiceAdmin:
+    async def test_admin_unknown_ids_return_404(self, client):
+        assert (await client.get("/endpoints/does-not-exist")).status_code == 404
+        assert (await client.get("/services/does-not-exist")).status_code == 404
+
+
+class TestDeviceMetaValuesAuthorization:
+    """GET /devices/meta-values needs device.read and only reports values from in-scope devices."""
+
+    @pytest.fixture
+    def fake_jwt_user(self):
+        return {
+            "oid": "mv-oid",
+            "sub": "mv-oid",
+            "preferred_username": "mv@test.com",
+            "name": "MetaValues Tester",
+            "roles": [],
+        }
+
+    async def _world(self, db_session, actions, scoped=True):
+        await AbacFixtures(db_session).setup(
+            users={"tester": "mv-oid"},
+            scopes={"eu-scope": {"attr": {"region": "EU"}, "access_rule": "ALL"}},
+            roles={"r": actions},
+            teams={"t": {"scope": "eu-scope" if scoped else None, "roles": ["r"], "users": ["tester"]}},
+            devices={"berlin-01": {"region": "EU"}, "new-york-01": {"region": "US"}},
+        )
+
+    async def test_scoped_user_sees_only_in_scope_values(self, client, db_session):
+        await self._world(db_session, ["device.read"])
+        response = await client.get("/devices/meta-values")
+        assert response.status_code == 200
+        assert response.json()["region"] == ["EU"]
+
+    async def test_unscoped_team_sees_all_values(self, client, db_session):
+        await self._world(db_session, ["device.read"], scoped=False)
+        assert (await client.get("/devices/meta-values")).json()["region"] == ["EU", "US"]
+
+    async def test_without_device_read_denied(self, client, db_session):
+        await self._world(db_session, ["device.endpoint.read"])
+        assert (await client.get("/devices/meta-values")).status_code == 403
+
+
+class TestGlobalConfigRoutes:
+    """Compose deployments, active deployment, /deployments and the default template need platform.config.*."""
+
+    @pytest.fixture
+    def fake_jwt_user(self):
+        return {
+            "oid": "cfg-oid",
+            "sub": "cfg-oid",
+            "preferred_username": "cfg@test.com",
+            "name": "Config Tester",
+            "roles": [],
+        }
+
+    _READS = [
+        ("get", "/compose-deployments"),
+        ("get", "/compose-deployments/x"),
+        ("get", "/active-deployment"),
+        ("get", "/deployments"),
+        ("get", "/smartems/default-template?device_type=t"),
+    ]
+    _WRITES = [
+        ("put", "/compose-deployments/x"),
+        ("delete", "/compose-deployments/x"),
+        ("put", "/active-deployment/x"),
+        ("delete", "/active-deployment"),
+    ]
+
+    async def _world(self, db_session, actions):
+        await AbacFixtures(db_session).setup(
+            users={"tester": "cfg-oid"},
+            scopes={},
+            roles={"r": actions},
+            teams={"t": {"scope": None, "roles": ["r"], "users": ["tester"]}},
+            devices={},
+        )
+
+    @pytest.mark.parametrize("method,url", _READS + _WRITES)
+    async def test_without_any_config_action_denied(self, client, db_session, method, url):
+        await self._world(db_session, ["device.read"])
+        assert (await getattr(client, method)(url)).status_code == 403
+
+    @pytest.mark.parametrize("method,url", _WRITES)
+    async def test_read_action_cannot_write(self, client, db_session, method, url):
+        await self._world(db_session, ["platform.config.read"])
+        assert (await getattr(client, method)(url)).status_code == 403
+
+    @pytest.mark.parametrize("method,url", [("get", "/compose-deployments"), ("get", "/active-deployment")])
+    async def test_read_action_allowed(self, client, db_session, method, url):
+        await self._world(db_session, ["platform.config.read"])
+        assert (await getattr(client, method)(url)).status_code == 200
+
+
+class TestTypeRoutesAuthorization:
+    """
+    Global type definitions: reads are open to the roles that need them,
+    changes require platform.config.write.
+    """
+
+    @pytest.fixture
+    def fake_jwt_user(self):
+        return {
+            "oid": "ty-oid",
+            "sub": "ty-oid",
+            "preferred_username": "ty@test.com",
+            "name": "Types Tester",
+            "roles": [],
+        }
+
+    _TYPE_WRITES = [
+        ("post", "/endpoint-types"),
+        ("patch", "/endpoint-types/x"),
+        ("delete", "/endpoint-types/x"),
+        ("post", "/service-types"),
+        ("patch", "/service-types/x"),
+        ("delete", "/service-types/x"),
+        ("post", "/device-types"),
+        ("patch", "/device-types/x"),
+        ("delete", "/device-types/x"),
+        ("post", "/network/default-scan-ports"),
+        ("delete", "/network/default-scan-ports/80"),
+    ]
+
+    async def _world(self, db_session, actions):
+        await AbacFixtures(db_session).setup(
+            users={"tester": "ty-oid"},
+            scopes={},
+            roles={"r": actions},
+            teams={"t": {"scope": None, "roles": ["r"], "users": ["tester"]}},
+            devices={},
+        )
+
+    @pytest.mark.parametrize("method,url", _TYPE_WRITES)
+    async def test_endpoint_write_action_cannot_change_global_types(self, client, db_session, method, url):
+        await self._world(db_session, ["device.endpoint.read", "device.endpoint.write", "device.create"])
+        assert (await client.request(method.upper(), url, json={})).status_code == 403
+
+    @pytest.mark.parametrize("url", ["/endpoint-types", "/service-types", "/network/default-scan-ports"])
+    async def test_endpoint_read_action_can_read_types(self, client, db_session, url):
+        await self._world(db_session, ["device.endpoint.read"])
+        assert (await client.get(url)).status_code == 200
+
+    @pytest.mark.parametrize("actions", [["device.create"], ["device.read"], ["platform.config.read"]])
+    async def test_device_types_readable_by_device_reader_creator_or_platform_reader(self, client, db_session, actions):
+        await self._world(db_session, actions)
+        assert (await client.get("/device-types")).status_code == 200
+
+    async def test_device_types_hidden_without_any_read_action(self, client, db_session):
+        await self._world(db_session, ["device.endpoint.read"])
+        assert (await client.get("/device-types")).status_code == 403
+
+    async def test_platform_config_write_can_change_types(self, client, db_session):
+        await self._world(db_session, ["platform.config.write"])
+        assert (await client.delete("/endpoint-types/does-not-exist")).status_code != 403
+        assert (await client.delete("/device-types/does-not-exist")).status_code != 403
+
+
+class TestMetadataPatchScope:
+    """A metadata patch must leave the device inside the caller's scope."""
+
+    @pytest.fixture
+    def fake_jwt_user(self):
+        return {
+            "oid": "mp-oid",
+            "sub": "mp-oid",
+            "preferred_username": "mp@test.com",
+            "name": "Metadata Tester",
+            "roles": [],
+        }
+
+    async def _world(self, db_session, scoped=True):
+        await AbacFixtures(db_session).setup(
+            users={"tester": "mp-oid"},
+            scopes={"eu-scope": {"attr": {"region": "EU"}, "access_rule": "ALL"}},
+            roles={"r": ["device.metadata.write"]},
+            teams={"t": {"scope": "eu-scope" if scoped else None, "roles": ["r"], "users": ["tester"]}},
+            devices={"berlin-01": {"region": "EU"}, "new-york-01": {"region": "US"}},
+        )
+
+    async def test_patch_non_scope_attribute_allowed(self, client, db_session):
+        await self._world(db_session)
+        response = await client.patch("/berlin-01/metadata", json={"city": "Berlin"})
+        assert response.status_code == 200
+
+    async def test_patch_that_leaves_scope_denied_and_not_applied(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.patch("/berlin-01/metadata", json={"region": "US"})).status_code == 403
+        assert (await client.patch("/berlin-01/metadata", json={"city": "x"})).status_code == 200
+
+    async def test_patch_keeping_scope_value_allowed(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.patch("/berlin-01/metadata", json={"region": "EU"})).status_code == 200
+
+    async def test_patch_out_of_scope_device_denied(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.patch("/new-york-01/metadata", json={"city": "x"})).status_code == 403
+
+    async def test_patch_removing_scope_attribute_denied(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.patch("/berlin-01/metadata", json={"region": None})).status_code == 403
+
+    async def test_non_object_body_rejected(self, client, db_session):
+        await self._world(db_session)
+        assert (await client.patch("/berlin-01/metadata", json=["x"])).status_code == 400
+
+    async def test_unscoped_team_may_change_any_attribute(self, client, db_session):
+        await self._world(db_session, scoped=False)
+        assert (await client.patch("/berlin-01/metadata", json={"region": "US"})).status_code == 200

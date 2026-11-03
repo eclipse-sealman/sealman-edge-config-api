@@ -4,10 +4,8 @@ module-twin read, and module-twin write.
 
 import json
 import logging
-import re
 import uuid
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import quote
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -15,8 +13,8 @@ from fastapi.responses import JSONResponse
 from async_requests import get_async, patch_async, post_async
 from blob_service import BlobContainerContext
 from constants import BLOB_SAS_TOKEN_MODULE_CONF, IOT_HUB_NAME, PUBLIC_STORAGE_ACCOUNT_NAME
-from exceptions import IoTBackendAPIError
-from helper import get_iothub_auth_headers
+from exceptions import APIError, IoTBackendAPIError
+from helper import encode_iothub_id, get_iothub_auth_headers, validate_iothub_id
 
 from .. import body_validation
 
@@ -27,12 +25,8 @@ _API_VERSION = "2021-04-12"
 # IoT Hub rejects direct-method payloads above 128 KB.
 _DIRECT_METHOD_MAX_PAYLOAD_BYTES = 128 * 1024
 
-# IoT Hub identity registry rules for deviceId/moduleId.
-_IOTHUB_ID_RE = re.compile(r"^[A-Za-z0-9\-.%_*?!(),:=@$']{1,128}$")
-
-
 def _encode_id(value: str) -> str:
-    return quote(value, safe="")
+    return encode_iothub_id(value)
 
 
 def _module_url(device_id: str, module_name: str, suffix: str = "") -> str:
@@ -61,8 +55,10 @@ def _resolve_device_id(request: Request, route: Dict[str, Any]) -> str:
         device_id = request.query_params.get("device_id")
     if not device_id:
         raise HTTPException(status_code=400, detail="Missing target device id for this iotedge route")
-    if not _IOTHUB_ID_RE.fullmatch(device_id):
-        raise HTTPException(status_code=400, detail="Invalid target device id for this iotedge route")
+    try:
+        validate_iothub_id(device_id)
+    except APIError as exc:
+        raise HTTPException(status_code=400, detail="Invalid target device id for this iotedge route") from exc
     return device_id
 
 
@@ -87,6 +83,7 @@ async def _twin_write(device_id: str, module_name: str, desired: Optional[dict])
     """Uploads `desired` to blob storage and patches the module twin with only
     `configBlobUrl`/`configId` (this repo's existing blob-indirection convention,
     see `post_module_twin_config.py`)."""
+    url = _twin_url(device_id, module_name)
     if not PUBLIC_STORAGE_ACCOUNT_NAME:
         raise IoTBackendAPIError("Public storage account name is not set. Cannot upload file.", 500)
     if not BLOB_SAS_TOKEN_MODULE_CONF or not BLOB_SAS_TOKEN_MODULE_CONF.strip():
@@ -109,7 +106,6 @@ async def _twin_write(device_id: str, module_name: str, desired: Optional[dict])
     patch = {"properties": {"desired": {"configBlobUrl": config_blob_url, "configId": config_id}}}
 
     responses: Dict[str, Any] = {}
-    url = _twin_url(device_id, module_name)
     await patch_async(url, responses, _json=patch, headers=get_iothub_auth_headers())
     resp = responses[url]
     if resp.status_code >= 400:
@@ -178,7 +174,7 @@ async def _resolve_canary_agent_modules(health_device_query: str) -> Optional[Tu
 
     device_id = devices[0]["deviceId"]
     agent_responses: Dict[str, Any] = {}
-    agent_url = f"https://{IOT_HUB_NAME}/twins/{_encode_id(device_id)}/modules/$edgeAgent?api-version={_API_VERSION}"
+    agent_url = _twin_url(device_id, "$edgeAgent")
     await get_async(agent_url, agent_responses, headers=get_iothub_auth_headers(), timeout=15)
     agent_resp = agent_responses[agent_url]
     if agent_resp.status_code != 200:

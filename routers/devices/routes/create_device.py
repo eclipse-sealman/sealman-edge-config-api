@@ -8,7 +8,7 @@ import asyncio
 from smart_ems import generate_resp_from_device_info
 from routers.devices.routes.get_devices import populate_cache_from_iot_hub_query
 from constants import IOT_HUB_NAME, BOOTSTRAP_SEMS_TEMPLATE_NAME
-from helper import get_iothub_auth_headers
+from helper import encode_iothub_id, get_iothub_auth_headers
 from routers.general.routes.put_deployment_tag import put_deployment_tag
 
 logger = logging.getLogger("EdgeConfigAPI")
@@ -21,6 +21,7 @@ async def create_device(
     repo: DeviceRepository,
     template_repo: DeviceTemplateRepository,
 ):
+    encoded_device = encode_iothub_id(device_id)
     auth_type = body.get("authType")
     metadata = body.get("meta", {})
     type_id = body.get("type_id") or "default"
@@ -46,7 +47,7 @@ async def create_device(
         created_in_db = True
 
         # 3. REGISTER IN IoTHub
-        url = f"https://{IOT_HUB_NAME}/devices/{device_id}?api-version={IOT_HUB_API_VERSION}"
+        url = f"https://{IOT_HUB_NAME}/devices/{encoded_device}?api-version={IOT_HUB_API_VERSION}"
         headers = get_iothub_auth_headers()
 
         body_req = {
@@ -158,7 +159,7 @@ async def create_device(
     except Exception as e:
         if created_in_iothub:
             try:
-                del_url = f"https://{IOT_HUB_NAME}/devices/{device_id}?api-version={IOT_HUB_API_VERSION}"
+                del_url = f"https://{IOT_HUB_NAME}/devices/{encoded_device}?api-version={IOT_HUB_API_VERSION}"
                 responses = {}
                 await asyncio.gather(delete_async(del_url, responses, headers=headers))
             except:

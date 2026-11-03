@@ -1,6 +1,8 @@
 import json
 
 from fastapi import Depends, HTTPException, Query
+from authorization.abac_permission_check import ABACPermissionCheck
+from authorization.permission_types import Platform
 from db.repos.compose import ComposeRepository
 from db.session import get_repository
 from routers.base_api_router import BaseAPIRouter
@@ -16,8 +18,8 @@ from .schemas import (
 from .lp_compose_builder import LPComposeBuilder
 
 
-def _platform_read():
-    return True
+_config_read = Depends(ABACPermissionCheck(Platform.CONFIG_READ, device_path=None))
+_config_write = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None))
 
 compose_deployment = BaseAPIRouter(
     prefix="/compose-deployments",
@@ -28,7 +30,7 @@ compose_deployment = BaseAPIRouter(
 @compose_deployment.get("", response_model=list[DeploymentListItem])
 async def list_deployments(
     repository: ComposeRepository = Depends(get_repository(ComposeRepository)),
-    _=_platform_read(),
+    _=_config_read,
 ):
     return await repository.list()
 
@@ -38,7 +40,7 @@ async def get_deployment(
     name: str,
     filter: str | None = Query(None, description="sems | compose | request"),
     repository: ComposeRepository = Depends(get_repository(ComposeRepository)),
-    _=_platform_read(),
+    _=_config_read,
 ):
     deployment = await repository.get(name)
 
@@ -60,7 +62,7 @@ async def create_or_update_deployment(
     name: str,
     req: ComposeRequest,
     repository: ComposeRepository = Depends(get_repository(ComposeRepository)),
-    _=_platform_read(),
+    _=_config_write,
 ):
     compose = LPComposeBuilder.build_compose(name, req.services)
 
@@ -85,7 +87,7 @@ async def create_or_update_deployment(
 async def delete_deployment(
     name: str,
     repository: ComposeRepository = Depends(get_repository(ComposeRepository)),
-    _=_platform_read(),
+    _=_config_write,
 ):
     deleted = await repository.delete(name)
 
@@ -107,7 +109,7 @@ active_deployment = BaseAPIRouter(
 @active_deployment.get("", response_model=ActiveDeploymentResponse)
 async def get_active_deployment(
     repository: ComposeRepository = Depends(get_repository(ComposeRepository)),
-    _=_platform_read(),
+    _=_config_read,
 ):
     active = await repository.get_active_deployment()
     return {"active_deployment": active or None}
@@ -117,7 +119,7 @@ async def get_active_deployment(
 async def set_active_deployment(
     name: str,
     repository: ComposeRepository = Depends(get_repository(ComposeRepository)),
-    _=_platform_read(),
+    _=_config_write,
 ):
     deployment = await repository.get(name)
 
@@ -143,7 +145,7 @@ async def set_active_deployment(
 @active_deployment.delete("", response_model=MessageResponse)
 async def delete_active_deployment(
     repository: ComposeRepository = Depends(get_repository(ComposeRepository)),
-    _=_platform_read(),
+    _=_config_write,
 ):
     deleted = await repository.delete_active_deployment()
 

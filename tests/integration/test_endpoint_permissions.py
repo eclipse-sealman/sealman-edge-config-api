@@ -83,8 +83,7 @@ class TestEndpointRoutesDeviceScope:
 
 
 class TestEndpointRoutesMissingRows:
-    """Admins (the default test user) pass DeviceAccess even for a device that doesn't exist,
-    so the routes themselves must answer 404 instead of failing on a foreign key."""
+    """Admins bypass scope checks, but missing resources must still return 404."""
 
     async def test_create_on_nonexistent_device_is_404(self, client, db_session):
         type_id = await seed_endpoint_type(db_session, fields={"serial": STRING_FIELD})

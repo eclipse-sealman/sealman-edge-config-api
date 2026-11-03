@@ -1,5 +1,6 @@
 from authorization.abac_permission_check import ABACPermissionCheck
-from authorization.permission_types import Device
+from auth import require_admin
+from authorization.permission_types import Device, Platform
 from fastapi import Depends
 
 from db.repos.password_renewal_task import PasswordRenewalTaskRepository
@@ -32,7 +33,7 @@ smart_ems = BaseAPIRouter()
 
 @smart_ems.get("/{device}/smartems/info", response_model=SemsInfo2, tags=["Smart-EMS"])
 async def get_smart_ems_device_info(device: str,
-                                    _=Depends(ABACPermissionCheck(Device.READ))):
+                                    _=Depends(require_admin)):
     return await _get_smart_ems_device_info(device)
 
 
@@ -105,8 +106,8 @@ async def post_smart_ems_secret_request(device: str,
 
 
 @smart_ems.get("/smartems/default-template", response_model=DefaultSmartEMSTemplate, tags=["Smart-EMS"])
-async def get_smart_ems_default_template(device_type: str):
-
+async def get_smart_ems_default_template(device_type: str,
+                                         _=Depends(ABACPermissionCheck(Platform.CONFIG_READ, device_path=None))):
     return await _get_smart_ems_default_template(device_type)
 
 

@@ -37,7 +37,8 @@ async def post_module_twin_config_discover(device: str, request: NetworkDiscover
                     tags=["Module Configuration"])
 async def post_module_config_status(device: str, module_list: ModuleList,
                                     _ = Depends(ABACPermissionCheck(Device.READ))):
-    return await _post_module_config_status(device, module_list)
+    resps = await _post_module_config_status(device, module_list)
+    return resps
 
 # ============================================================
 # GET Endpoints - Read Operations

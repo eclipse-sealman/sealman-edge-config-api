@@ -25,16 +25,17 @@ def _live_paths(app: FastAPI, extension_name: str) -> list:
     return [r.path for r in app.router.routes if getattr(r, "extension_name", None) == extension_name]
 
 
-def _mount(public: FastAPI, internal: FastAPI, extension_name: str, routes: list) -> None:
-    built = runtime.build_routes(public, internal, extension_name, UPSTREAMS, routes)
-    runtime.publish_routes(public, internal, extension_name, built)
+def _mount(public: FastAPI, internal: FastAPI, extension_name: str, routes: list, field: FastAPI = None) -> None:
+    field = field or FastAPI()
+    built = runtime.build_routes(public, internal, field, extension_name, UPSTREAMS, routes)
+    runtime.publish_routes(public, internal, field, extension_name, built)
 
 
 def test_build_routes_does_not_touch_live_route_tables():
-    public, internal = FastAPI(), FastAPI()
+    public, internal, field = FastAPI(), FastAPI(), FastAPI()
     before = list(public.router.routes)
 
-    built = runtime.build_routes(public, internal, "widgets", UPSTREAMS, [_route("r1", "/w")])
+    built = runtime.build_routes(public, internal, field, "widgets", UPSTREAMS, [_route("r1", "/w")])
 
     assert public.router.routes == before
     assert [r.path for r in built[public]] == ["/w"]
@@ -47,7 +48,7 @@ def test_failed_build_leaves_previous_live_routes_in_place():
 
     with pytest.raises(ValueError):
         runtime.build_routes(
-            public, internal, "widgets", UPSTREAMS, [_route("r2", "/new"), _route("r3", "/bad", visibility="bogus")]
+            public, internal, FastAPI(), "widgets", UPSTREAMS, [_route("r2", "/new"), _route("r3", "/bad", visibility="bogus")]
         )
 
     assert _live_paths(public, "widgets") == ["/old"]
@@ -62,7 +63,7 @@ def test_publish_replaces_and_unmounts_only_the_named_extension():
     assert _live_paths(public, "foo") == ["/foo/two"]
     assert _live_paths(public, "foo__bar") == ["/foo-bar/one"]
 
-    runtime.publish_routes(public, internal, "foo", None)
+    runtime.publish_routes(public, internal, FastAPI(), "foo", None)
     assert _live_paths(public, "foo") == []
     assert _live_paths(public, "foo__bar") == ["/foo-bar/one"]
 
@@ -96,3 +97,49 @@ async def test_internal_key_dependency_authenticates_and_audits(monkeypatch, key
 
     assert logged and logged[0][0] == expected_user
     assert "internal GET /widgets/x" in logged[0][1]
+
+
+class _FakeDeviceRepo:
+    async def resolve_device_key(self, extension_name, key_hash):
+        return "dev-1" if extension_name == "widgets" and key_hash == hash_key("device-key") else None
+
+
+def _device_request(query: bytes = b""):
+    return Request({"type": "http", "method": "POST", "path": "/widgets/in", "headers": [], "query_string": query})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key, query, expected_status",
+    [
+        (None, b"", 401),
+        ("wrong", b"", 401),
+        ("device-key", b"device_id=other", 400),
+        ("device-key", b"device_id=dev-1", None),
+        ("device-key", b"", None),
+    ],
+)
+async def test_device_key_dependency_resolves_identity_from_credential(monkeypatch, key, query, expected_status):
+    async def fake_log(user, access, method=None):
+        pass
+
+    monkeypatch.setattr(runtime.AuditTrail, "log", fake_log)
+    check = runtime._device_key_dependency("widgets")
+    request = _device_request(query)
+
+    if expected_status is None:
+        await check(request, x_device_key=key, extension_repo=_FakeDeviceRepo())
+        assert request.state.extension_device_id == "dev-1"
+    else:
+        with pytest.raises(HTTPException) as exc_info:
+            await check(request, x_device_key=key, extension_repo=_FakeDeviceRepo())
+        assert exc_info.value.status_code == expected_status
+
+
+def test_device_routes_mount_on_field_app_only():
+    public, internal, field = FastAPI(), FastAPI(), FastAPI()
+    _mount(public, internal, "widgets", [_route("r1", "/in", visibility="device", method="POST")], field)
+
+    assert _live_paths(field, "widgets") == ["/in"]
+    assert _live_paths(public, "widgets") == []
+    assert _live_paths(internal, "widgets") == []

@@ -1,8 +1,8 @@
 """Turns persisted `extension_routes` rows into live FastAPI routes and back.
 
-Current scope: route mounting/unmounting mechanics, the two visibility channels'
+Current scope: route mounting/unmounting mechanics, the three visibility channels'
 auth (`public` via the route's own `required_action` through `ABACPermissionCheck`,
-`internal` via `X-Internal-Key`), the dynamic per-manifest request signature
+`internal` via `X-Internal-Key`, `device` via a per-device `X-Device-Key`), the dynamic per-manifest request signature
 (`extensions/signature.py`), `declared`-mode body validation (`extensions/body_validation.py`),
 and real upstream dispatch (`http`/`iotedge`, see `extensions/upstreams/`).
 """
@@ -22,7 +22,7 @@ from exceptions import APIError
 from helper import AuditTrail
 
 from . import body_validation, signature
-from .security import keys_match
+from .security import hash_key, keys_match
 from .upstreams import http as http_upstream
 from .upstreams import iotedge as iotedge_upstream
 
@@ -68,6 +68,34 @@ def _internal_key_dependency(extension_name: str):
     return _check
 
 
+def _device_key_dependency(extension_name: str):
+    async def _check(
+        request: Request,
+        x_device_key: Optional[str] = Header(None, alias="X-Device-Key"),
+        extension_repo: ExtensionRepository = Depends(get_repository(ExtensionRepository)),
+    ) -> None:
+        access = f"device {request.method} {request.url.path}"
+        if not x_device_key:
+            await AuditTrail.log("unknown", f"{access} rejected: missing X-Device-Key")
+            raise HTTPException(status_code=401, detail="Missing X-Device-Key")
+        device_id = await extension_repo.resolve_device_key(extension_name, hash_key(x_device_key))
+        if device_id is None:
+            await AuditTrail.log("unknown", f"{access} rejected: invalid X-Device-Key")
+            raise HTTPException(status_code=401, detail="Invalid X-Device-Key")
+        # The device identity comes from the credential only. A conflicting
+        # caller-supplied value must never reach the upstream.
+        supplied = request.query_params.getlist("device_id")
+        if "device_id" in request.path_params:
+            supplied.append(str(request.path_params["device_id"]))
+        if any(value != device_id for value in supplied):
+            await AuditTrail.log(f"extension:{extension_name}", f"{access} rejected: device_id mismatch")
+            raise HTTPException(status_code=400, detail="device_id does not match the X-Device-Key identity")
+        request.state.extension_device_id = device_id
+        await AuditTrail.log(f"extension:{extension_name}", f"{access} device={device_id}")
+
+    return _check
+
+
 def _dispatch_handler(extension_name: str, upstream: Dict[str, Any], route: Dict[str, Any]):
     dispatch = _DISPATCHERS.get(upstream["type"])
     if dispatch is None:
@@ -82,6 +110,8 @@ def _dispatch_handler(extension_name: str, upstream: Dict[str, Any], route: Dict
         if route.get("scoped") and (route.get("scope_in") or "query") == "query"
         else None
     )
+
+    is_device_route = route.get("visibility") == "device"
 
     async def _handler(request: Request, **_path_and_query: Any) -> Response:
         if single_query_param and len(request.query_params.getlist(single_query_param)) > 1:
@@ -102,6 +132,9 @@ def _dispatch_handler(extension_name: str, upstream: Dict[str, Any], route: Dict
             if errors:
                 raise HTTPException(status_code=422, detail=errors)
         try:
+            if is_device_route:
+                trusted = {"X-Device-Id": request.state.extension_device_id}
+                return await dispatch(request, upstream, route, body=body, trusted_headers=trusted)
             return await dispatch(request, upstream, route, body=body)
         except APIError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
@@ -110,8 +143,10 @@ def _dispatch_handler(extension_name: str, upstream: Dict[str, Any], route: Dict
     return _handler
 
 
-def _app_for_visibility(visibility: str, public_app: FastAPI, internal_app: FastAPI) -> FastAPI:
-    apps = {"public": public_app, "internal": internal_app}
+def _app_for_visibility(
+    visibility: str, public_app: FastAPI, internal_app: FastAPI, field_app: FastAPI
+) -> FastAPI:
+    apps = {"public": public_app, "internal": internal_app, "device": field_app}
     if visibility not in apps:
         raise ValueError(f"Unknown route visibility '{visibility}'")
     return apps[visibility]
@@ -120,6 +155,7 @@ def _app_for_visibility(visibility: str, public_app: FastAPI, internal_app: Fast
 def _add_routes_from_specs(
     public_app: FastAPI,
     internal_app: FastAPI,
+    field_app: FastAPI,
     extension_name: str,
     upstreams: List[Dict[str, Any]],
     routes: List[Dict[str, Any]],
@@ -139,11 +175,13 @@ def _add_routes_from_specs(
             continue
 
         visibility = route.get("visibility") or "public"
-        target_app = _app_for_visibility(visibility, public_app, internal_app)
+        target_app = _app_for_visibility(visibility, public_app, internal_app, field_app)
 
         dependencies = []
         if visibility == "internal":
             dependencies.append(Depends(_internal_key_dependency(extension_name)))
+        elif visibility == "device":
+            dependencies.append(Depends(_device_key_dependency(extension_name)))
         elif visibility == "public" and route.get("required_action"):
             # `scoped` drives ABAC device lookup, not just iotedge targeting.
             # Without it, holding `required_action` is enough for any device.
@@ -205,6 +243,7 @@ def _add_routes_from_specs(
 def build_routes(
     public_app: FastAPI,
     internal_app: FastAPI,
+    field_app: FastAPI,
     extension_name: str,
     upstreams: List[Dict[str, Any]],
     routes: List[Dict[str, Any]],
@@ -212,12 +251,12 @@ def build_routes(
     """Builds `extension_name`'s routes with each app's own router settings (global
     dependencies, dependency overrides) without publishing them. Raises on any route
     that cannot be built; the live route tables are untouched either way."""
-    apps = (public_app, internal_app)
+    apps = (public_app, internal_app, field_app)
     originals = {app: app.router.routes for app in apps}
     for app in apps:
         app.router.routes = list(originals[app])
     try:
-        _add_routes_from_specs(public_app, internal_app, extension_name, upstreams, routes)
+        _add_routes_from_specs(public_app, internal_app, field_app, extension_name, upstreams, routes)
         return {app: app.router.routes[len(originals[app]):] for app in apps}
     finally:
         for app in apps:
@@ -227,6 +266,7 @@ def build_routes(
 def publish_routes(
     public_app: FastAPI,
     internal_app: FastAPI,
+    field_app: FastAPI,
     extension_name: str,
     built: Optional[BuiltRoutes] = None,
 ) -> None:
@@ -235,7 +275,7 @@ def publish_routes(
     request sees either the old or the new route set, never a mix. Matches routes on
     the owner stamped at build time, never on the route name, so `foo` cannot unmount
     `foo__bar`'s routes."""
-    for app in (public_app, internal_app):
+    for app in (public_app, internal_app, field_app):
         kept = []
         for route in app.router.routes:
             if getattr(route, "extension_name", None) == extension_name:
@@ -252,6 +292,7 @@ def publish_routes(
 async def load_all_routes(
     public_app: FastAPI,
     internal_app: FastAPI,
+    field_app: FastAPI,
     extension_repo: ExtensionRepository,
 ) -> None:
     """Re-mounts every persisted, *enabled* extension's routes, called once at startup
@@ -263,8 +304,8 @@ async def load_all_routes(
         upstreams = await extension_repo.list_upstreams(ext["name"])
         routes = await extension_repo.list_routes(ext["name"])
         try:
-            built = build_routes(public_app, internal_app, ext["name"], upstreams, routes)
+            built = build_routes(public_app, internal_app, field_app, ext["name"], upstreams, routes)
         except Exception:
             logger.exception(f"Could not build routes for extension '{ext['name']}'; it stays unmounted")
             continue
-        publish_routes(public_app, internal_app, ext["name"], built)
+        publish_routes(public_app, internal_app, field_app, ext["name"], built)

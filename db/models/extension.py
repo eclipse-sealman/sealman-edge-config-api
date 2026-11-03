@@ -114,3 +114,16 @@ class ExtensionAction(Base):
 
     action_name = Column(Text, ForeignKey("actions.name", ondelete="CASCADE"), primary_key=True)
     extension_id = Column(UUID(as_uuid=True), ForeignKey("extensions.id", ondelete="CASCADE"), primary_key=True)
+
+
+class ExtensionDeviceKey(Base):
+    """A per-device key for an extension's `device` (field-ingress) routes. Only the
+    hash is stored. Namespace-locked to the owning extension; the raw key is shown once."""
+
+    __tablename__ = "extension_device_keys"
+
+    extension_id = Column(UUID(as_uuid=True), ForeignKey("extensions.id", ondelete="CASCADE"), primary_key=True)
+    device_id = Column(Text, ForeignKey("devices.device_id", ondelete="CASCADE"), primary_key=True)
+    module_id = Column(Text, nullable=True)
+    key_hash = Column(Text, nullable=False, index=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)

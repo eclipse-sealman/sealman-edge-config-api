@@ -94,8 +94,7 @@ class TestServiceRoutesDeviceScope:
 
 
 class TestServiceRoutesMissingRows:
-    """Admins (the default test user) pass DeviceAccess even for unknown devices, so the
-    routes themselves must answer 404 instead of failing on a foreign key."""
+    """Admins bypass scope checks, but missing resources must still return 404."""
 
     async def test_create_on_nonexistent_endpoint_is_404(self, client, db_session):
         type_id = await seed_service_type(db_session, fields={"protocol": STRING_FIELD})

@@ -1,6 +1,6 @@
 import asyncio
 import json
-from helper import AuditTrail, get_iothub_auth_headers
+from helper import AuditTrail, encode_iothub_id, get_iothub_auth_headers
 from constants import IOT_HUB_NAME
 from async_requests import post_async
 from exceptions import IoTBackendAPIError
@@ -12,7 +12,7 @@ async def post_module_method(device: str, module: str, method_data, auth_context
     """
     responses = {}
     post_module_method_url = (
-        f"https://{IOT_HUB_NAME}/twins/{device}/modules/{module}"
+        f"https://{IOT_HUB_NAME}/twins/{encode_iothub_id(device)}/modules/{encode_iothub_id(module)}"
         f"/methods?api-version=2020-05-31-preview"
     )
 
