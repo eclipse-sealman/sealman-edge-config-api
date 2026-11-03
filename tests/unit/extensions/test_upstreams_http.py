@@ -436,3 +436,17 @@ async def test_dispatch_replaces_caller_device_identity_with_trusted_headers(mon
     headers = httpx.Headers(captured["headers"])
     assert headers.get_list("x-device-id") == ["dev-1"]
     assert "x-device-key" not in headers
+
+
+def test_request_headers_percent_encode_non_ascii_name():
+    request = _make_request()
+    request.state.sealman_caller = ("u1", "J\u00fcrgen M\u00fcller")
+    headers = http_upstream._request_headers(request)
+    assert ("x-sealman-user-name", "J%C3%BCrgen%20M%C3%BCller") in headers
+    assert ("x-sealman-user-id", "u1") in headers
+
+
+def test_request_headers_without_caller_adds_none():
+    request = _make_request(headers={"X-Sealman-User-Id": "spoofed", "X-Sealman-User-Name": "spoofed"})
+    headers = http_upstream._request_headers(request)
+    assert not [name for name, _ in headers if name.startswith("x-sealman-")]

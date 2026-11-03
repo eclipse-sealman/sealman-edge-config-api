@@ -84,6 +84,8 @@ class _EchoHandler(BaseHTTPRequestHandler):
                     "x_forwarded_proto": self.headers.get("X-Forwarded-Proto"),
                     "x_device_id": self.headers.get("X-Device-Id"),
                     "x_device_key": self.headers.get("X-Device-Key"),
+                    "x_sealman_user_id": self.headers.get("X-Sealman-User-Id"),
+                    "x_sealman_user_name": self.headers.get("X-Sealman-User-Name"),
                 },
             )
         else:
@@ -137,6 +139,22 @@ class TestHttpUpstreamDispatch:
 
         assert response.status_code == 200
         assert response.json() == {"pong": True}
+
+    async def test_dispatch_forwards_caller_identity(self, client, mock_http_upstream):
+        name = _unique_name("dispatch_ext")
+        registration = _registration(name, mock_http_upstream, upstream_path="/echo")
+
+        assert (await client.post("/extensions", json=registration)).status_code == 201
+        assert (await client.post(f"/extensions/{name}/enable")).status_code == 200
+
+        response = await client.get(
+            f"/{name}/route",
+            headers={"X-Sealman-User-Id": "spoofed", "X-Sealman-User-Name": "spoofed"},
+        )
+
+        body = response.json()
+        assert body["x_sealman_user_id"] == "test-admin-oid"
+        assert body["x_sealman_user_name"] == "Test%20Admin"
 
     async def test_dispatch_applies_request_header_contract(self, client, mock_http_upstream):
         name = _unique_name("dispatch_ext")

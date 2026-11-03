@@ -15,6 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from starlette.responses import Response
 from starlette.routing import BaseRoute
 
+from auth import get_current_user, validate_jwt
 from authorization.abac_permission_check import ABACPermissionCheck
 from db.repos.extension import ExtensionRepository
 from db.session import get_repository
@@ -152,6 +153,13 @@ def _app_for_visibility(
     return apps[visibility]
 
 
+async def _caller_identity(request: Request, auth_context: dict = Depends(validate_jwt)) -> None:
+    """Records the authenticated caller on `request.state` so the http upstream can
+    forward it as trusted `x-sealman-user-*` headers."""
+    user_id = auth_context.get("oid") or auth_context.get("sub")
+    request.state.sealman_caller = (user_id, get_current_user(auth_context))
+
+
 def _add_routes_from_specs(
     public_app: FastAPI,
     internal_app: FastAPI,
@@ -182,7 +190,9 @@ def _add_routes_from_specs(
             dependencies.append(Depends(_internal_key_dependency(extension_name)))
         elif visibility == "device":
             dependencies.append(Depends(_device_key_dependency(extension_name)))
-        elif visibility == "public" and route.get("required_action"):
+        if visibility == "public":
+            dependencies.append(Depends(_caller_identity))
+        if visibility == "public" and route.get("required_action"):
             # `scoped` drives ABAC device lookup, not just iotedge targeting.
             # Without it, holding `required_action` is enough for any device.
             if route.get("scoped"):

@@ -34,6 +34,7 @@ class ExtensionMapper:
             "internal_key_hash": ext.internal_key_hash,
             "internal_key_created_at": ext.internal_key_created_at,
             "internal_key_rotated_at": ext.internal_key_rotated_at,
+            "ui": ext.ui,
             "created_at": ext.created_at,
             "updated_at": ext.updated_at,
         }
@@ -151,6 +152,19 @@ class SqlAlchemyExtensionRepository(ExtensionRepository):
         result = await self._session.execute(select(Extension).where(Extension.name == name))
         ext = result.scalar_one()
         ext.schema_version = schema_version
+        await commit_session(self._session)
+
+    async def find_extension_by_ui_remote_name(self, remote_name: str, exclude_name: Optional[str] = None) -> Optional[str]:
+        query = select(Extension.name).where(Extension.ui["remoteName"].astext == remote_name)
+        if exclude_name is not None:
+            query = query.where(Extension.name != exclude_name)
+        result = await self._session.execute(query.limit(1))
+        return result.scalar_one_or_none()
+
+    async def set_ui(self, name: str, ui: Optional[Dict[str, Any]]) -> None:
+        result = await self._session.execute(select(Extension).where(Extension.name == name))
+        ext = result.scalar_one()
+        ext.ui = ui
         await commit_session(self._session)
 
     async def set_enabled(self, name: str, enabled: bool) -> None:

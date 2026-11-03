@@ -23,6 +23,7 @@ class Extension(Base):
     internal_key_hash = Column(Text, nullable=True)
     internal_key_created_at = Column(TIMESTAMP(timezone=True), nullable=True)
     internal_key_rotated_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    ui = Column(JSONB, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

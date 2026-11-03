@@ -1,11 +1,12 @@
 from typing import Any, Dict, List, Optional, cast
 
-from sqlalchemy import select, update, func, delete, text, and_
+from sqlalchemy import select, update, func, delete, text, and_, or_, exists, false
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.device import Device, DeviceSnapshotCache
 from db.models.device_type import DeviceType
+from db.models.endpoint import Endpoint
 from db.registry import register_repository
 from db.repos.device import DeviceRepository
 from db.merge import resolve_fields, validate_instance_data, patch_data, merge_type_fields
@@ -13,6 +14,7 @@ from exceptions import APIError
 
 
 DEVICE_SNAPSHOT_CACHE_KEY = "current"
+DEVICE_DATA_ORDER_PREFIX = "device_data."
 
 
 @register_repository(DeviceRepository)
@@ -287,3 +289,99 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         if device is None:
             return None
         return dict(cast(Dict[str, Any], device.device_data) or {})
+
+    def _devices_with_data_condition(self, device_fields: List[str], endpoint_fields: List[str]):
+        conditions = [Device.device_data[key].astext.isnot(None) for key in device_fields]
+        if endpoint_fields:
+            conditions.append(
+                exists().where(
+                    Endpoint.device_id == Device.device_id,
+                    or_(*[Endpoint.endpoint_data[key].astext.isnot(None) for key in endpoint_fields]),
+                )
+            )
+        return or_(*conditions) if conditions else false()
+
+    async def get_devices_with_data(
+        self,
+        device_fields: List[str],
+        endpoint_fields: List[str],
+        order_by: str,
+        descending: bool,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        # Note: device_data.<key> ordering compares values as text (->>), not by JSON type.
+        if order_by == "created_at":
+            sort_column = Device.created_at
+        elif order_by.startswith(DEVICE_DATA_ORDER_PREFIX) and order_by[len(DEVICE_DATA_ORDER_PREFIX):]:
+            sort_column = Device.device_data[order_by[len(DEVICE_DATA_ORDER_PREFIX):]].astext
+        else:
+            raise APIError(f"Unsupported order_by '{order_by}'", 400)
+
+        sort_order = sort_column.desc() if descending else sort_column.asc()
+        stmt = (
+            select(
+                Device.device_id,
+                Device.type_id,
+                Device.device_data,
+                Device.created_at,
+                sort_column.label("sort_value"),
+            )
+            .where(self._devices_with_data_condition(device_fields, endpoint_fields))
+            .order_by(sort_order.nulls_last(), Device.device_id.asc())
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        if offset:
+            stmt = stmt.offset(offset)
+
+        result = await self._session.execute(stmt)
+        return [
+            {**dict(row), "device_data": row["device_data"] or {}}
+            for row in result.mappings().all()
+        ]
+
+    async def count_devices_with_data(
+        self,
+        device_fields: List[str],
+        endpoint_fields: List[str],
+    ) -> int:
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(Device)
+            .where(self._devices_with_data_condition(device_fields, endpoint_fields))
+        )
+        return int(result.scalar_one())
+
+    async def get_endpoints_with_fields(
+        self,
+        device_ids: List[str],
+        endpoint_fields: List[str],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        if not device_ids or not endpoint_fields:
+            return {}
+        result = await self._session.execute(
+            select(
+                Endpoint.device_id,
+                Endpoint.endpoint_id,
+                Endpoint.type_id,
+                Endpoint.endpoint_data,
+                Endpoint.updated_at,
+            )
+            .where(
+                Endpoint.device_id.in_(device_ids),
+                or_(*[Endpoint.endpoint_data[key].astext.isnot(None) for key in endpoint_fields]),
+            )
+            .order_by(Endpoint.created_at.asc(), Endpoint.endpoint_id.asc())
+        )
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for row in result.mappings().all():
+            grouped.setdefault(row["device_id"], []).append(
+                {
+                    "endpoint_id": row["endpoint_id"],
+                    "type_id": row["type_id"],
+                    "endpoint_data": row["endpoint_data"] or {},
+                    "updated_at": row["updated_at"],
+                }
+            )
+        return grouped

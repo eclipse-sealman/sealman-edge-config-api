@@ -190,6 +190,29 @@ class RouteSpec(ManifestModel):
         return value
 
 
+class UiModel(ManifestModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class UiContribution(UiModel):
+    # Formats (target/placement/module/label/path) are checked by registry.py so a bad
+    # value answers 422 like other manifest business rules; core keeps no list of outlets.
+    target: str
+    placement: str
+    module: str
+    label: str
+    when: Optional[Dict[str, List[str]]] = None
+    path: Optional[str] = None
+    required_action: Optional[str] = Field(default=None, alias="requiredAction")
+
+
+class ExtensionUi(UiModel):
+    contract_version: Literal[1] = Field(alias="contractVersion")
+    entry: str
+    remote_name: str = Field(alias="remoteName")
+    contributions: List[UiContribution]
+
+
 class ExtensionRegistration(ManifestModel):
     # Required, no default: a missing or unrecognized value (anything but the literal
     # `1`) is rejected outright, mirroring $edgeAgent's own
@@ -201,6 +224,7 @@ class ExtensionRegistration(ManifestModel):
     upstreams: Dict[str, UpstreamSpec]
     actions: List[ActionSpec] = Field(default_factory=list)
     routes: List[RouteSpec]
+    ui: Optional[ExtensionUi] = None
 
 
 class RouteDetail(RouteSpec):
@@ -219,6 +243,14 @@ class ExtensionDetail(ExtensionRegistration):
 
 class ExtensionRegistered(ExtensionDetail):
     internal_key: str
+
+
+class ExtensionUiEntry(UiModel):
+    name: str
+    contract_version: Literal[1] = Field(alias="contractVersion")
+    entry: str
+    remote_name: str = Field(alias="remoteName")
+    contributions: List[UiContribution]
 
 
 class ExtensionHealthCheckResult(BaseModel):
