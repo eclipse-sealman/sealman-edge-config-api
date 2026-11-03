@@ -52,6 +52,7 @@ from routers.devices.router import devices
 from routers.endpoint.router import endpoints
 from routers.service.router import services
 from routers.device_type.router import device_types
+from routers.ui_metrics.router import ui_metrics
 
 # logger config
 logger = logging.getLogger("EdgeConfigAPI")
@@ -212,6 +213,7 @@ app.include_router(network_discovery)
 app.include_router(lines)
 app.include_router(platform_config)
 app.include_router(devices)
+app.include_router(ui_metrics)
 
 _register_extensions_router(app)
 
