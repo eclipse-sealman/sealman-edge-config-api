@@ -11,12 +11,6 @@ if LAN_EDGE_TEMPLATES is not None:
     lan_edge_templates = [t.strip() for t in LAN_EDGE_TEMPLATES.split(",")]
     LAN_EDGE_TEMPLATE_VERSIONS.extend(lan_edge_templates)
 
-NAT_TEMPLATE_SUPPORT = []
-NAT_TEMPLATES = os.getenv("NAT_TEMPLATES")
-if NAT_TEMPLATES is not None:
-    nat_templates = [t.strip() for t in NAT_TEMPLATES.split(",")]
-    NAT_TEMPLATE_SUPPORT.extend(nat_templates)
-
 # AAD login URL
 AZURE_AD_INSTANCE = "https://login.microsoftonline.com/"
 

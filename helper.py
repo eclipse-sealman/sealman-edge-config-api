@@ -8,7 +8,7 @@ import aiofiles
 import logging
 from azure.identity import WorkloadIdentityCredential
 from exceptions import APIError, UnmatchedDependency, IoTBackendAPIError
-from constants import SAS_TOKEN, LAN_EDGE_TEMPLATE_VERSIONS, NAT_TEMPLATE_SUPPORT, DEVICE_SERIAL_NUMBER_PATTERN
+from constants import SAS_TOKEN, LAN_EDGE_TEMPLATE_VERSIONS, DEVICE_SERIAL_NUMBER_PATTERN
 
 # IoT Hub identity registry characters; dot segments need an additional URL-safety check.
 _IOTHUB_ID_RE = re.compile(r"[A-Za-z0-9\-.%_*?!(),:=@$']{1,128}")
@@ -167,14 +167,6 @@ class DeviceInfo:
                 f"this function is only supported by devices using the <{LAN_EDGE_TEMPLATE_VERSIONS}>"
                 f" template. Currently <{self._device_info['template']['representation']}> is in use",
                 status_code=400)
-
-    def check_nat_support(self):
-        if self._device_info["template"]["representation"] not in NAT_TEMPLATE_SUPPORT:
-            raise UnmatchedDependency(
-                f"NAT functionalities are only supported by templates: {NAT_TEMPLATE_SUPPORT}."
-                f"Currently <{self._device_info['template']['representation']}> is in use",
-                status_code=400
-            )
 
     def get_device_variables_dict(self):
         return self._device_variables_dict
