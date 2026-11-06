@@ -337,6 +337,7 @@ class ABACDeviceCreateCheck:
         request: Request,
         auth_context: dict = Depends(validate_jwt),
         user_repo: UserRepository = Depends(get_repository(UserRepository)),
+        device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
     ) -> ABACPermissionCheckResult:
         user_id = auth_context.get("oid") or auth_context.get("sub")
         user_name = get_current_user(auth_context)
@@ -371,6 +372,7 @@ class ABACDeviceCreateCheck:
             if not isinstance(meta, dict):
                 raise APIError("'meta' must be a JSON object", 400)
 
+            meta = await device_repo.prepare_device_metadata(meta, body.get("type_id") or "default")
             if not evaluate_permission(self.permission, user_data, meta):
                 raise InsufficientPermissions(
                     "Device metadata is not within any assigned scope", status_code=403
