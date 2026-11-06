@@ -235,3 +235,63 @@ UPDATE platform
 SET platform_meta = '{"city": null, "customer": null, "myCustomKey": null}'::jsonb
 WHERE name = 'default';
 ```
+
+# Device defaults cutover backfill
+
+Run from the repository root using the API's configured `POSTGRES_URL`:
+
+```bash
+.venv/bin/python -m scripts.backfill_device_defaults          # dry run, rolls back
+.venv/bin/python -m scripts.backfill_device_defaults --apply  # commit explicitly
+```
+
+The script fills absent device metadata keys from each device type's current effective
+defaults, including default-type fields and type-specific overrides. It preserves every
+stored value, including explicit null, and is safe to rerun. Output counts field values,
+not distinct devices. Dry run executes the updates transactionally and rolls them back;
+both modes briefly lock affected rows. Errors abort the transaction and exit unsuccessfully.
+Non-object device metadata (JSON null, arrays, or scalar values) on affected types is
+rejected before any fields are filled; the error identifies the device needing repair.
+Null field values inside a valid metadata object remain preserved.
+It makes no IoT Hub/SEMS calls.
+
+Use this after importing legacy data and before serving devices, preferably while writes
+are paused. It preserves current defaults, not unknown historical defaults. This is an
+explicit normalization tool, not an automatic migration or a routine default-change job.
+
+# Remove undefined device fields (development/testing)
+
+From the repository root, using the configured `POSTGRES_URL`:
+
+```bash
+.venv/bin/python -m scripts.remove_undefined_device_fields --fields test legacy_field --deviceType default
+.venv/bin/python -m scripts.remove_undefined_device_fields --all-fields --deviceType default
+.venv/bin/python -m scripts.remove_undefined_device_fields --fields test --all-device-types
+.venv/bin/python -m scripts.remove_undefined_device_fields --all
+```
+
+Both selections must be explicit:
+
+- `--fields <name> [name ...]` or `--all-fields`.
+- `--deviceType <type_id>` or `--all-device-types`.
+- `--all` is shorthand for `--all-fields --all-device-types` and cannot be combined
+  with either selection's flags.
+
+`--deviceType` takes the exact stored type ID (e.g. `default` or a UUID), not its display
+label. Unknown IDs fail explicitly rather than reporting zero matches. Old positional
+field arguments are no longer accepted; use `--fields` instead. Missing either selection
+fails without running cleanup. Names select only those fields, and only on devices whose
+effective type does not define them. Any all-selection requires typing `ALL` to continue,
+including for dry runs.
+Default-type and type-specific fields are always preserved, regardless of their values.
+For a field name beginning with `--`, use `--fields=--old-field`.
+
+Dry-run is the default: updates are rolled back. Only `--apply` commits. Output counts
+removed field values and affected devices, and states the selected fields/type.
+To persist one of the commands above, add `--apply`.
+The script changes device metadata only;
+type definitions, endpoints, services and external systems are untouched. Custom fields
+that were intentionally stored outside the schema will also be removed if selected.
+Removing scope metadata may affect access. Use a backed-up development/test database,
+preferably with writes paused; the transaction locks type definitions and device rows.
+This utility is not part of normal API behavior or startup.

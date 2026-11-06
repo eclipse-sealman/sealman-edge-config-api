@@ -14,11 +14,13 @@ class TypedEntity(Protocol):
 def resolve_fields(
     instance_data: Dict[str, Any],
     type_fields: Dict[str, Any],
+    *,
+    apply_defaults: bool = True,
 ) -> Dict[str, Any]:
     resolved: Dict[str, Any] = {}
     for field_key, field_def in type_fields.items():
         value = instance_data.get(field_key)
-        if value is None:
+        if value is None and apply_defaults:
             value = field_def.get("default")
         resolved[field_key] = {
             "value": value,
@@ -28,6 +30,18 @@ def resolve_fields(
         if data_key not in type_fields:
             resolved[data_key] = {"value": data_value, "field": None}
     return resolved
+
+
+def materialize_defaults(
+    instance_data: Dict[str, Any],
+    type_fields: Dict[str, Any],
+) -> Dict[str, Any]:
+    defaults = {
+        key: definition["default"]
+        for key, definition in type_fields.items()
+        if definition.get("default") is not None
+    }
+    return {**defaults, **instance_data}
 
 
 def merge_type_fields(
@@ -83,6 +97,8 @@ def reject_non_changeable_updates(
 def patch_fields(
     current_fields: Dict[str, Any],
     field_patches: Dict[str, Any],
+    *,
+    clear_defaults: bool = False,
 ) -> Dict[str, Any]:
     result = dict(current_fields)
     for field_key, field_patch in field_patches.items():
@@ -91,6 +107,8 @@ def patch_fields(
         else:
             existing = dict(result.get(field_key, {}))
             existing.update({k: v for k, v in field_patch.items() if v is not None})
+            if clear_defaults and "default" in field_patch and field_patch["default"] is None:
+                existing.pop("default", None)
             result[field_key] = existing
     return result
 

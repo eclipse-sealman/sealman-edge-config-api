@@ -56,6 +56,29 @@ python main.py
 
 OpenAPI docs: <http://localhost:5000/docs>
 
+## Device field defaults
+
+Device defaults initialize stored metadata; they are not substituted on reads.
+Creation fills absent fields from the device type's effective defaults before validation
+and scope evaluation. Fields from the `default` type still apply to other types, with
+type-specific definitions taking precedence.
+
+Adding a field with a default, or assigning its first default, fills only absent keys on
+devices of the affected types, in the same transaction as the type edit. Existing values
+(including explicit null, false, zero, and empty strings) are preserved. Changing an
+existing default affects only future devices. Removing defaults/definitions does not
+erase stored metadata, and clearing an optional device value does not reapply a default.
+Endpoint/service defaults are unchanged. A device's type is assigned at creation and
+cannot be changed afterwards; editing the type definition remains supported.
+
+Type edits validate the final effective field definitions under lock, before backfilling
+or committing. Backfill rejects non-object metadata on affected device types and aborts
+without committing partial changes.
+
+For legacy imports or existing devices with unstored defaults, use the
+[explicit cutover backfill](scripts/README.md#device-defaults-cutover-backfill).
+There is no automatic startup data migration.
+
 ## Extension system side apps
 
 Alongside the public app, the extension system starts two additional,

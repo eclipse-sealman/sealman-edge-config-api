@@ -606,6 +606,11 @@ class TestABACPermissionCheckFailClosed:
 class TestABACDeviceCreateCheck:
     AUTH = {"oid": "user-oid-123", "name": "Test User"}
 
+    def _device_repo(self):
+        repo = AsyncMock()
+        repo.prepare_device_metadata.side_effect = lambda meta, type_id: meta
+        return repo
+
     def _request(self, body=None, invalid_json=False):
         request = MagicMock()
         request.path_params = {"device_id": "new-device"}
@@ -651,7 +656,7 @@ class TestABACDeviceCreateCheck:
         from authorization.abac_permission_check import ABACDeviceCreateCheck
         repo = self._repo(teams=[self._team(["device.create"])])
         result = await ABACDeviceCreateCheck("device.create")(
-            self._request({"meta": {"region": "US"}}), self.AUTH, repo
+            self._request({"meta": {"region": "US"}}), self.AUTH, repo, self._device_repo()
         )
         assert result["permission"] == "device.create"
 
@@ -660,7 +665,9 @@ class TestABACDeviceCreateCheck:
         from authorization.abac_permission_check import ABACDeviceCreateCheck
         scope = {"attr": {"region": "EU"}, "access_rule": "ALL"}
         repo = self._repo(teams=[self._team(["device.create"], scope)])
-        await ABACDeviceCreateCheck("device.create")(self._request({"meta": {"region": "EU"}}), self.AUTH, repo)
+        await ABACDeviceCreateCheck("device.create")(
+            self._request({"meta": {"region": "EU"}}), self.AUTH, repo, self._device_repo()
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("body", [{"meta": {"region": "US"}}, {"meta": {}}, {}, {"meta": None}])
@@ -669,7 +676,7 @@ class TestABACDeviceCreateCheck:
         scope = {"attr": {"region": "EU"}, "access_rule": "ALL"}
         repo = self._repo(teams=[self._team(["device.create"], scope)])
         with pytest.raises(InsufficientPermissions) as exc:
-            await ABACDeviceCreateCheck("device.create")(self._request(body), self.AUTH, repo)
+            await ABACDeviceCreateCheck("device.create")(self._request(body), self.AUTH, repo, self._device_repo())
         assert exc.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -679,7 +686,9 @@ class TestABACDeviceCreateCheck:
         us = {"attr": {"region": "US"}, "access_rule": "ALL"}
         repo = self._repo(teams=[self._team(["device.create"], eu), self._team(["device.read"], us)])
         with pytest.raises(InsufficientPermissions):
-            await ABACDeviceCreateCheck("device.create")(self._request({"meta": {"region": "US"}}), self.AUTH, repo)
+            await ABACDeviceCreateCheck("device.create")(
+                self._request({"meta": {"region": "US"}}), self.AUTH, repo, self._device_repo()
+            )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("body,invalid", [([1], False), ({"meta": "x"}, False), (None, True)])
