@@ -13,16 +13,20 @@ Bootstrap flow
      this is the normal case on every restart after the first run.
   2. Service-account login: authenticate for all subsequent setup work.
   3. Disable fixture admin (via the service account session, only when step 1 ran).
-  4. Config + Template: find-or-create the Twig device config, template,
-     and production template version.
+  4. Config + Template: find-or-create the template. If the production template
+     version does not use the current Twig content, create a new config
+     (name suffixed with a content hash) and promote it as new production version.
+     SEMS denies editing a config used in production, hence the new version.
 """
 
+import hashlib
 import time
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 import httpx
 
-from async_requests import post_async
+from async_requests import get_async, post_async
 from constants import (
     SEMS_URL,
     SEMS_USER,
@@ -51,8 +55,12 @@ _FIXTURE_PASS = "admin"
 
 def _load_config_content() -> str:
     _log.info("Loading config content from '%s'", _CONFIG_FILE)
-    with open(_CONFIG_FILE) as fh:
-        return fh.read()
+    with open(_CONFIG_FILE, encoding="utf-8") as fh:
+        return _normalize(fh.read())
+
+
+def _normalize(content: str) -> str:
+    return content.replace("\r\n", "\n")
 
 
 def _auth_header(token: str) -> dict:
@@ -113,6 +121,14 @@ async def _login(username: str, password: str) -> str | None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared list/find helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+async def _get(path: str, token: str) -> dict:
+    url = f"{SEMS_URL}{path}"
+    resp = {}
+    await get_async(url, resp, headers=_auth_header(token))
+    resp[url].raise_for_status()
+    return resp[url].json()
+
 
 async def _find_one(path: str, field: str, value: str, token: str) -> dict | None:
     """Return the first result where `field` equals `value`, or None."""
@@ -200,13 +216,13 @@ async def _disable_fixture_admin(token: str) -> None:
 # Step 4 — Config + Template setup
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _ensure_config(token: str, device_type_id: int, content: str) -> int:
-    existing = await _find_one("/web/api/config/list", "name", BOOTSTRAP_SEMS_CONFIG_NAME, token)
+async def _ensure_config(token: str, device_type_id: int, content: str, name: str) -> int:
+    existing = await _find_one("/web/api/config/list", "name", name, token)
     if existing:
-        _log.info("Config '%s' already exists (id=%s) — skipping creation", BOOTSTRAP_SEMS_CONFIG_NAME, existing["id"])
+        _log.info("Config '%s' already exists (id=%s) — skipping creation", name, existing["id"])
         return existing["id"]
 
-    _log.info("Creating config '%s' for device type %d…", BOOTSTRAP_SEMS_CONFIG_NAME, device_type_id)
+    _log.info("Creating config '%s' for device type %d…", name, device_type_id)
     url = f"{SEMS_URL}/web/api/config/create"
     resp = {}
     await post_async(
@@ -214,7 +230,7 @@ async def _ensure_config(token: str, device_type_id: int, content: str) -> int:
         _json={
             "deviceType": str(device_type_id),
             "feature": "1",  # '1' = PRIMARY
-            "name": BOOTSTRAP_SEMS_CONFIG_NAME,
+            "name": name,
             "generator": "twig",
             "content": content,
         },
@@ -246,27 +262,32 @@ async def _ensure_template(token: str, device_type_id: int) -> dict:
     return template
 
 
-async def _push_to_production(token: str, template: dict, config_id: int) -> None:
+async def _production_config_content(token: str, template: dict) -> str | None:
+    """Return the Twig content of the template's current production version, or None."""
+    production = template.get("productionTemplate")
+    if not production:
+        return None
+    template_version = await _get(f"/web/api/templateversion/{production['id']}", token)
+    config_id = (template_version.get("config1") or {}).get("id")
+    if config_id is None:
+        return None
+    config = await _get(f"/web/api/config/{config_id}", token)
+    return _normalize(config.get("content") or "")
+
+
+async def _push_to_production(token: str, template_id: int, config_id: int, version_name: str) -> None:
     """
     Create a staging template version and promote it to production.
-    Skips if the template already has a production version — we do not
-    overwrite an existing production rollout from the bootstrap script.
 
     SEMS promotion sequence:
       create/staging  →  select/staging  →  select/production
     """
-    if template.get("productionTemplate"):
-        _log.info("Template already has a production version — skipping push to production")
-        return
-
-    template_id = template["id"]
-
-    _log.info("Creating staging template version for template id=%d…", template_id)
+    _log.info("Creating staging template version '%s' for template id=%d…", version_name, template_id)
     url_create = f"{SEMS_URL}/web/api/templateversion/create/staging/{template_id}"
     resp = {}
     await post_async(
         url_create, resp,
-        _json={"name": "v1.0", "variables": [], "config1": str(config_id)},
+        _json={"name": version_name, "variables": [], "config1": str(config_id)},
         headers=_auth_header(token),
     )
     resp[url_create].raise_for_status()
@@ -299,9 +320,19 @@ async def _config_template_setup(token: str) -> None:
     _log.info("Device type '%s' found (id=%d)", BOOTSTRAP_SEMS_DEVICE_TYPE, device_type_id)
 
     content = _load_config_content()
-    config_id = await _ensure_config(token, device_type_id, content)
     template = await _ensure_template(token, device_type_id)
-    await _push_to_production(token, template, config_id)
+
+    if await _production_config_content(token, template) == content:
+        _log.info("Production template version already uses the current config — nothing to roll out")
+        return
+
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
+    _log.info("Config content changed (hash %s) — rolling out new production template version", content_hash)
+    config_id = await _ensure_config(
+        token, device_type_id, content, f"{BOOTSTRAP_SEMS_CONFIG_NAME}-{content_hash}"
+    )
+    version_name = f"{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{content_hash}"
+    await _push_to_production(token, template["id"], config_id, version_name)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

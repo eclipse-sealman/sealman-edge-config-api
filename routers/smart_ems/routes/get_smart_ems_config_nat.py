@@ -9,7 +9,6 @@ async def get_smart_ems_config_nat(device: str):
     device_info = DeviceInfo(device_by_serial)
 
     device_info.check_eligibility()
-    device_info.check_nat_support()
 
     device_variables_dict = device_info.get_device_variables_dict()
     nat_rules = []

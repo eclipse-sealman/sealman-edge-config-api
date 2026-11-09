@@ -849,6 +849,45 @@ class SmartEMS:
                 status_code=resp[uri].status_code,
             )
 
+    @classmethod
+    async def delete_variable_for_all_devices(cls, name: str):
+        """Remove a variable from ALL devices using SEMS batch endpoint."""
+
+        devices = await cls.get_device_list()
+        device_ids = [d["id"] for d in devices if d.get("id")]
+
+        if not device_ids:
+            cls._log.warning("No devices found for batch variable deletion")
+            return False
+
+        uri = f"{SEMS_URL}/web/api/device/batch/variable/delete"
+
+        body = {
+            "sorting": [{"field": "id", "direction": "asc"}],
+            "ids": device_ids,
+            "name": name,
+        }
+
+        resp = {}
+        await post_async(
+            uri,
+            resp,
+            _json=body,
+            headers={"Authorization": f"Bearer {cls._token}"},
+            timeout=30,
+        )
+
+        if resp[uri].status_code in [200, 204]:
+            cls._log.info(
+                f"Successfully deleted variable '{name}' from {len(device_ids)} devices"
+            )
+            return True
+        else:
+            raise SEMSError(
+                f"{SEMS_ERROR_MESSAGE}: batch variable delete failed",
+                status_code=resp[uri].status_code,
+            )
+
 
 def generate_resp_from_device_info(device_info):
     """Generate response body from device info for edit_device API calls"""

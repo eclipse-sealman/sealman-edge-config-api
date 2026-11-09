@@ -2,6 +2,7 @@ from fastapi import Depends
 from routers.base_api_router import BaseAPIRouter
 from db.repos.device_template import DeviceTemplateRepository
 from db.session import get_repository
+from smart_ems import SmartEMS
 
 from .schemas import (
     TemplateListResponse,
@@ -63,6 +64,7 @@ async def set_template_variable(
     _ = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None)),
 ):
     variables = await repo.set_template_variable(name, request.value)
+    await SmartEMS.set_variable_for_all_devices(name=name, value=request.value)
     return TemplateVariableListResponse(variables=variables)
 
 
@@ -73,4 +75,5 @@ async def delete_template_variable(
     _ = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None)),
 ):
     await repo.delete_template_variable(name)
+    await SmartEMS.delete_variable_for_all_devices(name=name)
     return {"status": "deleted"}
