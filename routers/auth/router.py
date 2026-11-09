@@ -295,6 +295,24 @@ async def get_platform_permissions(
     )
 
 
+@auth.get("/permissions/device-create", response_model=UserPermissions)
+async def get_device_create_permissions(
+    auth_context: dict = Depends(validate_jwt),
+    user_repo: UserRepository = Depends(get_repository(UserRepository)),
+):
+    user_id = auth_context.get("oid") or auth_context.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=403, detail="User identifier missing from token")
+
+    user_data = await user_repo.get_teams_with_roles_and_scopes(user_id)
+    if user_data is None:
+        raise HTTPException(status_code=403, detail="User not found")
+
+    return UserPermissions(
+        permissions=[Device.CREATE] if evaluate_permission(Device.CREATE, user_data) else [],
+    )
+
+
 @auth.get("/permissions/device", response_model=UserPermissions)
 async def get_device_permissions(
     device_id: str,
