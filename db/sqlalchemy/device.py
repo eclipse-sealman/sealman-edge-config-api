@@ -9,7 +9,8 @@ from db.models.device_type import DeviceType
 from db.models.endpoint import Endpoint
 from db.registry import register_repository
 from db.repos.device import DeviceRepository
-from db.merge import resolve_fields, validate_instance_data, patch_data, merge_type_fields
+from db.merge import resolve_fields, validate_instance_data, patch_data, merge_type_fields, materialize_defaults
+from db.sqlalchemy.device_defaults import effective_type_fields
 from exceptions import APIError
 
 
@@ -92,7 +93,7 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
 
         device_type = await self._get_device_type_or_raise(row["type_id"])
         effective_fields = await self._effective_fields_for(device_type)
-        resolved = resolve_fields(row["device_data"] or {}, effective_fields)
+        resolved = resolve_fields(row["device_data"] or {}, effective_fields, apply_defaults=False)
 
         return {
             "device_id": row["device_id"],
@@ -149,7 +150,7 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
             "device_id": device.device_id,
             "type_id": device.type_id,
             "device_metadata": resolve_fields(
-                device.device_data or {}, effective_fields
+                device.device_data or {}, effective_fields, apply_defaults=False
             ),
             "created_at": device.created_at,
             "updated_at": device.updated_at,
@@ -176,7 +177,7 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         for device in devices:
             device_data = device.get("device_data") or {}
             type_fields = fields_by_type.get(device.get("type_id"), {})
-            resolved = resolve_fields(device_data, type_fields)
+            resolved = resolve_fields(device_data, type_fields, apply_defaults=False)
 
             response.append(
                 {
@@ -204,9 +205,15 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         if not device:
             return None
 
-        device_type = await self._get_device_type_or_raise(device.type_id)
+        effective_fields = await self._locked_type_fields(device.type_id)
+        result = await self._session.execute(
+            select(Device).where(Device.device_id == device_id).with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        device = result.scalar_one_or_none()
+        if device is None:
+            return None
         merged_data = patch_data(device.device_data or {}, metadata)
-        effective_fields = await self._effective_fields_for(device_type)
         validate_instance_data(merged_data, effective_fields)
 
         stmt = (
@@ -247,14 +254,36 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         device = await self._get_device(device_id)
         return device is not None
 
+    async def _locked_type_fields(self, type_id: str) -> Dict[str, Any]:
+        # Hold schema locks through authorization and insertion so a concurrent type edit
+        # cannot change the defaults after the proposed metadata has passed its scope check.
+        result = await self._session.execute(
+            select(DeviceType)
+            .where(DeviceType.type_id.in_(["default", type_id]))
+            .order_by(DeviceType.type_id)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        )
+        fields_by_type = effective_type_fields(list(result.scalars().all()))
+        if type_id not in fields_by_type:
+            raise APIError(f"DeviceType '{type_id}' not found", 404)
+        return fields_by_type[type_id]
+
+    async def prepare_device_metadata(
+        self, metadata: Dict[str, Any], type_id: str = "default"
+    ) -> Dict[str, Any]:
+        fields = await self._locked_type_fields(type_id)
+        return materialize_defaults(metadata, fields)
+
     async def create_device(
         self, device_id: str, metadata: Dict[str, Any], type_id: str = "default"
     ):
+        metadata = await self.prepare_device_metadata(metadata or {}, type_id)
         device_type = await self._get_device_type_or_raise(type_id)
         effective_fields = await self._effective_fields_for(device_type)
         validate_instance_data(metadata or {}, effective_fields)
 
-        device = Device(device_id=device_id, type_id=type_id, device_data=metadata or {})
+        device = Device(device_id=device_id, type_id=type_id, device_data=metadata)
         self._session.add(device)
         await self._session.commit()
         await self._session.refresh(device)

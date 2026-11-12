@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Optional
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import select, update, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,7 +7,9 @@ from db.models.device_type import DeviceType
 from db.registry import register_repository
 from db.repos.device_type import DeviceTypeRepository
 from db.merge import patch_fields, merge_type_fields
-from exceptions import APIError
+from db.sqlalchemy.device_defaults import effective_type_fields, backfill_device_defaults
+from exceptions import APIError, ValidationError
+from routers.schemas import FieldDefinition
 
 DEFAULT_TYPE_ID = "default"
 
@@ -108,6 +111,14 @@ class SqlAlchemyDeviceTypeRepository(DeviceTypeRepository):
         description: Optional[str] = None,
         fields: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
+        old_fields_by_type = {}
+        if fields is not None:
+            result = await self._session.execute(
+                select(DeviceType).order_by(DeviceType.type_id).with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            types = list(result.scalars().all())
+            old_fields_by_type = effective_type_fields(types)
         dt = await self._get_device_type_or_raise(type_id)
         values: Dict[str, Any] = {}
         if label is not None:
@@ -116,15 +127,47 @@ class SqlAlchemyDeviceTypeRepository(DeviceTypeRepository):
         if description is not None:
             values["description"] = description
         if fields is not None:
-            values["fields"] = patch_fields(dt.fields or {}, fields)
+            own_fields = dt.fields or {}
+            # Partial edits of mirrored fields must retain their inherited definition.
+            patch_base = {
+                **{key: old_fields_by_type[type_id][key] for key, patch in fields.items()
+                   if patch is not None and key in old_fields_by_type[type_id]},
+                **own_fields,
+            }
+            values["fields"] = patch_fields(patch_base, fields, clear_defaults=True)
+            effective_fields = (
+                values["fields"] if type_id == DEFAULT_TYPE_ID
+                else merge_type_fields(old_fields_by_type.get(DEFAULT_TYPE_ID, {}), values["fields"])
+            )
+            for field_key, definition in effective_fields.items():
+                try:
+                    FieldDefinition.model_validate(definition)
+                except PydanticValidationError as exc:
+                    raise ValidationError(f"Invalid field '{field_key}': {exc}", 422) from exc
+            dt.fields = values["fields"]
+            new_fields_by_type = effective_type_fields(types)
+            newly_defaulted = {
+                affected_type: {
+                    key: definition
+                    for key, definition in new_fields.items()
+                    if definition.get("default") is not None
+                    and old_fields_by_type[affected_type].get(key, {}).get("default") is None
+                }
+                for affected_type, new_fields in new_fields_by_type.items()
+            }
         if values:
             try:
+                if fields is not None:
+                    await backfill_device_defaults(self._session, newly_defaulted)
                 await self._session.execute(
                     update(DeviceType)
                     .where(DeviceType.type_id == type_id)
                     .values(**values)
                 )
                 await self._session.commit()
+            except APIError:
+                await self._session.rollback()
+                raise
             except IntegrityError:
                 await self._session.rollback()
                 raise APIError(f"DeviceType label '{label}' already exists", 409)
