@@ -26,3 +26,9 @@ class TemplateVariableListResponse(BaseModel):
 
 class SetTemplateVariableRequest(BaseModel):
     value: str
+
+
+# ---------- Platform Functions ----------
+
+class PlatformFunctions(BaseModel):
+    network_scan_enabled: bool
