@@ -26,26 +26,31 @@ from db.repos.network_range import NetworkRangeRepository
 from db.repos.host_status import HostStatusRepository
 from db.repos.scan_ports import ScanPortsRepository
 from db.session import get_repository
+from routers.platform_configuration.network_scan_guard import require_network_scan_enabled
 
 
 network_discovery = BaseAPIRouter()
 
+# Everything scan-related is unavailable while the network scan function is disabled platform-wide;
+# only `/network/last-known` (configured assets, no scan) stays reachable.
+_scan_enabled = [Depends(require_network_scan_enabled)]
+
 @network_discovery.post("/{device}/network/discover", tags=["Network Discovery"],
-                        response_model=DirectMethod[NetworkScan])
+                        response_model=DirectMethod[NetworkScan], dependencies=_scan_enabled)
 async def post_network_discover(device: str, network_discover: NetworkDiscover,
                                  auth_context = Depends(ABACPermissionCheck(Device.NETWORK_DISCOVER))):
     return await _post_network_discover2(device, network_discover, auth_context)
 
 
 @network_discovery.get("/{device}/network/topology", tags=["Network Discovery"],
-                       response_model=Union[NetworkScan, None])
+                       response_model=Union[NetworkScan, None], dependencies=_scan_enabled)
 async def get_network_topology(device: str,
                                 _ = Depends(ABACPermissionCheck(Device.ENDPOINT_READ))):
     return await _get_network_topology(device)
 
 
 @network_discovery.post("/{device}/network/overview", tags=["Network"],
-                        response_model=NetworkOverview)
+                        response_model=NetworkOverview, dependencies=_scan_enabled)
 async def post_network_overview(device: str, scan: NetworkScan,
                                  endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
                                  service_repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
@@ -66,7 +71,7 @@ async def get_network_last_known(device: str,
 
 
 @network_discovery.get("/{device}/network/scan-ports", tags=["Network"],
-                       response_model=List[int])
+                       response_model=List[int], dependencies=_scan_enabled)
 async def get_network_scan_ports(device: str,
                                   endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
                                   service_repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
@@ -76,7 +81,7 @@ async def get_network_scan_ports(device: str,
 
 
 @network_discovery.post("/{device}/network/scan-ports", tags=["Network"],
-                        response_model=List[int])
+                        response_model=List[int], dependencies=_scan_enabled)
 async def post_network_scan_ports(device: str, body: DeviceScanPortsAdd,
                                    scan_ports_repo: ScanPortsRepository = Depends(get_repository(ScanPortsRepository)),
                                    _ = Depends(ABACPermissionCheck(Device.NETWORK_WRITE))):
@@ -84,7 +89,7 @@ async def post_network_scan_ports(device: str, body: DeviceScanPortsAdd,
 
 
 @network_discovery.get("/{device}/network/scan-range", tags=["Network"],
-                       response_model=Optional[NetworkRange])
+                       response_model=Optional[NetworkRange], dependencies=_scan_enabled)
 async def get_network_scan_range(device: str,
                                   endpoint_repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
                                   network_range_repo: NetworkRangeRepository = Depends(get_repository(NetworkRangeRepository)),
@@ -101,14 +106,14 @@ _scan_ports_write = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_pa
 
 
 @network_discovery.get("/network/default-scan-ports", tags=["Network"],
-                       response_model=List[int])
+                       response_model=List[int], dependencies=_scan_enabled)
 async def get_default_scan_ports(scan_ports_repo: ScanPortsRepository = Depends(get_repository(ScanPortsRepository)),
                                   _auth=_scan_ports_read):
     return await _get_default_scan_ports(scan_ports_repo)
 
 
 @network_discovery.post("/network/default-scan-ports", tags=["Network"],
-                        response_model=List[int])
+                        response_model=List[int], dependencies=_scan_enabled)
 async def post_default_scan_port(body: DefaultScanPortCreate,
                                   scan_ports_repo: ScanPortsRepository = Depends(get_repository(ScanPortsRepository)),
                                   _auth=_scan_ports_write):
@@ -116,7 +121,7 @@ async def post_default_scan_port(body: DefaultScanPortCreate,
 
 
 @network_discovery.delete("/network/default-scan-ports/{port}", tags=["Network"],
-                          response_model=List[int])
+                          response_model=List[int], dependencies=_scan_enabled)
 async def delete_default_scan_port(port: int,
                                     scan_ports_repo: ScanPortsRepository = Depends(get_repository(ScanPortsRepository)),
                                     _auth=_scan_ports_write):
