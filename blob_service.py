@@ -8,6 +8,13 @@ with support for SAS token and WorkloadIdentity authentication.
 from azure.storage.blob.aio import BlobServiceClient, ContainerClient
 from azure.identity.aio import WorkloadIdentityCredential
 from exceptions import APIError
+from urllib.parse import quote
+
+
+def blob_url(account_name: str, container: str, name: str, sas_token: str,
+             account_url: str | None = None) -> str:
+    base = (account_url or f"https://{account_name}.blob.core.windows.net").rstrip("/")
+    return f"{base}/{container}/{quote(name, safe='/')}?{sas_token.lstrip('?')}"
 
 
 class BlobContainerContext:
@@ -24,7 +31,8 @@ class BlobContainerContext:
             await blob.upload_blob(data, overwrite=True)
     """
     
-    def __init__(self, storage_account_name: str, container_name: str, sas_token: str | None = None):
+    def __init__(self, storage_account_name: str, container_name: str, sas_token: str | None = None,
+                 account_url: str | None = None):
         """
         Initialize the blob container context.
         
@@ -36,6 +44,7 @@ class BlobContainerContext:
         self.storage_account_name = storage_account_name
         self.container_name = container_name
         self.sas_token = sas_token
+        self.account_url = account_url
         self._blob_service_client: BlobServiceClient | None = None
         self._container_client: ContainerClient | None = None
         self._credential = None
@@ -51,13 +60,16 @@ class BlobContainerContext:
             raise APIError("Storage account name is not properly configured.", status_code=500)
         
         # Construct the full Azure Blob Storage URL
-        storage_account_url = f"https://{self.storage_account_name}.blob.core.windows.net"
+        storage_account_url = (
+            self.account_url or f"https://{self.storage_account_name}.blob.core.windows.net"
+        ).rstrip("/")
         
         try:
             if self.sas_token:
                 # Use SAS token authentication
-                sas_url = f"{storage_account_url}?{self.sas_token}"
-                self._blob_service_client = BlobServiceClient(account_url=sas_url)
+                self._blob_service_client = BlobServiceClient(
+                    account_url=storage_account_url, credential=self.sas_token.lstrip("?")
+                )
             else:
                 # Fall back to WorkloadIdentity authentication
                 self._credential = WorkloadIdentityCredential()
