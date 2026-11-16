@@ -28,6 +28,11 @@ class SetTemplateVariableRequest(BaseModel):
     value: str
 
 
+class TestDeviceConfigResponse(BaseModel):
+    valid: bool
+    message: str
+
+
 # ---------- Platform Functions ----------
 
 class PlatformFunctions(BaseModel):

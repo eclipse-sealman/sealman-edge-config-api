@@ -13,9 +13,10 @@ from .schemas import (
     SelectedTemplatesRequest,
     TemplateVariableListResponse,
     SetTemplateVariableRequest,
+    TestDeviceConfigResponse,
 )
 
-from .service import (get_available_templates)
+from .service import (get_available_templates, test_device_config)
 
 from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Platform
@@ -81,6 +82,14 @@ async def delete_template_variable(
     await repo.delete_template_variable(name)
     await SmartEMS.delete_variable_for_all_devices(name=name)
     return {"status": "deleted"}
+
+
+@platform_config.post("/test-device-config", response_model=TestDeviceConfigResponse)
+async def test_device_config_route(
+    repo: DeviceTemplateRepository = Depends(get_repository(DeviceTemplateRepository)),
+    _ = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None)),
+):
+    return await test_device_config(await repo.get_template_variables())
 
 
 # ==================== PLATFORM FUNCTIONS ====================

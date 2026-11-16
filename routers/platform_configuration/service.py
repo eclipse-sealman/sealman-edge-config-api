@@ -1,9 +1,13 @@
 import json
-from typing import Any, List
-from constants import SEMS_URL
+import logging
+import secrets
+from typing import Any, Dict, List
+from constants import SEMS_URL, BOOTSTRAP_SEMS_TEMPLATE_NAME
 from exceptions import APIError
 from smart_ems import SmartEMS
 from async_requests import post_async
+
+logger = logging.getLogger("EdgeConfigAPI")
 
 
 EDGE_ALLOWED_TYPES = [
@@ -56,3 +60,40 @@ async def get_available_templates(selected_names: List[str]):
         raise
     except Exception as ex:
         raise APIError(f"Failed to fetch templates from SEMS: {str(ex)}", 500)
+
+
+async def test_device_config(template_variables: Dict[str, str]) -> Dict[str, Any]:
+    """Render the bootstrap config for a throwaway SEMS device using the given platform variables."""
+    serial = f"99{secrets.randbelow(10**10):010d}"
+    variables = {k: str(v) for k, v in template_variables.items() if v}
+    variables["azure_provisioning"] = "dps"
+    sems_device_id = None
+
+    try:
+        template = await SmartEMS.get_template_by_template_name(BOOTSTRAP_SEMS_TEMPLATE_NAME)
+        await SmartEMS.create_device({
+            "name": serial,
+            "serialNumber": serial,
+            "registrationId": serial,
+            "description": "Temporary device for platform config test",
+            "deviceType": str(template.get("deviceType", {}).get("id", 9)),
+            "variables": [{"name": n, "variableValue": v} for n, v in variables.items()],
+            "enabled": True,
+            "staging": False,
+            "template": template.get("id"),
+        })
+        sems_device = await SmartEMS.get_device_by_serial(serial, require_template=False)
+        sems_device_id = sems_device["id"]
+        await SmartEMS.device_config_download(sems_device_id)
+        return {"valid": True, "message": "The device configuration could be generated successfully."}
+    except Exception as ex:
+        return {"valid": False, "message": str(ex)}
+    finally:
+        try:
+            if sems_device_id is None:
+                leftover = await SmartEMS.get_device_by_serial(serial, require_template=False)
+                sems_device_id = leftover["id"] if leftover else None
+            if sems_device_id is not None:
+                await SmartEMS.delete_device(sems_device_id)
+        except Exception as cleanup_error:
+            logger.warning(f"Could not delete test device {serial} from SEMS: {cleanup_error}")
