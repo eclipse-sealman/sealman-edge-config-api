@@ -1,5 +1,4 @@
-"""Type writes require platform.config.write. Endpoint/service types need endpoint read;
-device types also support device readers and creators that need their schemas."""
+"""Asset types use asset configuration permissions and preserve device catalog reads."""
 import pytest
 
 from tests.integration.endpoint_fixtures import seed_endpoint_type, seed_service_type, unique_label
@@ -40,8 +39,8 @@ class TestEndpointTypePermissions(_NonAdmin):
         assert (await client.patch(f"/endpoint-types/{type_id}", json={"label": unique_label()})).status_code == 403
         assert (await client.delete(f"/endpoint-types/{type_id}")).status_code == 403
 
-    async def test_platform_config_write_can_create_patch_and_delete(self, client, db_session):
-        await _grant(db_session, "platform.config.write")
+    async def test_asset_config_write_can_create_patch_and_delete(self, client, db_session):
+        await _grant(db_session, "platform.asset.config.write")
         created = await client.post("/endpoint-types", json={"label": unique_label()})
         assert created.status_code == 201, created.text
         type_id = created.json()["type_id"]
@@ -54,8 +53,8 @@ class TestEndpointTypePermissions(_NonAdmin):
         assert (await client.get("/endpoint-types")).status_code == 200
         assert (await client.get(f"/endpoint-types/{type_id}")).status_code == 200
 
-    async def test_platform_config_write_alone_cannot_list(self, client, db_session):
-        await _grant(db_session, "platform.config.write")
+    async def test_asset_config_write_alone_cannot_list(self, client, db_session):
+        await _grant(db_session, "platform.asset.config.write")
         assert (await client.get("/endpoint-types")).status_code == 403
 
 
@@ -71,8 +70,8 @@ class TestServiceTypePermissions(_NonAdmin):
         assert (await client.patch(f"/service-types/{type_id}", json={"label": unique_label()})).status_code == 403
         assert (await client.delete(f"/service-types/{type_id}")).status_code == 403
 
-    async def test_platform_config_write_can_create_patch_and_delete(self, client, db_session):
-        await _grant(db_session, "platform.config.write")
+    async def test_asset_config_write_can_create_patch_and_delete(self, client, db_session):
+        await _grant(db_session, "platform.asset.config.write")
         created = await client.post("/service-types", json={"label": unique_label()})
         assert created.status_code == 201, created.text
         type_id = created.json()["type_id"]
@@ -85,8 +84,8 @@ class TestServiceTypePermissions(_NonAdmin):
         assert (await client.get("/service-types")).status_code == 200
         assert (await client.get(f"/service-types/{type_id}")).status_code == 200
 
-    async def test_platform_config_write_alone_cannot_list(self, client, db_session):
-        await _grant(db_session, "platform.config.write")
+    async def test_asset_config_write_alone_cannot_list(self, client, db_session):
+        await _grant(db_session, "platform.asset.config.write")
         assert (await client.get("/service-types")).status_code == 403
 
 
@@ -96,21 +95,21 @@ class TestDeviceTypePermissions(_NonAdmin):
         assert (await client.get("/device-types")).status_code == 403
         assert (await client.get("/device-types/default")).status_code == 403
 
-    @pytest.mark.parametrize("action", ["platform.config.read", "device.read", "device.create"])
+    @pytest.mark.parametrize("action", ["platform.asset.config.read", "device.read", "device.create"])
     async def test_catalog_read_permission_can_list_and_get(self, client, db_session, action):
         await _grant(db_session, action)
         assert (await client.get("/device-types")).status_code == 200
         assert (await client.get("/device-types/default")).status_code == 200
 
-    @pytest.mark.parametrize("action", ["platform.config.read", "device.read", "device.create"])
+    @pytest.mark.parametrize("action", ["platform.asset.config.read", "device.read", "device.create"])
     async def test_catalog_read_permission_cannot_write(self, client, db_session, action):
         await _grant(db_session, action)
         assert (await client.post("/device-types", json={"label": unique_label()})).status_code == 403
         assert (await client.patch("/device-types/default", json={"label": unique_label()})).status_code == 403
         assert (await client.delete("/device-types/default")).status_code == 403
 
-    async def test_platform_config_write_can_create_patch_and_delete(self, client, db_session):
-        await _grant(db_session, "platform.config.write")
+    async def test_asset_config_write_can_create_patch_and_delete(self, client, db_session):
+        await _grant(db_session, "platform.asset.config.write")
         created = await client.post("/device-types", json={"label": unique_label()})
         assert created.status_code == 201, created.text
         type_id = created.json()["type_id"]

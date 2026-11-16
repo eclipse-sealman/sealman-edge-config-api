@@ -2,7 +2,7 @@ from typing import List, Optional, Never
 from fastapi import HTTPException, Depends, Query, APIRouter
 from pydantic import ValidationError as PydanticValidationError
 from exceptions import APIError
-from authorization.abac_permission_check import ABACPermissionCheck, ABACResolvedDeviceCheck
+from authorization.abac_permission_check import ABACAnyPermissionCheck, ABACPermissionCheck, ABACResolvedDeviceCheck
 from authorization.permission_types import Device, Platform
 from db.repos.service import UNSET, ServiceRepository
 from db.repos.scan_ports import ScanPortsRepository
@@ -20,9 +20,8 @@ from routers.service.schemas import (
 
 services = APIRouter()
 
-# Types are platform configuration: see routers/endpoint/router.py.
-_type_read = Depends(ABACPermissionCheck(Device.ENDPOINT_READ, device_path=None))
-_type_write = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None))
+_type_read = Depends(ABACAnyPermissionCheck(Platform.ASSET_CONFIG_READ, Device.ENDPOINT_READ))
+_type_write = Depends(ABACPermissionCheck(Platform.ASSET_CONFIG_WRITE, device_path=None))
 
 _endpoint_read = Depends(ABACResolvedDeviceCheck(Device.ENDPOINT_READ, "endpoint", "endpoint_id"))
 _endpoint_write = Depends(ABACResolvedDeviceCheck(Device.ENDPOINT_WRITE, "endpoint", "endpoint_id"))

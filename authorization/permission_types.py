@@ -3,22 +3,28 @@ class Platform:
     AUTHORIZATION_WRITE = "platform.authorization.write"
     CONFIG_READ = "platform.config.read"
     CONFIG_WRITE = "platform.config.write"
+    ASSET_CONFIG_READ = "platform.asset.config.read"
+    ASSET_CONFIG_WRITE = "platform.asset.config.write"
 
     ReadPermissions = [
         AUTHORIZATION_READ,
         CONFIG_READ,
+        ASSET_CONFIG_READ,
     ]
     EditPermissions = [
         AUTHORIZATION_WRITE,
         CONFIG_WRITE,
+        ASSET_CONFIG_WRITE,
     ]
 
     _is_global = True
     _descriptions = {
         AUTHORIZATION_READ: "Read platform authorization data (users, teams, roles, permissions)",
         AUTHORIZATION_WRITE: "Write platform authorization data (users, teams, roles, permissions)",
-        CONFIG_READ: "Read platform configuration (templates, endpoint types, services, metadata keys)",
-        CONFIG_WRITE: "Write platform configuration (templates, endpoint types, services, metadata keys)",
+        CONFIG_READ: "Read platform configuration",
+        CONFIG_WRITE: "Write platform configuration",
+        ASSET_CONFIG_READ: "Read asset configuration (device, endpoint and service types, default scan ports)",
+        ASSET_CONFIG_WRITE: "Write asset configuration (device, endpoint and service types, default scan ports)",
     }
 
 

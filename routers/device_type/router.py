@@ -17,8 +17,8 @@ from routers.device_type.schemas import (
 device_types = APIRouter()
 
 # Global definitions are also needed by device readers and creators.
-_read = Depends(ABACAnyPermissionCheck(Platform.CONFIG_READ, Device.READ, Device.CREATE))
-_write = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None))
+_read = Depends(ABACAnyPermissionCheck(Platform.ASSET_CONFIG_READ, Device.READ, Device.CREATE))
+_write = Depends(ABACPermissionCheck(Platform.ASSET_CONFIG_WRITE, device_path=None))
 
 
 def _handle_api_error(exc: APIError) -> Never:
