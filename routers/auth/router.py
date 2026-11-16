@@ -18,6 +18,7 @@ from db.session import get_repository
 from routers.auth.schemas import (
     ActionResponse,
     CurrentUserResponse,
+    DeviceManagementPermissionsResponse,
     RoleCreateRequest,
     RoleDetailsResponse,
     RoleResponse,
@@ -295,10 +296,11 @@ async def get_platform_permissions(
     )
 
 
-@auth.get("/permissions/device-create", response_model=UserPermissions)
-async def get_device_create_permissions(
+@auth.get("/permissions/device-management", response_model=DeviceManagementPermissionsResponse)
+async def get_device_management_permissions(
     auth_context: dict = Depends(validate_jwt),
     user_repo: UserRepository = Depends(get_repository(UserRepository)),
+    device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
 ):
     user_id = auth_context.get("oid") or auth_context.get("sub")
     if not user_id:
@@ -308,8 +310,25 @@ async def get_device_create_permissions(
     if user_data is None:
         raise HTTPException(status_code=403, detail="User not found")
 
-    return UserPermissions(
-        permissions=[Device.CREATE] if evaluate_permission(Device.CREATE, user_data) else [],
+    can_create = evaluate_permission(Device.CREATE, user_data)
+    deletable_device_ids = []
+    if evaluate_permission(Device.READ, user_data) and evaluate_permission(Device.DELETE, user_data):
+        devices = await device_repo.get_devices_metadata()
+        raw_devices = await device_repo.get_all_devices_raw()
+        raw_metadata_by_id = {device["device_id"]: device["device_data"] for device in raw_devices}
+        deletable_device_ids = [
+            device["device_id"]
+            for device in devices
+            if device["device_id"] in raw_metadata_by_id
+            and evaluate_permission(
+                Device.READ, user_data,
+                {key: entry.get("value") for key, entry in (device.get("device_metadata") or {}).items()},
+            )
+            and evaluate_permission(Device.DELETE, user_data, raw_metadata_by_id[device["device_id"]])
+        ]
+
+    return DeviceManagementPermissionsResponse(
+        can_create=can_create, deletable_device_ids=deletable_device_ids
     )
 
 

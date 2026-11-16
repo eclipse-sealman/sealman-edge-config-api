@@ -9,6 +9,11 @@ class UserPermissions(BaseModel):
   permissions: List[str] = []
 
 
+class DeviceManagementPermissionsResponse(BaseModel):
+  can_create: bool
+  deletable_device_ids: List[str]
+
+
 class RoleCreateRequest(BaseModel):
     name: str
     description: str | None = None

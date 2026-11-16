@@ -44,6 +44,14 @@ current backend. Non-administrator permissions come from database team membershi
 roles, allowed actions and device metadata scopes. Granting platform configuration or
 authorization actions does not grant administrator status.
 
+Asset Configuration uses `platform.asset.config.read` to view device, endpoint and service
+types and default scan ports, and `platform.asset.config.write` to change them. These are
+separate from `platform.config.read` and `platform.config.write`. The API registers new
+actions at startup but does not add them to existing roles; assign the appropriate asset
+actions to those roles when upgrading. Device readers and creators retain access to device
+type definitions, and `device.endpoint.read` retains access to endpoint and service type
+definitions and default scan ports.
+
 Frontend clients can retrieve their own `is_admin` flag from `GET /auth/user`.
 Use `GET /auth/permissions/device?device_id=<id>` for actions evaluated against the
 selected device, and `GET /auth/permissions/platform` for global actions.

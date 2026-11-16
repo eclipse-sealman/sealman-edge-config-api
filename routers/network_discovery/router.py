@@ -1,5 +1,5 @@
 from typing import List, Optional, Union
-from authorization.abac_permission_check import ABACPermissionCheck
+from authorization.abac_permission_check import ABACAnyPermissionCheck, ABACPermissionCheck
 from authorization.permission_types import Device, Platform
 from fastapi import Depends
 
@@ -101,8 +101,8 @@ async def get_network_scan_range(device: str,
 # Global settings, not scoped to any one device - see routers/service/router.py for the same
 # `device_path=None` pattern used for service types, which this list lives alongside in the
 # Settings UI.
-_scan_ports_read = Depends(ABACPermissionCheck(Device.ENDPOINT_READ, device_path=None))
-_scan_ports_write = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None))
+_scan_ports_read = Depends(ABACAnyPermissionCheck(Platform.ASSET_CONFIG_READ, Device.ENDPOINT_READ))
+_scan_ports_write = Depends(ABACPermissionCheck(Platform.ASSET_CONFIG_WRITE, device_path=None))
 
 
 @network_discovery.get("/network/default-scan-ports", tags=["Network"],

@@ -963,7 +963,7 @@ class TestGlobalConfigRoutes:
 class TestTypeRoutesAuthorization:
     """
     Global type definitions: reads are open to the roles that need them,
-    changes require platform.config.write.
+    changes require platform.asset.config.write.
     """
 
     @pytest.fixture
@@ -1009,7 +1009,7 @@ class TestTypeRoutesAuthorization:
         await self._world(db_session, ["device.endpoint.read"])
         assert (await client.get(url)).status_code == 200
 
-    @pytest.mark.parametrize("actions", [["device.create"], ["device.read"], ["platform.config.read"]])
+    @pytest.mark.parametrize("actions", [["device.create"], ["device.read"], ["platform.asset.config.read"]])
     async def test_device_types_readable_by_device_reader_creator_or_platform_reader(self, client, db_session, actions):
         await self._world(db_session, actions)
         assert (await client.get("/device-types")).status_code == 200
@@ -1018,10 +1018,34 @@ class TestTypeRoutesAuthorization:
         await self._world(db_session, ["device.endpoint.read"])
         assert (await client.get("/device-types")).status_code == 403
 
-    async def test_platform_config_write_can_change_types(self, client, db_session):
-        await self._world(db_session, ["platform.config.write"])
+    async def test_asset_config_write_can_change_types(self, client, db_session):
+        await self._world(db_session, ["platform.asset.config.write"])
         assert (await client.delete("/endpoint-types/does-not-exist")).status_code != 403
         assert (await client.delete("/device-types/does-not-exist")).status_code != 403
+
+    async def test_asset_config_write_can_add_and_remove_default_scan_port(self, client, db_session):
+        await self._world(db_session, ["platform.asset.config.write"])
+        added = await client.post("/network/default-scan-ports", json={"port": 47891})
+        assert added.status_code == 200
+        assert 47891 in added.json()
+        removed = await client.delete("/network/default-scan-ports/47891")
+        assert removed.status_code == 200
+        assert 47891 not in removed.json()
+
+    @pytest.mark.parametrize("url", ["/device-types", "/endpoint-types", "/service-types", "/network/default-scan-ports"])
+    async def test_asset_config_read_can_read_all_asset_configuration(self, client, db_session, url):
+        await self._world(db_session, ["platform.asset.config.read"])
+        assert (await client.get(url)).status_code == 200
+
+    @pytest.mark.parametrize("url", ["/device-types", "/endpoint-types", "/service-types", "/network/default-scan-ports"])
+    async def test_old_platform_config_read_cannot_read_assets(self, client, db_session, url):
+        await self._world(db_session, ["platform.config.read"])
+        assert (await client.get(url)).status_code == 403
+
+    @pytest.mark.parametrize("method,url", _TYPE_WRITES)
+    async def test_old_platform_config_write_cannot_change_assets(self, client, db_session, method, url):
+        await self._world(db_session, ["platform.config.write"])
+        assert (await client.request(method.upper(), url, json={})).status_code == 403
 
 
 class TestMetadataPatchScope:
