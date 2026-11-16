@@ -1,11 +1,16 @@
 import logging
 from typing import Any, Dict
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 from authorization.abac_permission_check import ABACPermissionCheck, ABACMetadataPatchCheck
 from authorization.permission_types import Device, Platform
 from db.repos.device import DeviceRepository
 from db.session import get_repository
 from routers.base_api_router import BaseAPIRouter
+from routers.platform_configuration.network_scan_guard import (
+    NETWORK_DISCOVER_MODULE,
+    NETWORK_SCAN_DISABLED_DETAIL,
+    is_network_scan_enabled,
+)
 from routers.general.schemas import (
     DeploymentTag,
     DeviceMetadataResponse,
@@ -52,7 +57,11 @@ async def put_deployment_tag(device: str, deployment: DeploymentTag,
 
 @general.post("/{device}/{module}/methods", response_model=DirectMethod[Any], tags=["General"])
 async def post_module_method(device: str, module: str, method_data: DeviceModuleMethodReq,
-                             auth_context = Depends(ABACPermissionCheck(Device.MODULE_EXECUTE_METHOD))):
+                             auth_context = Depends(ABACPermissionCheck(Device.MODULE_EXECUTE_METHOD)),
+                             network_scan_enabled: bool = Depends(is_network_scan_enabled)):
+    # The scanner module must not be reachable around the dedicated (guarded) network endpoints.
+    if module == NETWORK_DISCOVER_MODULE and not network_scan_enabled:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, NETWORK_SCAN_DISABLED_DETAIL)
     return await _post_module_method(device, module, method_data, auth_context)
 
 

@@ -585,9 +585,16 @@ class TestDeviceKeys:
 
         reissued = await client.post(f"/extensions/{name}/device-keys", json={"device_id": "dev-keyed-01"})
         assert reissued.json()["device_key"] != raw_key
+        assert reissued.json()["id"] != issued.json()["id"]
+        history = (await client.get(f"/extensions/{name}/device-keys")).json()
+        assert len(history) == 2
+        assert next(k for k in history if k["id"] == issued.json()["id"])["revoked_at"]
+        assert next(k for k in history if k["id"] == reissued.json()["id"]).get("revoked_at") is None
 
         assert (await client.delete(f"/extensions/{name}/device-keys/dev-keyed-01")).status_code == 204
-        assert (await client.get(f"/extensions/{name}/device-keys")).json() == []
+        history = (await client.get(f"/extensions/{name}/device-keys")).json()
+        assert len(history) == 2
+        assert all(k["revoked_at"] for k in history)
         assert (await client.delete(f"/extensions/{name}/device-keys/dev-keyed-01")).status_code == 404
 
     async def test_issue_device_key_rejects_unknown_device_and_extension(self, client):

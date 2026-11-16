@@ -1,13 +1,10 @@
 from typing import List, Never
 from fastapi import HTTPException, Depends, APIRouter
-from pydantic import ValidationError as PydanticValidationError
 from exceptions import APIError
 from authorization.abac_permission_check import ABACAnyPermissionCheck, ABACPermissionCheck
 from authorization.permission_types import Device, Platform
 from db.repos.device_type import DeviceTypeRepository
 from db.session import get_repository
-from db.merge import patch_fields
-from routers.schemas import FieldDefinition
 from routers.device_type.schemas import (
     DeviceTypeResponse,
     DeviceTypeCreate,
@@ -95,27 +92,17 @@ async def update_device_type(
 ) -> DeviceTypeResponse:
     field_patch = (
         {
-            k: v.model_dump(exclude_none=True) if v is not None else None
+            k: (
+                {**v.model_dump(exclude_none=True),
+                 **({"default": None} if "default" in v.model_fields_set and v.default is None else {})}
+                if v is not None else None
+            )
             for k, v in body.fields.items()
         }
         if body.fields is not None
         else None
     )
     try:
-        if field_patch is not None:
-            current = await repo.get_device_type(type_id)
-            if current is None:
-                raise HTTPException(
-                    status_code=404, detail=f"DeviceType '{type_id}' not found"
-                )
-            merged_fields = patch_fields(current["fields"], field_patch)
-            for field_key, field_dict in merged_fields.items():
-                try:
-                    FieldDefinition.model_validate(field_dict)
-                except PydanticValidationError as exc:
-                    raise HTTPException(
-                        status_code=422, detail=f"Invalid field '{field_key}': {exc}"
-                    )
         result = await repo.update_device_type(
             type_id=type_id,
             label=body.label,

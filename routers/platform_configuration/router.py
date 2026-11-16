@@ -1,10 +1,14 @@
+from dataclasses import asdict
+
 from fastapi import Depends
 from routers.base_api_router import BaseAPIRouter
 from db.repos.device_template import DeviceTemplateRepository
+from db.repos.platform_functions import PlatformFunctionSettings, PlatformFunctionsRepository
 from db.session import get_repository
 from smart_ems import SmartEMS
 
 from .schemas import (
+    PlatformFunctions,
     TemplateListResponse,
     SelectedTemplatesRequest,
     TemplateVariableListResponse,
@@ -77,3 +81,22 @@ async def delete_template_variable(
     await repo.delete_template_variable(name)
     await SmartEMS.delete_variable_for_all_devices(name=name)
     return {"status": "deleted"}
+
+
+# ==================== PLATFORM FUNCTIONS ====================
+
+# Readable by every signed-in user: the UI needs it to decide which functions to offer at all.
+@platform_config.get("/functions", response_model=PlatformFunctions)
+async def get_platform_functions(
+    repo: PlatformFunctionsRepository = Depends(get_repository(PlatformFunctionsRepository)),
+):
+    return asdict(await repo.get_functions())
+
+
+@platform_config.put("/functions", response_model=PlatformFunctions)
+async def update_platform_functions(
+    request: PlatformFunctions,
+    repo: PlatformFunctionsRepository = Depends(get_repository(PlatformFunctionsRepository)),
+    _ = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None)),
+):
+    return asdict(await repo.save_functions(PlatformFunctionSettings(**request.model_dump())))

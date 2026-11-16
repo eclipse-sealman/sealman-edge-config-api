@@ -47,6 +47,8 @@ from routers.network_discovery.router import network_discovery
 from routers.auth.router import auth
 from routers.lines.router import lines
 from routers.platform_configuration.router import platform_config
+from routers.branding.router import branding
+from routers.branding.public import public_app
 from routers.compose_deployments.router import compose_deployment, active_deployment
 from routers.devices.router import devices
 from routers.endpoint.router import endpoints
@@ -197,6 +199,8 @@ async def add_path_to_audit_trail_log(request: Request, call_next):
 
 # mount statics
 app.mount("/static", StaticFiles(directory="static"), name="static")
+# Unauthenticated endpoints (no global auth dependency), e.g. GET /public/branding
+app.mount("/public", public_app, name="public")
 
 # attach default routers
 app.include_router(auth)
@@ -212,6 +216,7 @@ app.include_router(cmd_proxy)
 app.include_router(network_discovery)
 app.include_router(lines)
 app.include_router(platform_config)
+app.include_router(branding)
 app.include_router(devices)
 app.include_router(ui_metrics)
 

@@ -67,6 +67,15 @@ class DeviceRepository(ABC):
 
 
     @abstractmethod
+    async def prepare_device_metadata(
+        self,
+        metadata: Dict[str, Any],
+        type_id: str = "default",
+    ) -> Dict[str, Any]:
+        """Fill absent fields from type defaults, using the same values as creation."""
+        pass
+
+    @abstractmethod
     async def create_device(
         self,
         device_id: str,
