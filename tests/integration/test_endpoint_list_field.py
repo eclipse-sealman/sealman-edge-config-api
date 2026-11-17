@@ -193,6 +193,12 @@ class TestListValues:
         )
         assert unknown.status_code == 422, unknown.text
 
+        non_string = await client.patch(
+            f"/endpoints/{endpoint_id}",
+            json={"endpoint_data": {"equipment": [{"id": [1], "identifier": "X"}]}},
+        )
+        assert non_string.status_code == 422, non_string.text
+
         twice = await client.patch(
             f"/endpoints/{endpoint_id}",
             json={"endpoint_data": {"equipment": [new_items[0], new_items[0]]}},

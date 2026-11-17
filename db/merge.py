@@ -136,7 +136,7 @@ def normalize_list_values(
             item_id = item.get("id")
             if item_id is None:
                 item = {**item, "id": str(uuid4())}
-            elif item_id not in known_ids:
+            elif not isinstance(item_id, str) or item_id not in known_ids:
                 raise ValidationError(f"'{field_key}' has an item with an unknown id", 422)
             elif item_id in seen:
                 raise ValidationError(f"'{field_key}' has an id more than once", 422)
