@@ -128,7 +128,9 @@ def normalize_list_values(
             continue
         stored = stored_data.get(field_key)
         known_ids = (
-            {item.get("id") for item in stored if isinstance(item, dict)} if isinstance(stored, list) else set()
+            {item["id"] for item in stored if isinstance(item, dict) and isinstance(item.get("id"), str)}
+            if isinstance(stored, list)
+            else set()
         )
         seen = set()
         normalized = []
