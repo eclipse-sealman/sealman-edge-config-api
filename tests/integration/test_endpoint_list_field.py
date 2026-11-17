@@ -128,3 +128,130 @@ class TestListTypePatch:
         field = response.json()["fields"]["serial"]
         assert field["item_fields"] is None
         assert field["ui"] == "input"
+
+
+DEVICE = "list-dev"
+
+
+async def _endpoint_type(client, equipment=EQUIPMENT, **extra_fields) -> str:
+    return (await _create(client, fields={"equipment": equipment, **extra_fields}))["type_id"]
+
+
+async def _post_endpoint(client, type_id, endpoint_data):
+    return await client.post(
+        f"/endpoints?device_id={DEVICE}", json={"type_id": type_id, "endpoint_data": endpoint_data}
+    )
+
+
+def _items(body):
+    return body["endpoint_data"]["equipment"]["value"]
+
+
+@pytest.fixture
+async def device(db_session):
+    from tests.integration.test_abac_authorization import AbacFixtures
+
+    await AbacFixtures(db_session).setup(devices={DEVICE: {}})
+
+
+@pytest.mark.usefixtures("device")
+class TestListValues:
+    async def test_required_list_needs_one_item(self, client):
+        type_id = await _endpoint_type(client)
+        assert (await _post_endpoint(client, type_id, {})).status_code == 422
+        assert (await _post_endpoint(client, type_id, {"equipment": []})).status_code == 422
+
+    async def test_items_are_validated_per_sub_field(self, client):
+        type_id = await _endpoint_type(client)
+        for value in ([{"identifier": 5}], [{}], "SEP-00412"):
+            response = await _post_endpoint(client, type_id, {"equipment": value})
+            assert response.status_code == 422, (value, response.text)
+
+    async def test_ids_are_generated_kept_and_unknown_ids_rejected(self, client):
+        type_id = await _endpoint_type(client)
+        created = await _post_endpoint(
+            client, type_id, {"equipment": [{"identifier": "SEP-00412"}, {"identifier": "SEP-00977"}]}
+        )
+        assert created.status_code == 201, created.text
+        items = _items(created.json())
+        assert [i["identifier"] for i in items] == ["SEP-00412", "SEP-00977"]
+        assert items[0]["id"] and items[1]["id"] and items[0]["id"] != items[1]["id"]
+
+        endpoint_id = created.json()["endpoint_id"]
+        patched = await client.patch(
+            f"/endpoints/{endpoint_id}",
+            json={"endpoint_data": {"equipment": [*items, {"identifier": "SEP-01000"}]}},
+        )
+        assert patched.status_code == 200, patched.text
+        new_items = _items(patched.json())
+        assert [i["id"] for i in new_items[:2]] == [i["id"] for i in items]
+        assert new_items[2]["id"]
+
+        unknown = await client.patch(
+            f"/endpoints/{endpoint_id}",
+            json={"endpoint_data": {"equipment": [{"id": "nope", "identifier": "X"}]}},
+        )
+        assert unknown.status_code == 422, unknown.text
+
+        twice = await client.patch(
+            f"/endpoints/{endpoint_id}",
+            json={"endpoint_data": {"equipment": [new_items[0], new_items[0]]}},
+        )
+        assert twice.status_code == 422, twice.text
+
+    async def test_empty_list_is_stored_as_absent(self, client):
+        type_id = await _endpoint_type(client, {**EQUIPMENT, "required": False})
+        created = await _post_endpoint(client, type_id, {"equipment": [{"identifier": "SEP-00412"}]})
+        assert created.status_code == 201, created.text
+        response = await client.patch(
+            f"/endpoints/{created.json()['endpoint_id']}", json={"endpoint_data": {"equipment": []}}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["endpoint_data"]["equipment"]["value"] is None
+
+    async def test_unknown_item_keys_survive_a_save(self, client):
+        type_id = await _endpoint_type(client)
+        created = await _post_endpoint(
+            client, type_id, {"equipment": [{"identifier": "SEP-00412", "crm_id": "4711"}]}
+        )
+        assert created.status_code == 201, created.text
+        items = _items(created.json())
+        items[0]["identifier"] = "SEP-00413"
+        response = await client.patch(
+            f"/endpoints/{created.json()['endpoint_id']}", json={"endpoint_data": {"equipment": items}}
+        )
+        assert response.status_code == 200, response.text
+        assert _items(response.json())[0]["crm_id"] == "4711"
+
+    async def test_sub_field_default_is_applied_on_read(self, client):
+        unit = {"type": "string", "label": "Unit", "default": "pcs"}
+        type_id = await _endpoint_type(
+            client, {**EQUIPMENT, "item_fields": {"identifier": IDENT, "unit": unit}}
+        )
+        created = await _post_endpoint(client, type_id, {"equipment": [{"identifier": "SEP-00412"}]})
+        assert created.status_code == 201, created.text
+        assert _items(created.json())[0]["unit"] == "pcs"
+
+    async def test_scalar_stored_under_a_list_key_reads_and_rejects_cleanly(self, client):
+        type_id = await _endpoint_type(client, {"type": "string", "label": "Equipment"})
+        created = await _post_endpoint(client, type_id, {"equipment": "SEP-1"})
+        assert created.status_code == 201, created.text
+        endpoint_id = created.json()["endpoint_id"]
+
+        response = await client.patch(
+            f"/endpoint-types/{type_id}", json={"fields": {"equipment": EQUIPMENT}}
+        )
+        assert response.status_code == 200, response.text
+
+        read = await client.get(f"/endpoints/{endpoint_id}")
+        assert read.status_code == 200, read.text
+        assert _items(read.json()) == "SEP-1"
+
+        rejected = await client.patch(f"/endpoints/{endpoint_id}", json={"endpoint_data": {"note": "x"}})
+        assert rejected.status_code == 422, rejected.text
+
+        fixed = await client.patch(
+            f"/endpoints/{endpoint_id}",
+            json={"endpoint_data": {"equipment": [{"identifier": "SEP-1"}]}},
+        )
+        assert fixed.status_code == 200, fixed.text

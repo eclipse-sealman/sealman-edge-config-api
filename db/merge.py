@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional, Protocol, runtime_checkable
+from uuid import uuid4
 
 from exceptions import ValidationError
 from field_validation import validate_value
@@ -22,6 +23,8 @@ def resolve_fields(
         value = instance_data.get(field_key)
         if value is None and apply_defaults:
             value = field_def.get("default")
+        if field_def.get("type") == "list" and isinstance(value, list) and apply_defaults:
+            value = _with_item_defaults(value, field_def.get("item_fields") or {})
         resolved[field_key] = {
             "value": value,
             "field": field_def,
@@ -30,6 +33,15 @@ def resolve_fields(
         if data_key not in type_fields:
             resolved[data_key] = {"value": data_value, "field": None}
     return resolved
+
+
+def _with_item_defaults(items: list, item_fields: Dict[str, Any]) -> list:
+    defaults = {
+        key: definition["default"]
+        for key, definition in item_fields.items()
+        if definition.get("default") is not None
+    }
+    return [{**defaults, **item} if isinstance(item, dict) else item for item in items]
 
 
 def materialize_defaults(
@@ -70,10 +82,68 @@ def validate_instance_data(
             if field_def.get("required"):
                 raise ValidationError(f"'{field_key}' is required", 422)
             continue
+        if field_def.get("type") == "list":
+            _validate_list(field_key, value, field_def)
+            continue
         try:
             validate_value(field_key, value, field_def)
         except ValueError as exc:
             raise ValidationError(str(exc), 422)
+
+
+def _validate_list(field_key: str, value: Any, field_def: Dict[str, Any]) -> None:
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ValidationError(f"'{field_key}' must be a list of objects", 422)
+    for item in value:
+        for sub_key, sub_def in (field_def.get("item_fields") or {}).items():
+            sub_value = item.get(sub_key)
+            if sub_value is None:
+                if sub_def.get("required"):
+                    raise ValidationError(f"'{field_key}.{sub_key}' is required", 422)
+                continue
+            try:
+                validate_value(f"{field_key}.{sub_key}", sub_value, sub_def)
+            except ValueError as exc:
+                raise ValidationError(str(exc), 422)
+
+
+def normalize_list_values(
+    data: Dict[str, Any],
+    stored_data: Dict[str, Any],
+    type_fields: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Return a copy of `data` where every list field value is checked structurally, an empty
+    list is dropped, and each item without an `id` gets a generated one. An `id` must belong to
+    the list stored under the same key and may appear only once.
+    """
+    result = dict(data)
+    for field_key, field_def in type_fields.items():
+        if field_def.get("type") != "list" or result.get(field_key) is None:
+            continue
+        items = result[field_key]
+        if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+            raise ValidationError(f"'{field_key}' must be a list of objects", 422)
+        if not items:
+            del result[field_key]
+            continue
+        stored = stored_data.get(field_key)
+        known_ids = (
+            {item.get("id") for item in stored if isinstance(item, dict)} if isinstance(stored, list) else set()
+        )
+        seen = set()
+        normalized = []
+        for item in items:
+            item_id = item.get("id")
+            if item_id is None:
+                item = {**item, "id": str(uuid4())}
+            elif item_id not in known_ids:
+                raise ValidationError(f"'{field_key}' has an item with an unknown id", 422)
+            elif item_id in seen:
+                raise ValidationError(f"'{field_key}' has an id more than once", 422)
+            seen.add(item["id"])
+            normalized.append(item)
+        result[field_key] = normalized
+    return result
 
 
 def reject_non_changeable_updates(
