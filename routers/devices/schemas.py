@@ -8,7 +8,9 @@ MAX_COLUMN_VALUES = 100
 
 # device_id: the id equals the value · field: a metadata field equals the value ·
 # metadata / endpoint / service: any metadata / endpoint / service value contains the value
+# (an endpoint / service filter may name `field` to look at that one field only)
 SearchFilterType = Literal["device_id", "field", "metadata", "endpoint", "service"]
+FIELD_FILTER_TYPES = ("field", "endpoint", "service")
 
 
 class DeviceSearchFilter(BaseModel):
@@ -28,8 +30,8 @@ class DeviceSearchFilter(BaseModel):
     def _field_belongs_to_field_filters(self):
         if self.type == "field" and self.field is None:
             raise ValueError("field is required for a 'field' filter")
-        if self.type != "field" and self.field is not None:
-            raise ValueError("field is only allowed for a 'field' filter")
+        if self.type not in FIELD_FILTER_TYPES and self.field is not None:
+            raise ValueError("field is only allowed for 'field', 'endpoint' and 'service' filters")
         return self
 
 
@@ -78,4 +80,15 @@ class DeviceSearchResponse(BaseModel):
 class DeviceSearchValuesResponse(BaseModel):
     values: List[str]
     # more values exist than were returned (the column-value list is capped)
+    has_more: bool = False
+
+
+class DeviceSearchKey(BaseModel):
+    key: str
+    label: str
+
+
+class DeviceSearchKeysResponse(BaseModel):
+    keys: List[DeviceSearchKey]
+    # more keys match than were returned
     has_more: bool = False

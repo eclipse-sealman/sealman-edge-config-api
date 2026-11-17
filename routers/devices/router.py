@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 from fastapi import Depends, Query, Request
 from auth import validate_jwt
 from routers.base_api_router import BaseAPIRouter
@@ -12,6 +12,7 @@ from db.session import get_repository
 from exceptions import APIError
 from .routes.get_devices import get_devices, populate_cache_from_iot_hub_query
 from .routes.get_devices_with_data import get_devices_with_data
+from .routes.get_search_keys import get_search_keys
 from .routes.get_search_values import COLUMN_VALUES_LIMIT, SUGGESTION_LIMIT, get_search_values
 from .routes.search_devices import needs_endpoint_permission, search_devices
 from .routes.create_device import create_device
@@ -22,6 +23,7 @@ from .routes.get_device import get_device
 from routers.general.schemas import DeviceDetailResponse
 from routers.devices.schemas import (
     MAX_VALUE_LENGTH,
+    DeviceSearchKeysResponse,
     DeviceSearchRequest,
     DeviceSearchResponse,
     DeviceSearchValuesResponse,
@@ -113,6 +115,28 @@ async def get_search_suggestions_route(
         field=field,
         query=query,
         limit=SUGGESTION_LIMIT,
+        device_read=device_read,
+        endpoint_read=endpoint_read,
+    )
+
+@devices.get("/search/keys", response_model=DeviceSearchKeysResponse)
+async def get_search_keys_route(
+    type: Literal["endpoint", "service"],
+    q: Optional[str] = Query(default=None, max_length=MAX_VALUE_LENGTH),
+    auth_context: dict = Depends(validate_jwt),
+    device_read: ABACDeviceListFilterResult = Depends(ABACDeviceListFilter(Device.READ)),
+    user_repo: UserRepository = Depends(get_repository(UserRepository)),
+    repo: DeviceSearchRepository = Depends(get_repository(DeviceSearchRepository)),
+    device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+):
+    endpoint_read = await ABACDeviceListFilter(Device.ENDPOINT_READ)(
+        auth_context=auth_context, user_repo=user_repo
+    )
+    return await get_search_keys(
+        repo=repo,
+        device_repo=device_repo,
+        kind=type,
+        query=(q or "").strip() or None,
         device_read=device_read,
         endpoint_read=endpoint_read,
     )

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 SearchKind = Literal["device_id", "field", "metadata", "endpoint", "service"]
 
@@ -12,8 +12,10 @@ class SearchFilter:
     - device_id: the device id equals `value` (case-insensitive)
     - field:     the metadata field `field` equals `value` (case-insensitive)
     - metadata:  any metadata value contains `value` (case-insensitive)
-    - endpoint:  any value of one of the device's endpoints, or an endpoint type label, contains `value`
-    - service:   any value of one of the device's services, or a service type label, contains `value`
+    - endpoint:  any value of one of the device's endpoints, or an endpoint type label, contains `value`;
+                 with `field`, only the endpoint field `field` is looked at
+    - service:   any value of one of the device's services, or a service type label, contains `value`;
+                 with `field`, only the service field `field` is looked at
     """
 
     kind: SearchKind
@@ -68,6 +70,19 @@ class DeviceSearchRepository(ABC):
         ...
 
     @abstractmethod
+    async def list_field_keys(
+        self,
+        kind: Literal["endpoint", "service"],
+        query: Optional[str],
+        limit: int,
+        allowed_device_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Optional[str]]]:
+        """The fields (key, label) that have a value on at least one endpoint / service, those whose
+        key or label contains `query` when given, the most used first, at most `limit`. The label
+        is None for fields the type does not declare."""
+        ...
+
+    @abstractmethod
     async def get_device_fields(
         self,
         field_keys: List[str],
@@ -92,9 +107,10 @@ class DeviceSearchRepository(ABC):
         self,
         terms: List[str],
         allowed_device_ids: Optional[List[str]] = None,
+        keyed_terms: Sequence[Tuple[str, str]] = (),
     ) -> List[Dict[str, Any]]:
         """Endpoint fields (or the endpoint type's label, with field_key None) containing any of
-        `terms`, one row each: device_id, endpoint_id, type_label, endpoint_name, field_key,
+        `terms`, or the field `key` containing `value` for any (key, value) of `keyed_terms`, one row each: device_id, endpoint_id, type_label, endpoint_name, field_key,
         field_label, value."""
         ...
 
@@ -103,8 +119,9 @@ class DeviceSearchRepository(ABC):
         self,
         terms: List[str],
         allowed_device_ids: Optional[List[str]] = None,
+        keyed_terms: Sequence[Tuple[str, str]] = (),
     ) -> List[Dict[str, Any]]:
         """Service fields (or the service type's label, with field_key None) containing any of
-        `terms`, one row each: device_id, endpoint_id, endpoint_name, service_id, type_label,
+        `terms`, or the field `key` containing `value` for any (key, value) of `keyed_terms`, one row each: device_id, endpoint_id, endpoint_name, service_id, type_label,
         field_key, field_label, value."""
         ...
