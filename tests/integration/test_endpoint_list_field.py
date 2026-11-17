@@ -90,6 +90,32 @@ class TestListTypePatch:
         )
         assert response.status_code == 400, response.text
 
+    async def test_patch_accepts_a_definition_echoed_back(self, client):
+        created = await _create(
+            client, fields={"serial": {"type": "string", "label": "Serial"}, "equipment": EQUIPMENT}
+        )
+        type_id = created["type_id"]
+        serial = created["fields"]["serial"]
+        response = await client.patch(f"/endpoint-types/{type_id}", json={"fields": {"serial": serial}})
+        assert response.status_code == 200, response.text
+        assert response.json()["fields"]["serial"] == serial
+        assert response.json()["fields"]["equipment"]["item_order"] == ["identifier"]
+
+        echoed = {k: v for k, v in created["fields"]["equipment"].items() if k != "item_order"}
+        response = await client.patch(f"/endpoint-types/{type_id}", json={"fields": {"equipment": echoed}})
+        assert response.status_code == 200, response.text
+        assert response.json()["fields"]["equipment"]["item_order"] == ["identifier"]
+
+        device = await client.post(
+            "/device-types", json={"label": _label(), "fields": {"site": {"type": "string", "label": "Site"}}}
+        )
+        assert device.status_code == 201, device.text
+        site = device.json()["fields"]["site"]
+        response = await client.patch(
+            f"/device-types/{device.json()['type_id']}", json={"fields": {"site": site}}
+        )
+        assert response.status_code == 200, response.text
+
     async def test_patch_null_removes_a_sub_field(self, client):
         type_id = (await _create(client, fields={"equipment": EQUIPMENT}))["type_id"]
         await client.patch(

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List, Any, Literal, Dict, Mapping, Set
 import re
 
@@ -225,7 +225,19 @@ class FieldDefinitionUpdate(BaseModel):
         description="Sub-field changes of a list field; a null value removes that sub-field",
     )
 
+    item_order: Optional[List[str]] = Field(
+        default=None,
+        description="Server-maintained; accepted only as null so a returned definition can be echoed back",
+    )
+
     model_config = {"extra": "forbid"}
+
+    @field_validator("item_order")
+    @classmethod
+    def _item_order_is_server_maintained(cls, value):
+        if value is not None:
+            raise ValueError("item_order is maintained by the server")
+        return value
 
 
 def dump_field_patch(field: Optional[FieldDefinitionUpdate]) -> Optional[Dict[str, Any]]:
