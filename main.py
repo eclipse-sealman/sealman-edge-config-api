@@ -42,6 +42,7 @@ from helper import AuditTrail
 from routers.cmd_proxy.router import cmd_proxy
 from routers.general.router import general
 from routers.module_config.router import module_config
+from routers.module_config.templates_router import module_config_template_groups, module_config_templates, module_config_devices
 from routers.smart_ems.router import smart_ems
 from routers.network_discovery.router import network_discovery
 from routers.auth.router import auth
@@ -211,6 +212,9 @@ app.include_router(services)
 app.include_router(device_types)
 app.include_router(active_deployment)
 app.include_router(module_config)
+app.include_router(module_config_template_groups)
+app.include_router(module_config_templates)
+app.include_router(module_config_devices)
 app.include_router(smart_ems)
 app.include_router(cmd_proxy)
 app.include_router(network_discovery)

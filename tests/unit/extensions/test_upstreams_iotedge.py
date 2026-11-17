@@ -120,19 +120,37 @@ async def test_twin_write_uploads_to_blob_and_patches_only_config_pointer(monkey
         async def __aexit__(self, *a):
             return False
 
-    monkeypatch.setattr(iotedge, "patch_async", fake_patch_async)
-    monkeypatch.setattr(iotedge, "get_iothub_auth_headers", lambda: {})
-    monkeypatch.setattr(iotedge, "IOT_HUB_NAME", "myhub.azure-devices.net")
-    monkeypatch.setattr(iotedge, "PUBLIC_STORAGE_ACCOUNT_NAME", "mystorage")
-    monkeypatch.setattr(iotedge, "BLOB_SAS_TOKEN_MODULE_CONF", "sv=2021&sig=abc")
-    monkeypatch.setattr(iotedge, "BlobContainerContext", FakeContainerContext)
+    recorded = {}
 
-    result = await iotedge._twin_write("device-1", "module-1", {"setting": "value"})
+    async def fake_record(repo, fields):
+        recorded.update(fields)
+        return {"id": 1, **fields}
+
+    service = iotedge.module_config_service
+    monkeypatch.setattr(service, "patch_async", fake_patch_async)
+    monkeypatch.setattr(service, "get_iothub_auth_headers", lambda: {})
+    monkeypatch.setattr(service, "IOT_HUB_NAME", "myhub.azure-devices.net")
+    monkeypatch.setattr(service, "PUBLIC_STORAGE_ACCOUNT_NAME", "mystorage")
+    monkeypatch.setattr(service, "BLOB_SAS_TOKEN_MODULE_CONF", "sv=2021&sig=abc")
+    monkeypatch.setattr(service, "MODULE_CONFIG_STORAGE_URL", None)
+    monkeypatch.setattr(service, "MODULE_CONFIG_DEVICE_STORAGE_URL", None)
+    monkeypatch.setattr(service, "BlobContainerContext", FakeContainerContext)
+    monkeypatch.setattr(service, "_record", fake_record)
+
+    result = await iotedge._twin_write("device-1", "module-1", {"setting": "value"},
+                                       source="extension:widgets", actor="alice")
 
     assert json.loads(uploaded["data"]) == {"setting": "value"}
     desired = patch_captured["json"]["properties"]["desired"]
     assert set(desired.keys()) == {"configBlobUrl", "configId"}
     assert result == {"configId": desired["configId"]}
+    assert desired["configBlobUrl"].startswith("https://mystorage.blob.core.windows.net/iotedge-device-twin/device-1/module-1/")
+    # immutable blob per write, recorded as an audited revision
+    assert uploaded["path"] == f"device-1/module-1/{desired['configId']}"
+    assert recorded["source"] == "extension:widgets"
+    assert recorded["actor"] == "alice"
+    assert recorded["blob_name"] == desired["configId"]
+    assert recorded["content_hash"].startswith("sha256:")
 
 
 @pytest.mark.asyncio

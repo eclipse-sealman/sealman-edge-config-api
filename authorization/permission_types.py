@@ -40,6 +40,7 @@ class Device:
     PASSWORD_READ = "device.password.read"
     PASSWORD_WRITE = "device.password.write"
     MODULE_TWIN_CONFIG_WRITE = "device.module_twin_config.write"
+    MODULE_CONFIG_APPLY = "device.module_config.apply"
     NETWORK_DISCOVER = "device.network.discover"
     LINE_WRITE = "device.line.write"
     ENDPOINT_READ = "device.endpoint.read"
@@ -59,6 +60,7 @@ class Device:
         NETWORK_WRITE,
         MODULE_EXECUTE_METHOD,
         MODULE_TWIN_CONFIG_WRITE,
+        MODULE_CONFIG_APPLY,
         NETWORK_DISCOVER,
         LINE_WRITE,
         PASSWORD_WRITE,
@@ -78,7 +80,8 @@ class Device:
         SMARTEMS_TEMPLATE_APPLY: "Apply the default Smart EMS template to a device",
         PASSWORD_READ: "Read a device password",
         PASSWORD_WRITE: "Update a device password",
-        MODULE_TWIN_CONFIG_WRITE: "Update device module twin configuration",
+        MODULE_TWIN_CONFIG_WRITE: "Update device module twin configuration (raw JSON, re-apply any revision)",
+        MODULE_CONFIG_APPLY: "Apply a module configuration template to a device module",
         NETWORK_DISCOVER: "Run device network discovery",
         LINE_WRITE: "Update device line settings",
         ENDPOINT_READ: "Read device endpoints, services and their types",
@@ -107,6 +110,24 @@ class Extension:
     }
 
 
+class ModuleConfig:
+    TEMPLATE_READ = "module_config.template.read"
+    TEMPLATE_WRITE = "module_config.template.write"
+
+    ReadPermissions = [
+        TEMPLATE_READ,
+    ]
+    EditPermissions = [
+        TEMPLATE_WRITE,
+    ]
+
+    _is_global = True
+    _descriptions = {
+        TEMPLATE_READ: "Browse module configuration templates",
+        TEMPLATE_WRITE: "Create, version, duplicate and archive module configuration templates",
+    }
+
+
 def _get_permission_names(resource_type):
     return {
         attribute_name: attribute_value
@@ -115,7 +136,7 @@ def _get_permission_names(resource_type):
     }
 
 
-RESOURCE_TYPES = [Platform, Device, Extension]
+RESOURCE_TYPES = [Platform, Device, Extension, ModuleConfig]
 
 
 def get_all_permissions() -> list[dict]:

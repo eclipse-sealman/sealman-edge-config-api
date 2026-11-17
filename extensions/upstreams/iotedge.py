@@ -2,19 +2,17 @@
 module-twin read, and module-twin write.
 """
 
-import json
 import logging
-import uuid
 from typing import Any, Dict, Optional, Tuple
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from async_requests import get_async, patch_async, post_async
-from blob_service import BlobContainerContext
-from constants import BLOB_SAS_TOKEN_MODULE_CONF, IOT_HUB_NAME, PUBLIC_STORAGE_ACCOUNT_NAME
+from async_requests import get_async, post_async
+from constants import IOT_HUB_NAME
 from exceptions import APIError, IoTBackendAPIError
 from helper import encode_iothub_id, get_iothub_auth_headers, validate_iothub_id
+from routers.module_config import service as module_config_service
 
 from .. import body_validation
 
@@ -79,39 +77,18 @@ async def _twin_read(device_id: str, module_name: str) -> dict:
     return resp.json()
 
 
-async def _twin_write(device_id: str, module_name: str, desired: Optional[dict]) -> dict:
-    """Uploads `desired` to blob storage and patches the module twin with only
-    `configBlobUrl`/`configId` (this repo's existing blob-indirection convention,
-    see `post_module_twin_config.py`)."""
-    url = _twin_url(device_id, module_name)
-    if not PUBLIC_STORAGE_ACCOUNT_NAME:
-        raise IoTBackendAPIError("Public storage account name is not set. Cannot upload file.", 500)
-    if not BLOB_SAS_TOKEN_MODULE_CONF or not BLOB_SAS_TOKEN_MODULE_CONF.strip():
-        raise IoTBackendAPIError("BLOB_SAS_TOKEN_MODULE_CONF is not configured. SAS token is required for Edge Device blob access.", 500)
-
-    config_id = uuid.uuid4().hex
-    try:
-        async with BlobContainerContext(
-            PUBLIC_STORAGE_ACCOUNT_NAME, "iotedge-device-twin", sas_token=BLOB_SAS_TOKEN_MODULE_CONF
-        ) as container:
-            blob = container.get_blob_client(f"{device_id}/{module_name}/{config_id}")
-            await blob.upload_blob(json.dumps(desired or {}), overwrite=True)
-    except Exception as exc:
-        raise IoTBackendAPIError(f"could not upload data object to blob storage: {exc}", 400)
-
-    config_blob_url = (
-        f"https://{PUBLIC_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/iotedge-device-twin/"
-        f"{_encode_id(device_id)}/{_encode_id(module_name)}/{config_id}?{BLOB_SAS_TOKEN_MODULE_CONF}"
+async def _twin_write(
+    device_id: str, module_name: str, desired: Optional[dict], source: str = "extension", actor: Optional[str] = None,
+) -> dict:
+    """Writes `desired` as the module config through the platform's single write path
+    (blob indirection + `configBlobUrl`/`configId` twin pointer + audited revision)."""
+    validate_iothub_id(device_id)
+    validate_iothub_id(module_name)
+    result = await module_config_service.write_module_config(
+        device_id, module_name, desired or {}, source=source, actor=actor,
     )
-    patch = {"properties": {"desired": {"configBlobUrl": config_blob_url, "configId": config_id}}}
-
-    responses: Dict[str, Any] = {}
-    await patch_async(url, responses, _json=patch, headers=get_iothub_auth_headers())
-    resp = responses[url]
-    if resp.status_code >= 400:
-        raise IoTBackendAPIError(resp.text, resp.status_code)
     # configBlobUrl embeds the SAS token and must not reach the caller.
-    return {"configId": config_id}
+    return {"configId": result["configId"]}
 
 
 async def _direct_method(device_id: str, module_name: str, method_name: str, payload: Optional[dict]) -> JSONResponse:
@@ -146,7 +123,13 @@ async def dispatch(
         return JSONResponse(await _twin_read(device_id, module_name))
     if operation == "twin_write":
         payload = await _read_json_body(request, body, body_validation.MAX_BUFFERED_BODY_BYTES)
-        return JSONResponse(await _twin_write(device_id, module_name, payload))
+        extension_name = getattr(request.state, "extension_name", None)
+        caller = getattr(request.state, "sealman_caller", None)
+        return JSONResponse(await _twin_write(
+            device_id, module_name, payload,
+            source=f"extension:{extension_name}" if extension_name else "extension",
+            actor=caller[1] if caller else (f"extension:{extension_name}" if extension_name else None),
+        ))
 
     payload = await _read_json_body(request, body, _DIRECT_METHOD_MAX_PAYLOAD_BYTES)
     return await _direct_method(device_id, module_name, route["method_name"], payload)

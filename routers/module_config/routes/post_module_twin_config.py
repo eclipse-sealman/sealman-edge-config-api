@@ -1,54 +1,15 @@
-import asyncio
-import uuid
-from constants import IOT_HUB_NAME, BLOB_SAS_TOKEN_MODULE_CONF, PUBLIC_STORAGE_ACCOUNT_NAME
-from async_requests import patch_async
-from exceptions import IoTBackendAPIError
-from exceptions import UploadError
-from helper import encode_iothub_id, get_iothub_auth_headers
-from blob_service import BlobContainerContext
+from helper import validate_iothub_id
+from routers.module_config.service import write_module_config
 
 
-async def post_module_twin_config(device, module, request):
+async def post_module_twin_config(device, module, request, actor=None, source="legacy-api", repo=None):
     """
         Post a configuration to the module twin and triggers a twin-change event.
+        Kept for the typed legacy endpoints; the write itself (blob + twin pointer + revision)
+        is `service.write_module_config`.
     """
-    encoded_device = encode_iothub_id(device)
-    encoded_module = encode_iothub_id(module)
-
-    # Validate SAS token is available - required for Edge Device to access the blob
-    if not PUBLIC_STORAGE_ACCOUNT_NAME:
-        raise IoTBackendAPIError("Public storage account name is not set. Cannot upload file.", 500)
-
-    if not BLOB_SAS_TOKEN_MODULE_CONF or BLOB_SAS_TOKEN_MODULE_CONF.strip() == "":
-        raise IoTBackendAPIError("BLOB_SAS_TOKEN_MODULE_CONF is not configured. SAS token is required for Edge Device blob access.", 500)
-
-    try:
-        async with BlobContainerContext(PUBLIC_STORAGE_ACCOUNT_NAME, "iotedge-device-twin", sas_token=BLOB_SAS_TOKEN_MODULE_CONF) as container:
-            blob = container.get_blob_client(f"{device}/{module}/current")
-            await blob.upload_blob(request.model_dump_json(exclude_none=True), overwrite=True)
-    except Exception as ex:
-        raise UploadError(f"could not upload data object to blob storage: {str(ex)}", 400)
-
-    config_id = uuid.uuid4().hex
-    patch = {
-            "properties": {
-                "desired": {
-                    "configBlobUrl": f"https://{PUBLIC_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/iotedge-device-twin/{encoded_device}/{encoded_module}/current?{BLOB_SAS_TOKEN_MODULE_CONF}",
-                    "configId": config_id
-                }
-            }
-        }
-
-    responses = {}
-    url2 = f"https://{IOT_HUB_NAME}/twins/{encoded_device}/modules/{encoded_module}?api-version=2020-05-31-preview"
-    headers = get_iothub_auth_headers()
-    await asyncio.gather(
-            patch_async(url2, responses, _json=patch, headers=headers)
-    )
-
-    if responses[url2].status_code == 200:
-        return request, 200
-    else:
-        raise IoTBackendAPIError(f"could not update module twin of {module} on {device} on the Azure IoT Hub. "
-                                     f"Config-Id: [{config_id}]. Error: {str(responses[url2].text)}",
-                                     responses[url2].status_code)
+    validate_iothub_id(device)
+    validate_iothub_id(module)
+    content = request.model_dump(mode="json", exclude_none=True) if hasattr(request, "model_dump") else request
+    await write_module_config(device, module, content, source=source, actor=actor, repo=repo)
+    return request, 200
