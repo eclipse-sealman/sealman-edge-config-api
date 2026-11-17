@@ -8,7 +8,7 @@ from db.repos.device import DeviceRepository
 from db.repos.endpoint import EndpointRepository
 from db.session import get_repository
 from db.merge import patch_fields
-from routers.schemas import FieldDefinition
+from routers.schemas import FieldDefinition, dump_field_patch
 from routers.endpoint.schemas import (
     EndpointTypeResponse,
     EndpointCreate,
@@ -103,10 +103,7 @@ async def update_endpoint_type(
     _auth=_type_write,
 ) -> EndpointTypeResponse:
     field_patch = (
-        {
-            k: v.model_dump(exclude_none=True) if v is not None else None
-            for k, v in body.fields.items()
-        }
+        {k: dump_field_patch(v) for k, v in body.fields.items()}
         if body.fields is not None
         else None
     )

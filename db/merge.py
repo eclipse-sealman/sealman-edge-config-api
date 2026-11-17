@@ -94,6 +94,42 @@ def reject_non_changeable_updates(
             raise ValidationError(f"'{field_key}' is not changeable once set", 422)
 
 
+_LIST_KEPT_ON_TYPE_CHANGE = ("label", "description", "required", "show_in_list")
+
+
+def with_item_order(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Return `fields` with `item_order` set to the sub-field keys of every list field."""
+    result: Dict[str, Any] = {}
+    for key, field in fields.items():
+        if isinstance(field, dict) and field.get("type") == "list" and field.get("item_fields"):
+            field = {**field, "item_order": list(field["item_fields"])}
+        result[key] = field
+    return result
+
+
+def _patch_list_field(existing: Dict[str, Any], field_patch: Dict[str, Any]) -> Dict[str, Any]:
+    new_type = field_patch.get("type")
+    if new_type is not None and new_type != existing.get("type") and "list" in (new_type, existing.get("type")):
+        existing = {k: v for k, v in existing.items() if k in _LIST_KEPT_ON_TYPE_CHANGE}
+    stored_items = existing.get("item_fields") or {}
+    order = [k for k in (existing.get("item_order") or list(stored_items)) if k in stored_items]
+    items = dict(stored_items)
+    for sub_key, sub_def in (field_patch.get("item_fields") or {}).items():
+        if sub_def is None:
+            items.pop(sub_key, None)
+            if sub_key in order:
+                order.remove(sub_key)
+        else:
+            items[sub_key] = sub_def
+            if sub_key not in order:
+                order.append(sub_key)
+    existing.update({k: v for k, v in field_patch.items() if v is not None and k != "item_fields"})
+    if "item_fields" in field_patch or items:
+        existing["item_fields"] = items
+        existing["item_order"] = order
+    return existing
+
+
 def patch_fields(
     current_fields: Dict[str, Any],
     field_patches: Dict[str, Any],
@@ -106,6 +142,9 @@ def patch_fields(
             result.pop(field_key, None)
         else:
             existing = dict(result.get(field_key, {}))
+            if "list" in (existing.get("type"), field_patch.get("type")) or field_patch.get("item_fields") is not None:
+                result[field_key] = _patch_list_field(existing, field_patch)
+                continue
             existing.update({k: v for k, v in field_patch.items() if v is not None})
             if clear_defaults and "default" in field_patch and field_patch["default"] is None:
                 existing.pop("default", None)

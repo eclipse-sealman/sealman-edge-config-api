@@ -62,3 +62,69 @@ class TestListDefinition:
         response = await client.post(path, json={"label": _label(), "fields": {"equipment": EQUIPMENT}})
         assert response.status_code == 400
         assert "endpoint types" in response.text
+
+
+class TestListTypePatch:
+    async def test_item_order_follows_the_order_sent(self, client):
+        body = await _create(
+            client,
+            fields={"equipment": {**EQUIPMENT, "item_fields": {"zeta": IDENT, "alpha": IDENT}}},
+        )
+        assert body["fields"]["equipment"]["item_order"] == ["zeta", "alpha"]
+
+    async def test_patch_adds_a_sub_field_and_keeps_the_others(self, client):
+        type_id = (await _create(client, fields={"equipment": EQUIPMENT}))["type_id"]
+        response = await client.patch(
+            f"/endpoint-types/{type_id}",
+            json={"fields": {"equipment": {"item_fields": {"crm_id": {"type": "string", "label": "CRM id"}}}}},
+        )
+        assert response.status_code == 200, response.text
+        field = response.json()["fields"]["equipment"]
+        assert set(field["item_fields"]) == {"identifier", "crm_id"}
+        assert field["item_order"] == ["identifier", "crm_id"]
+        assert field["label"] == "Equipment"
+
+        # item_order is not a client input: schema-level rejection (400)
+        response = await client.patch(
+            f"/endpoint-types/{type_id}", json={"fields": {"equipment": {"item_order": ["crm_id"]}}}
+        )
+        assert response.status_code == 400, response.text
+
+    async def test_patch_null_removes_a_sub_field(self, client):
+        type_id = (await _create(client, fields={"equipment": EQUIPMENT}))["type_id"]
+        await client.patch(
+            f"/endpoint-types/{type_id}",
+            json={"fields": {"equipment": {"item_fields": {"crm_id": {"type": "string", "label": "CRM id"}}}}},
+        )
+        response = await client.patch(
+            f"/endpoint-types/{type_id}", json={"fields": {"equipment": {"item_fields": {"identifier": None}}}}
+        )
+        assert response.status_code == 200, response.text
+        field = response.json()["fields"]["equipment"]
+        assert field["item_order"] == ["crm_id"]
+        assert set(field["item_fields"]) == {"crm_id"}
+
+    async def test_patch_removing_the_last_sub_field_is_rejected(self, client):
+        type_id = (await _create(client, fields={"equipment": EQUIPMENT}))["type_id"]
+        # raised in the router's merged-definition check (422)
+        response = await client.patch(
+            f"/endpoint-types/{type_id}", json={"fields": {"equipment": {"item_fields": {"identifier": None}}}}
+        )
+        assert response.status_code == 422, response.text
+        stored = (await client.get(f"/endpoint-types/{type_id}")).json()
+        assert stored["fields"]["equipment"]["item_order"] == ["identifier"]
+
+    async def test_patch_can_turn_a_string_field_into_a_list_and_back(self, client):
+        type_id = (await _create(client, fields={"serial": {"type": "string", "label": "Serial"}}))["type_id"]
+        response = await client.patch(
+            f"/endpoint-types/{type_id}",
+            json={"fields": {"serial": {"type": "list", "item_fields": {"identifier": IDENT}}}},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["fields"]["serial"]["ui"] is None
+
+        response = await client.patch(f"/endpoint-types/{type_id}", json={"fields": {"serial": {"type": "string"}}})
+        assert response.status_code == 200, response.text
+        field = response.json()["fields"]["serial"]
+        assert field["item_fields"] is None
+        assert field["ui"] == "input"

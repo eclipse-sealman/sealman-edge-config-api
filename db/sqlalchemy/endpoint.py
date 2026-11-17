@@ -11,6 +11,7 @@ from db.merge import (
     patch_fields,
     reject_non_changeable_updates,
     validate_instance_data,
+    with_item_order,
 )
 from db.type_roles import ENDPOINT_ROLE_TYPES, drop_roles_of_missing_fields, validate_type_mapping
 from exceptions import APIError
@@ -60,7 +61,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         await self._raise_if_label_taken(label)
         # Admins define every field; nothing is added or forced here. Roles in `mapping`
         # ({field_key: role}) must point at fields of a fitting data type.
-        type_fields = dict(fields or {})
+        type_fields = with_item_order(dict(fields or {}))
         type_mapping = dict(mapping or {})
         validate_type_mapping(type_fields, type_mapping, ENDPOINT_ROLE_TYPES)
         et = EndpointType(

@@ -228,6 +228,19 @@ class FieldDefinitionUpdate(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+def dump_field_patch(field: Optional[FieldDefinitionUpdate]) -> Optional[Dict[str, Any]]:
+    """`model_dump(exclude_none=True)`, except that `item_fields` sub-keys sent as null stay None."""
+    if field is None:
+        return None
+    dumped = field.model_dump(exclude_none=True)
+    if field.item_fields is not None:
+        dumped["item_fields"] = {
+            key: sub.model_dump(exclude_none=True) if sub is not None else None
+            for key, sub in field.item_fields.items()
+        }
+    return dumped
+
+
 class ResolvedField(BaseModel):
     value: Optional[Any] = None
     field: Optional[FieldDefinition] = None
