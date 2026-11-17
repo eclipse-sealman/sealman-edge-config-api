@@ -158,8 +158,8 @@ class SqlAlchemyDeviceSearchRepository(DeviceSearchRepository):
         for i, search_filter in enumerate(filters):
             value = f"v{i}"
             if search_filter.kind == "device_id":
-                conditions.append(f"lower(d.device_id) = lower(:{value})")
-                params[value] = search_filter.value
+                conditions.append(f"d.device_id ilike :{value} escape '{_LIKE_ESCAPE}'")
+                params[value] = f"%{_escape_like(search_filter.value)}%"
             elif search_filter.kind == "field":
                 if not search_filter.field:
                     raise ValueError("A field filter needs a field")
