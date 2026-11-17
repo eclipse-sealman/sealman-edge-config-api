@@ -1,10 +1,14 @@
 from pydantic import BaseModel, Field, model_validator
-from typing import Optional, List, Any, Literal, Dict, Set
+from typing import Optional, List, Any, Literal, Dict, Mapping, Set
 import re
 
 from field_validation import validate_value
 
-FieldType = Literal["string", "boolean", "integer", "number"]
+FieldType = Literal["string", "boolean", "integer", "number", "list"]
+# Types a list's sub-fields may have (no nested lists).
+SCALAR_FIELD_TYPES: tuple[str, ...] = ("string", "boolean", "integer", "number")
+# Sub-field key reserved for the row identifier.
+RESERVED_ITEM_KEY = "id"
 UIWidget = Literal[
     "input", "textarea", "password", "number", "slider", "select", "radio", "toggle", "checkbox"
 ]
@@ -97,11 +101,24 @@ class FieldDefinition(BaseModel):
         default=True,
         description="If true, this field's value shows as extra info in the endpoints list",
     )
+    item_fields: Optional[Dict[str, "FieldDefinition"]] = Field(
+        default=None,
+        description="Sub-field definitions of one row; required for type=list, not allowed otherwise",
+    )
+    item_order: Optional[List[str]] = Field(
+        default=None,
+        description="Display order of the sub-fields (type=list, response only, never accepted)",
+    )
 
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def _check_consistency(self) -> "FieldDefinition":
+        if self.type == "list":
+            return self._check_list()
+        if self.item_fields is not None or self.item_order is not None:
+            raise ValueError("item_fields and item_order are only supported for type='list'")
+
         allowed_ui = _UI_WIDGETS_BY_TYPE[self.type]
         if self.ui is None:
             self.ui = _DEFAULT_UI_BY_TYPE[self.type]
@@ -150,6 +167,29 @@ class FieldDefinition(BaseModel):
 
         return self
 
+    def _check_list(self) -> "FieldDefinition":
+        if not self.item_fields:
+            raise ValueError("type='list' requires item_fields with at least one sub-field")
+        for key, sub in self.item_fields.items():
+            if not key or key == RESERVED_ITEM_KEY:
+                raise ValueError(f"item_fields key '{key}' is empty or reserved")
+            if sub.type not in SCALAR_FIELD_TYPES:
+                raise ValueError(f"item_fields['{key}'] must be one of {list(SCALAR_FIELD_TYPES)}")
+        if self.validation is not None or self.options is not None or self.default is not None or self.ui is not None:
+            raise ValueError("validation, options, default and ui are not supported for type='list'")
+        if not self.changeable:
+            raise ValueError("changeable=false is not supported for type='list'")
+        return self
+
+
+def reject_list_fields(fields: Mapping[str, Any]) -> None:
+    """Raise unless `fields` is free of list fields (lists exist only on endpoint types)."""
+    for key, field in fields.items():
+        if field is None:
+            continue
+        if getattr(field, "type", None) == "list" or getattr(field, "item_fields", None) is not None:
+            raise ValueError(f"field '{key}': list fields are only supported on endpoint types")
+
 
 class FieldDefinitionUpdate(BaseModel):
     type: Optional[FieldType] = Field(default=None, description="Data type of the field value")
@@ -179,6 +219,10 @@ class FieldDefinitionUpdate(BaseModel):
     show_in_list: Optional[bool] = Field(
         default=None,
         description="If true, this field's value shows as extra info in the endpoints list",
+    )
+    item_fields: Optional[Dict[str, Optional[FieldDefinition]]] = Field(
+        default=None,
+        description="Sub-field changes of a list field; a null value removes that sub-field",
     )
 
     model_config = {"extra": "forbid"}

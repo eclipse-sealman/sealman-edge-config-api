@@ -1,7 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from typing import Optional, Dict, Any, Union
 from datetime import datetime
-from routers.schemas import ResolvedField, FieldDefinition, FieldDefinitionUpdate
+from routers.schemas import ResolvedField, FieldDefinition, FieldDefinitionUpdate, reject_list_fields
 
 # Not constrained to a fixed set of values - the frontend maintains an extensible registry of
 # browser kinds (see registerBrowser()), so new kinds can be added there without a backend change.
@@ -16,6 +16,11 @@ class ServiceTypeCreate(BaseModel):
     # {field_key: role}. Role: "port". Checked against `fields` by db/type_roles.py (422).
     mapping: Dict[str, str] = {}
 
+    @model_validator(mode="after")
+    def _reject_lists(self) -> "ServiceTypeCreate":
+        reject_list_fields(self.fields or {})
+        return self
+
 
 class ServiceTypeUpdate(BaseModel):
     label: Optional[str] = None
@@ -27,6 +32,11 @@ class ServiceTypeUpdate(BaseModel):
     # Replaces the whole mapping when sent. When omitted, the stored roles stay, except those
     # whose field `fields` removes.
     mapping: Optional[Dict[str, str]] = None
+
+    @model_validator(mode="after")
+    def _reject_lists(self) -> "ServiceTypeUpdate":
+        reject_list_fields(self.fields or {})
+        return self
 
 
 class ServiceTypeResponse(BaseModel):
