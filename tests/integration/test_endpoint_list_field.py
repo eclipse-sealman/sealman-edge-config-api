@@ -287,3 +287,19 @@ class TestListValues:
             json={"endpoint_data": {"equipment": [{"identifier": "SEP-1"}]}},
         )
         assert fixed.status_code == 200, fixed.text
+
+    async def test_device_search_skips_list_values(self, client):
+        serial = f"serial-{uuid4().hex[:8]}"
+        type_id = await _endpoint_type(client, serial={"type": "string", "label": "Serial"})
+        created = await _post_endpoint(
+            client, type_id, {"equipment": [{"identifier": "SEP-00412"}], "serial": serial}
+        )
+        assert created.status_code == 201, created.text
+
+        async def found(term):
+            response = await client.post("/devices/search", json={"filters": [{"type": "endpoint", "value": term}]})
+            assert response.status_code == 200, response.text
+            return [item["device_id"] for item in response.json()["items"]]
+
+        assert DEVICE not in await found("identifier")
+        assert DEVICE in await found(serial)
