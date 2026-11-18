@@ -10,7 +10,9 @@ from db.merge import (
     patch_data,
     patch_fields,
     reject_non_changeable_updates,
+    normalize_list_values,
     validate_instance_data,
+    with_item_order,
 )
 from db.type_roles import ENDPOINT_ROLE_TYPES, drop_roles_of_missing_fields, validate_type_mapping
 from exceptions import APIError
@@ -60,7 +62,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         await self._raise_if_label_taken(label)
         # Admins define every field; nothing is added or forced here. Roles in `mapping`
         # ({field_key: role}) must point at fields of a fitting data type.
-        type_fields = dict(fields or {})
+        type_fields = with_item_order(dict(fields or {}))
         type_mapping = dict(mapping or {})
         validate_type_mapping(type_fields, type_mapping, ENDPOINT_ROLE_TYPES)
         et = EndpointType(
@@ -189,10 +191,9 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         endpoint_data: Dict[str, Any],
     ) -> Dict[str, Any]:
         et = await self._get_endpoint_type_or_raise(type_id)
-        validate_instance_data(endpoint_data or {}, et.fields or {})
-        endpoint = Endpoint(
-            device_id=device_id, type_id=type_id, endpoint_data=endpoint_data or {}
-        )
+        endpoint_data = normalize_list_values(endpoint_data or {}, {}, et.fields or {})
+        validate_instance_data(endpoint_data, et.fields or {})
+        endpoint = Endpoint(device_id=device_id, type_id=type_id, endpoint_data=endpoint_data)
         self._session.add(endpoint)
         await self._session.commit()
         await self._session.refresh(endpoint)
@@ -216,6 +217,9 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             # on retype, as before.
             new_et = await self._get_endpoint_type_or_raise(type_id)
             merged_data = patch_data(endpoint.endpoint_data or {}, endpoint_data or {})
+            merged_data = normalize_list_values(
+                merged_data, endpoint.endpoint_data or {}, new_et.fields or {}
+            )
             validate_instance_data(merged_data, new_et.fields or {})
             await self._session.execute(
                 update(Endpoint)
@@ -227,6 +231,9 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             patch = endpoint_data or {}
             reject_non_changeable_updates(endpoint.endpoint_data or {}, patch, et.fields or {})
             merged_data = patch_data(endpoint.endpoint_data or {}, patch)
+            merged_data = normalize_list_values(
+                merged_data, endpoint.endpoint_data or {}, et.fields or {}
+            )
             validate_instance_data(merged_data, et.fields or {})
             await self._session.execute(
                 update(Endpoint)

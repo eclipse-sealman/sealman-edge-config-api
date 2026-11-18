@@ -1,7 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from typing import Optional, Dict, Union
 from datetime import datetime
-from routers.schemas import FieldDefinition, FieldDefinitionUpdate
+from routers.schemas import FieldDefinition, FieldDefinitionUpdate, reject_list_fields
 
 
 class DeviceTypeCreate(BaseModel):
@@ -9,11 +9,21 @@ class DeviceTypeCreate(BaseModel):
     description: Optional[str] = None
     fields: Dict[str, FieldDefinition] = {}
 
+    @model_validator(mode="after")
+    def _reject_lists(self) -> "DeviceTypeCreate":
+        reject_list_fields(self.fields or {})
+        return self
+
 
 class DeviceTypeUpdate(BaseModel):
     label: Optional[str] = None
     description: Optional[str] = None
     fields: Optional[Dict[str, Union[FieldDefinitionUpdate, None]]] = None
+
+    @model_validator(mode="after")
+    def _reject_lists(self) -> "DeviceTypeUpdate":
+        reject_list_fields(self.fields or {})
+        return self
 
 
 class DeviceTypeResponse(BaseModel):
