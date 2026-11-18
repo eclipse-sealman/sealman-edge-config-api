@@ -81,7 +81,10 @@ async def search_devices(
 
     # What matched, for the devices found: one query per kind of filter in use, never per device.
     # A kind with several filters lists what matched any of them (the AND is across devices).
-    values_of = lambda kind: [f.value for f in request.filters if f.type == kind]  # noqa: E731
+    values_of = lambda kind: [f.value for f in request.filters if f.type == kind and f.field is None]  # noqa: E731
+    keyed_of = lambda kind: [  # noqa: E731
+        (f.field, f.value) for f in request.filters if f.type == kind and f.field is not None
+    ]
     matches: Dict[str, List[DeviceSearchMatch]] = {device_id: [] for device_id in device_ids}
 
     if values_of("device_id"):
@@ -104,7 +107,7 @@ async def search_devices(
         matches[device_id].append(DeviceSearchMatch(kind="metadata", fields=list(fields.values())))
 
     endpoint_matches: Dict[str, DeviceSearchMatch] = {}
-    for row in await repo.search_endpoints(values_of("endpoint"), device_ids):
+    for row in await repo.search_endpoints(values_of("endpoint"), device_ids, keyed_of("endpoint")):
         match = endpoint_matches.get(row["endpoint_id"])
         if match is None:
             match = DeviceSearchMatch(
@@ -119,7 +122,7 @@ async def search_devices(
         match.fields.append(_field(row))
 
     service_matches: Dict[str, DeviceSearchMatch] = {}
-    for row in await repo.search_services(values_of("service"), device_ids):
+    for row in await repo.search_services(values_of("service"), device_ids, keyed_of("service")):
         match = service_matches.get(row["service_id"])
         if match is None:
             match = DeviceSearchMatch(

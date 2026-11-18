@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,6 +56,25 @@ def _like_any(column: str, terms: Sequence[str]) -> tuple[str, Dict[str, str]]:
     return f"({clause})", params
 
 
+def _match_any(
+    terms: Sequence[str], keyed_terms: Sequence[Tuple[str, str]]
+) -> tuple[str, Dict[str, str]]:
+    """Like `_like_any` over `r.value`, plus `(r.key = :kn and r.value ilike :vn ...)` for each
+    (key, value) of `keyed_terms`."""
+    clauses: List[str] = []
+    params: Dict[str, str] = {}
+    if terms:
+        clause, params = _like_any("r.value", terms)
+        clauses.append(clause)
+    for i, (key, value) in enumerate(keyed_terms):
+        params[f"kk{i}"] = key
+        params[f"kv{i}"] = f"%{_escape_like(value)}%"
+        clauses.append(
+            f"(r.key = cast(:kk{i} as text) and r.value ilike :kv{i} escape '{_LIKE_ESCAPE}')"
+        )
+    return f"({' or '.join(clauses)})", params
+
+
 def _field_value(key_param: str) -> str:
     """SQL for the resolved value of the metadata field named by bind parameter `key_param`."""
     key = f"cast(:{key_param} as text)"
@@ -92,23 +111,25 @@ def _exists_metadata(param: str) -> str:
     return f"exists (select 1 from ({_metadata_values()}) r where r.value ilike :{param} escape '{_LIKE_ESCAPE}')"
 
 
-def _exists_endpoint(param: str) -> str:
+def _exists_endpoint(param: str, key_param: Optional[str] = None) -> str:
+    keyed = f"r.key = cast(:{key_param} as text) and " if key_param else ""
     return (
         f"exists (select 1 {_ENDPOINTS} cross join lateral ({_endpoint_values()}) r "
-        f"where e.device_id = d.device_id and r.value ilike :{param} escape '{_LIKE_ESCAPE}')"
+        f"where e.device_id = d.device_id and {keyed}r.value ilike :{param} escape '{_LIKE_ESCAPE}')"
     )
 
 
-def _exists_service(param: str) -> str:
+def _exists_service(param: str, key_param: Optional[str] = None) -> str:
+    keyed = f"r.key = cast(:{key_param} as text) and " if key_param else ""
     return (
         f"exists (select 1 {_SERVICES} join endpoint_types et on et.type_id = e.type_id "
         f"cross join lateral ({_service_values()}) r "
-        f"where e.device_id = d.device_id and r.value ilike :{param} escape '{_LIKE_ESCAPE}')"
+        f"where e.device_id = d.device_id and {keyed}r.value ilike :{param} escape '{_LIKE_ESCAPE}')"
     )
 
 
 # conditions on the "contains" kinds: the EXISTS over the device's own values / endpoints / services
-_CONTAINS_CONDITIONS: Dict[str, Callable[[str], str]] = {
+_CONTAINS_CONDITIONS: Dict[str, Callable[..., str]] = {
     "metadata": _exists_metadata,
     "endpoint": _exists_endpoint,
     "service": _exists_service,
@@ -168,7 +189,12 @@ class SqlAlchemyDeviceSearchRepository(DeviceSearchRepository):
                 params[key] = search_filter.field
                 params[value] = search_filter.value
             elif search_filter.kind in _CONTAINS_CONDITIONS:
-                conditions.append(_CONTAINS_CONDITIONS[search_filter.kind](value))
+                if search_filter.field and search_filter.kind in ("endpoint", "service"):
+                    key = f"k{i}"
+                    conditions.append(_CONTAINS_CONDITIONS[search_filter.kind](value, key))
+                    params[key] = search_filter.field
+                else:
+                    conditions.append(_CONTAINS_CONDITIONS[search_filter.kind](value))
                 params[value] = f"%{_escape_like(search_filter.value)}%"
             else:
                 raise ValueError(f"Unknown search filter kind '{search_filter.kind}'")
@@ -203,6 +229,10 @@ class SqlAlchemyDeviceSearchRepository(DeviceSearchRepository):
         def matches(column: str) -> str:
             return f"and {column} ilike :q escape '{_LIKE_ESCAPE}'" if query else ""
 
+        # a field of an endpoint / service: only that field's values
+        keyed = "and r.key = cast(:k as text)" if field and kind in ("endpoint", "service") else ""
+        if keyed:
+            params["k"] = field
         non_empty = "r.value is not null and r.value <> ''"
         device_column = "d.device_id"
         if kind == "device_id":
@@ -227,20 +257,45 @@ class SqlAlchemyDeviceSearchRepository(DeviceSearchRepository):
             device_column = "e.device_id"
             sql = (
                 f"select distinct r.value {_ENDPOINTS} cross join lateral ({_endpoint_values()}) r "
-                f"where {non_empty} {matches('r.value')} {{allowed}} order by r.value limit :limit"
+                f"where {non_empty} {keyed} {matches('r.value')} {{allowed}} order by r.value limit :limit"
             )
         elif kind == "service":
             device_column = "e.device_id"
             sql = (
                 f"select distinct r.value {_SERVICES} join endpoint_types et on et.type_id = e.type_id "
                 f"cross join lateral ({_service_values()}) r "
-                f"where {non_empty} {matches('r.value')} {{allowed}} order by r.value limit :limit"
+                f"where {non_empty} {keyed} {matches('r.value')} {{allowed}} order by r.value limit :limit"
             )
         else:
             raise ValueError(f"Unknown suggestion kind '{kind}'")
 
         rows = await self._rows(sql, params, device_column, allowed_device_ids)
         return [row["value"] for row in rows]
+
+    async def list_field_keys(
+        self,
+        kind: Literal["endpoint", "service"],
+        query: Optional[str],
+        limit: int,
+        allowed_device_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Optional[str]]]:
+        if allowed_device_ids == [] or limit <= 0:
+            return []
+        if kind == "endpoint":
+            source = f"{_ENDPOINTS} cross join lateral ({_RESOLVED_FIELDS.format(data='e.endpoint_data', fields='et.fields')}) r"
+        else:
+            source = f"{_SERVICES} cross join lateral ({_RESOLVED_FIELDS.format(data='s.service_data', fields='st.fields')}) r"
+        params: Dict[str, Any] = {"limit": limit}
+        matching = ""
+        if query:
+            params["q"] = f"%{_escape_like(query)}%"
+            matching = f"and (r.key ilike :q escape '{_LIKE_ESCAPE}' or r.field_label ilike :q escape '{_LIKE_ESCAPE}')"
+        sql = (
+            f"select r.key, max(r.field_label) as label {source} "
+            f"where r.value is not null and r.value <> '' {matching} {{allowed}} "
+            "group by r.key order by count(*) desc, r.key limit :limit"
+        )
+        return await self._rows(sql, params, "e.device_id", allowed_device_ids)
 
     async def get_device_fields(
         self,
@@ -279,10 +334,11 @@ class SqlAlchemyDeviceSearchRepository(DeviceSearchRepository):
         self,
         terms: List[str],
         allowed_device_ids: Optional[List[str]] = None,
+        keyed_terms: Sequence[Tuple[str, str]] = (),
     ) -> List[Dict[str, Any]]:
-        if not terms or allowed_device_ids == []:
+        if (not terms and not keyed_terms) or allowed_device_ids == []:
             return []
-        condition, params = _like_any("r.value", terms)
+        condition, params = _match_any(terms, keyed_terms)
         name_of = _NAME_OF.format(data="e.endpoint_data", fields="et.fields", mapping="et.mapping", alias="n")
         sql = f"""
             select e.device_id, e.endpoint_id, et.label as type_label, n.name as endpoint_name,
@@ -299,10 +355,11 @@ class SqlAlchemyDeviceSearchRepository(DeviceSearchRepository):
         self,
         terms: List[str],
         allowed_device_ids: Optional[List[str]] = None,
+        keyed_terms: Sequence[Tuple[str, str]] = (),
     ) -> List[Dict[str, Any]]:
-        if not terms or allowed_device_ids == []:
+        if (not terms and not keyed_terms) or allowed_device_ids == []:
             return []
-        condition, params = _like_any("r.value", terms)
+        condition, params = _match_any(terms, keyed_terms)
         name_of = _NAME_OF.format(data="e.endpoint_data", fields="et.fields", mapping="et.mapping", alias="n")
         sql = f"""
             select e.device_id, e.endpoint_id, n.name as endpoint_name, s.service_id,
