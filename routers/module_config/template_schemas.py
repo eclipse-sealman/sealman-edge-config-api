@@ -20,6 +20,8 @@ _ENDPOINTS_DESCRIPTION = "endpoint slot -> endpoint_id of the device, for ${endp
 _SERVICES_DESCRIPTION = ("endpoint slot (keyed like `endpoints`) -> service_id of the endpoint chosen for that slot, "
                          "for ${service[slot].*}")
 
+_ROWS_DESCRIPTION = "endpoint slot (keyed like `endpoints`) -> {list field: id of the chosen row}"
+
 
 _LISTS_DESCRIPTION = "list key (as in inputs.lists) -> its entries, in order; each entry renders its block under its name"
 
@@ -161,6 +163,7 @@ class PreviewRequest(LintRequest):
         None, description="with `device_id`: " + _ENDPOINTS_DESCRIPTION + "; omitted, endpoint placeholders stay as they are")
     lists: Dict[str, List[ListEntry]] = Field({}, description=_LISTS_DESCRIPTION)
     services: Dict[str, str] = Field({}, description="with `device_id` and `endpoints`: " + _SERVICES_DESCRIPTION)
+    rows: Dict[str, Dict[str, str]] = Field({}, description="with `device_id` and `endpoints`: " + _ROWS_DESCRIPTION)
 
 
 class ExampleDevice(BaseModel):
@@ -181,6 +184,7 @@ class RenderRequest(BaseModel):
     endpoints: Dict[str, str] = Field({}, description=_ENDPOINTS_DESCRIPTION)
     lists: Dict[str, List[ListEntry]] = Field({}, description=_LISTS_DESCRIPTION)
     services: Dict[str, str] = Field({}, description=_SERVICES_DESCRIPTION)
+    rows: Dict[str, Dict[str, str]] = Field({}, description=_ROWS_DESCRIPTION)
 
 
 class ApplyRequest(RenderRequest):

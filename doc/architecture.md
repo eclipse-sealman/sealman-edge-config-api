@@ -111,6 +111,9 @@ Namespaces are managed with `module_config.template.write`; only empty ones can 
 |---|---|
 | `${name}` | declared variable (`string`, `text` (multi-line input), `number`, `integer`, `boolean`, `enum`; `required`) |
 | `${device.a.b}` | device metadata (`devices.device_data`) |
+| `${endpoint.<field>}`, `${endpoint[<slot>].<field>}` | field of the endpoint chosen for the slot (`endpoints`, `$endpoints`) |
+| `${service[<slot>].<field>}` | field of the service chosen for the slot (`services`, `$services`) |
+| `${endpoint.<field>.<sub>}`, `${endpoint[<slot>].<field>.<sub>}` | sub-field of one row of the endpoint's list field; the row is chosen with `rows: {slot: {field: row id}}` (stored as `$rows`), optional when the field has exactly one row |
 | `"${x}"` (whole string) | keeps the value's JSON type; an optional variable without value removes the key / list item |
 | `$${` | literal `${` |
 

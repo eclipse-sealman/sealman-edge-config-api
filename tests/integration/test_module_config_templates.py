@@ -629,3 +629,40 @@ class TestServices:
         version = (await client.get(f"/module-config-templates/{template['id']}/versions/latest")).json()
         assert version["body"] == {"s": {"$list": ["ClientSeparator"], "$label": "Slave"}}
         assert version["inputs"]["lists"][0]["item_label"] == "Slave"
+
+
+class TestRows:
+    async def test_apply_with_a_row_choice(self, client, db_session, hub, device):
+        group = await _group(client)
+        template = await _block(client, group, "Machine",
+                                {"id": "${endpoint.equipment.identifier}", "crm": "${endpoint.equipment.crm_id}"},
+                                kind="template")
+        ep_type = await seed_endpoint_type(db_session, fields={"equipment": {
+            "type": "list", "item_fields": {"identifier": {"type": "string"}}}})
+        rows = [{"id": "r1", "identifier": "10330", "crm_id": "21289"}, {"id": "r2", "identifier": "41234", "crm_id": "7"}]
+        many = await seed_endpoint(db_session, device, ep_type, {"equipment": rows})
+        one = await seed_endpoint(db_session, device, ep_type, {"equipment": rows[:1]})
+        apply = f"/{device}/modules/{MODULE}/config/apply"
+
+        # several rows and no choice: findings, nothing written
+        response = await client.post(apply, json={"template_id": template["id"], "endpoints": {"endpoint": many}})
+        assert response.status_code == 422, response.text
+        assert {f["code"] for f in response.json()["findings"]} == {"missing-row"}
+
+        body = {"template_id": template["id"], "endpoints": {"endpoint": many}, "rows": {"endpoint": {"equipment": "r2"}}}
+        response = await client.post(apply, json=body)
+        assert response.status_code == 200, response.text
+        assert response.json()["revision"]["values"]["$rows"] == {"endpoint": {"equipment": "r2"}}
+        assert hub["blobs"][(device, MODULE, response.json()["configId"])] == {"id": "41234", "crm": "7"}
+
+        # a row id of another endpoint
+        response = await client.post(apply, json={**body, "rows": {"endpoint": {"equipment": "nope"}}})
+        assert response.status_code == 422, response.text
+        # the body key depends on the app's HTTPException handler, so match the text
+        assert "Row chosen for 'endpoint' in 'equipment' is not on the chosen endpoint" in response.text
+
+        # one row: used without a choice
+        response = await client.post(apply, json={"template_id": template["id"], "endpoints": {"endpoint": one}})
+        assert response.status_code == 200, response.text
+        assert hub["blobs"][(device, MODULE, response.json()["configId"])] == {"id": "10330", "crm": "21289"}
+        assert "$rows" not in response.json()["revision"]["values"]

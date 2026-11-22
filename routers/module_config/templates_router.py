@@ -189,6 +189,28 @@ async def _chosen_services(
     return out
 
 
+def _chosen_rows(
+    body: Any, endpoints: Dict[str, Optional[Dict[str, Any]]], chosen: Dict[str, Dict[str, str]],
+    blocks: Optional[templating.BlockVersions], lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> Dict[str, Dict[str, str]]:
+    """Slot -> {list field: row id} for the slots and fields the template reads rows of. A chosen id must
+    be a row of that field on the endpoint chosen for the slot; an endpoint without rows in the field is left
+    to the renderer."""
+    out: Dict[str, Dict[str, str]] = {}
+    for entry in _slots(body, blocks, lists):
+        slot = entry["key"]
+        for field in entry["row_fields"]:
+            row_id = (chosen.get(slot) or {}).get(field)
+            if not row_id:
+                continue
+            rows = templating.rows_of((endpoints.get(slot) or {}).get(field))
+            if rows and all(row.get("id") != row_id for row in rows):
+                raise HTTPException(status_code=422,
+                                    detail=f"Row chosen for '{slot}' in '{field}' is not on the chosen endpoint")
+            out.setdefault(slot, {})[field] = row_id
+    return out
+
+
 async def _group_or_404(repo: ModuleConfigRepository, group_id: int) -> Dict[str, Any]:
     group = await repo.get_group(group_id)
     if group is None:
@@ -362,12 +384,13 @@ async def preview_template(
     entry_findings = templating.check_entries(body, lists, blocks)
     if templating.has_errors(entry_findings):
         return _findings_error("The list entries have errors", entry_findings)
-    endpoints, services = None, None
+    endpoints, services, rows = None, None, None
     if req.device_id is not None and req.endpoints is not None:
         endpoints = await _chosen_endpoints(endpoint_repo, req.device_id, body, req.endpoints, blocks, lists)
         services = await _chosen_services(service_repo, body, req.endpoints, req.services, blocks, lists)
+        rows = _chosen_rows(body, endpoints, req.rows, blocks, lists)
     config, findings = templating.render(body, _variables(req), req.values, device_meta, endpoints, blocks, req.kind,
-                                         lists, services)
+                                         lists, services, rows)
     findings = _merge(name_findings, ref_findings + findings)
     return {"ok": config is not None and not templating.has_errors(findings), "config": config, "findings": findings}
 
@@ -515,8 +538,9 @@ async def _render_for_device(
         return template, version, None, ref_findings + entry_findings
     endpoints = await _chosen_endpoints(endpoint_repo, device, version["body"], req.endpoints, blocks, lists)
     services = await _chosen_services(service_repo, version["body"], req.endpoints, req.services, blocks, lists)
+    rows = _chosen_rows(version["body"], endpoints, req.rows, blocks, lists)
     config, findings = templating.render(version["body"], version["variables"], req.values, device_meta, endpoints,
-                                         blocks, lists=lists, services=services)
+                                         blocks, lists=lists, services=services, rows=rows)
     findings = ref_findings + findings
     if not templating.has_errors(findings):
         findings += _schema_findings(module, config)
@@ -615,6 +639,8 @@ async def apply_module_config(
         values["$lists"] = _lists(req)
     if req.services:
         values["$services"] = req.services
+    if req.rows:
+        values["$rows"] = req.rows
     result = await service.write_module_config(
         device, module, config, source="template", actor=auth["user_name"], repo=repo,
         template_id=template["id"], values=values, comment=req.comment,
