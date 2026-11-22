@@ -259,3 +259,29 @@ def test_list_label():
     assert t.inputs({"s": {"$list": ["1"], "$label": "Slave"}}, [], BLOCKS)["lists"][0]["item_label"] == "Slave"
     assert codes(t.lint({"s": {"$list": ["1"], "x": 1}}, []), "error") == ["bad-list"]
     assert codes(t.lint({"s": {"$label": "Slave"}}, []), "error") == ["bad-list"]
+
+
+def test_row_placeholder_is_valid_and_reported_per_slot():
+    body = {"a": "${endpoint.equipment.identifier}", "b": "${endpoint[plc].equipment.crm_id}",
+            "c": "${endpoint[plc].equipment.identifier}", "d": "${endpoint[plc].ip}"}
+    assert t.lint(body, []) == []
+    slots = {e["key"]: e for e in t.inputs(body, [], None)["endpoints"]}
+    assert slots["endpoint"]["fields"] == [] and slots["endpoint"]["row_fields"] == {"equipment": ["identifier"]}
+    assert slots["plc"]["fields"] == ["ip"] and slots["plc"]["row_fields"] == {"equipment": ["crm_id", "identifier"]}
+    refs = t.references(body)
+    assert refs["endpoints"] == ["endpoint", "plc"]
+    assert "plc.equipment.crm_id" in refs["endpoint_fields"] and "plc.ip" in refs["endpoint_fields"]
+
+
+def test_whole_list_reference_is_unchanged_next_to_a_row_reference():
+    body = {"all": "${endpoint.equipment}", "one": "${endpoint.equipment.identifier}"}
+    slot = t.inputs(body, [], None)["endpoints"][0]
+    assert slot["fields"] == ["equipment"] and slot["row_fields"] == {"equipment": ["identifier"]}
+
+
+def test_row_placeholder_satisfies_a_service_placeholder_of_the_same_slot():
+    assert t.lint({"a": "${endpoint[m].equipment.identifier}", "b": "${service[m].port}"}, []) == []
+
+
+def test_four_part_endpoint_reference_is_still_invalid():
+    assert codes(t.lint({"a": "${endpoint.a.b.c}"}, []), "error") == ["bad-placeholder"]

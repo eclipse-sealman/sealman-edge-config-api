@@ -10,6 +10,9 @@ A template is a JSON object whose string values may contain placeholders:
                        a field of an endpoint of the device, chosen per slot when the template is
                        rendered for a device (``${endpoint.x}`` is the slot ``endpoint``). ``ip`` and
                        ``name`` also resolve through the endpoint type's field roles.
+- ``${endpoint.field.sub}`` / ``${endpoint[slot].field.sub}``
+                       the ``sub`` entry of one row of the endpoint's list field ``field``; the row is
+                       chosen per device when the template is rendered.
 - ``${service[slot].field}``
                        a field of the service chosen (per device) for endpoint slot ``slot``; the body
                        must also use that endpoint slot. ``port`` also resolves through the service
@@ -53,6 +56,7 @@ _WHOLE_RE = re.compile(r"\$\{([^{}]*)\}")
 _VARIABLE_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _DEVICE_PATH_RE = re.compile(r"device(\.[A-Za-z0-9_\-]+)+")
 _ENDPOINT_RE = re.compile(r"endpoint(?:\[([A-Za-z_][A-Za-z0-9_]*)\])?\.([A-Za-z0-9_\-]+)")
+_ROW_RE = re.compile(r"endpoint(?:\[([A-Za-z_][A-Za-z0-9_]*)\])?\.([A-Za-z0-9_\-]+)\.([A-Za-z0-9_\-]+)")
 _SERVICE_RE = re.compile(r"service(?:\[([A-Za-z_][A-Za-z0-9_]*)\])?\.([A-Za-z0-9_\-]+)")
 
 
@@ -144,6 +148,12 @@ def _endpoint_ref(ref: str) -> Optional[Tuple[str, str]]:
     return (match.group(1) or DEFAULT_SLOT, match.group(2)) if match else None
 
 
+def _row_ref(ref: str) -> Optional[Tuple[str, str, str]]:
+    """(slot, field, sub) for a list-row placeholder, else None."""
+    match = _ROW_RE.fullmatch(ref)
+    return (match.group(1) or DEFAULT_SLOT, match.group(2), match.group(3)) if match else None
+
+
 def _service_ref(ref: str) -> Optional[Tuple[str, str]]:
     """(endpoint slot, field) for a service placeholder, else None."""
     match = _SERVICE_RE.fullmatch(ref)
@@ -152,7 +162,7 @@ def _service_ref(ref: str) -> Optional[Tuple[str, str]]:
 
 def _valid_reference(ref: str) -> bool:
     return bool(_VARIABLE_NAME_RE.fullmatch(ref) or _DEVICE_PATH_RE.fullmatch(ref) or _ENDPOINT_RE.fullmatch(ref)
-                or _SERVICE_RE.fullmatch(ref))
+                or _ROW_RE.fullmatch(ref) or _SERVICE_RE.fullmatch(ref))
 
 
 def _service_uses(body: Any) -> Dict[str, set]:
@@ -167,6 +177,18 @@ def _service_uses(body: Any) -> Dict[str, set]:
     return slots
 
 
+def _row_uses(body: Any) -> Dict[str, Dict[str, set]]:
+    """{slot: {list field: sub names}} of the row placeholders used directly in a body (not in its blocks)."""
+    slots: Dict[str, Dict[str, set]] = {}
+    for kind, _, text in _walk_strings(body):
+        if kind == "value":
+            for ref in _placeholders(text):
+                row = _row_ref(ref)
+                if row:
+                    slots.setdefault(row[0], {}).setdefault(row[1], set()).add(row[2])
+    return slots
+
+
 def _uses(body: Any) -> Tuple[set, set, Dict[str, set]]:
     """(variable names, device paths, {slot: field names}) used directly in a body (not in its blocks)."""
     variables, device, slots = set(), set(), {}
@@ -177,7 +199,7 @@ def _uses(body: Any) -> Tuple[set, set, Dict[str, set]]:
             endpoint = _endpoint_ref(ref)
             if endpoint:
                 slots.setdefault(endpoint[0], set()).add(endpoint[1])
-            elif _service_ref(ref):
+            elif _service_ref(ref) or _row_ref(ref):
                 continue
             elif ref.startswith(DEVICE_PREFIX) and _DEVICE_PATH_RE.fullmatch(ref):
                 device.add(ref[len(DEVICE_PREFIX):])
@@ -299,12 +321,14 @@ def inputs(body: Any, variables: List[Dict[str, Any]], blocks: Optional[BlockVer
     for copy_key, copy_body, copy_vars in bodies:
         _, used_device, slots = _uses(copy_body)
         services = _service_uses(copy_body)
+        rows = _row_uses(copy_body)
         device |= used_device
         out_vars += [{**decl, "key": _key(copy_key or "", decl.get("name")), "copy": copy_key}
                      for decl in copy_vars if isinstance(decl.get("name"), str)]
         out_endpoints += [{"key": _key(copy_key or "", slot), "copy": copy_key, "slot": slot,
-                           "fields": sorted(slots.get(slot, ())), "service_fields": sorted(services.get(slot, ()))}
-                          for slot in sorted(set(slots) | set(services))]
+                           "fields": sorted(slots.get(slot, ())), "service_fields": sorted(services.get(slot, ())),
+                           "row_fields": {f: sorted(subs) for f, subs in sorted(rows.get(slot, {}).items())}}
+                          for slot in sorted(set(slots) | set(services) | set(rows))]
     out_lists = []
     for item in lists(body):
         entry_blocks = []
@@ -323,7 +347,7 @@ def inputs(body: Any, variables: List[Dict[str, Any]], blocks: Optional[BlockVer
 def references(body: Any, blocks: Optional[BlockVersions] = None) -> Dict[str, List[str]]:
     """Variable, device field and endpoint references used in a template body and its block copies.
     `endpoints` lists the endpoint slots (one endpoint is chosen per slot), `endpoint_fields` the
-    `slot.field` pairs; both keyed `<copy>/<slot>` inside copies."""
+    `slot.field` pairs (and `slot.field.sub` for list rows); both keyed `<copy>/<slot>` inside copies."""
     found = inputs(body, [], blocks)
     variables = set(_uses(body)[0])
     for copy in found["copies"]:
@@ -332,7 +356,9 @@ def references(body: Any, blocks: Optional[BlockVersions] = None) -> Dict[str, L
             variables |= {_key(copy["key"], name) for name in _uses(block.get("body"))[0]}
     return {"variables": sorted(variables), "device": found["device"],
             "endpoints": sorted(e["key"] for e in found["endpoints"]),
-            "endpoint_fields": sorted(f"{e['key']}.{f}" for e in found["endpoints"] for f in e["fields"])}
+            "endpoint_fields": sorted([f"{e['key']}.{f}" for e in found["endpoints"] for f in e["fields"]]
+                                      + [f"{e['key']}.{f}.{sub}" for e in found["endpoints"]
+                                         for f, subs in e["row_fields"].items() for sub in subs])}
 
 
 def coerce(value: Any, decl: Dict[str, Any]) -> Any:
@@ -420,7 +446,7 @@ def lint(body: Any, variables: List[Dict[str, Any]], kind: str = "template") -> 
             continue
 
     used = set()
-    endpoint_slots = _uses(body)[2]
+    endpoint_slots = set(_uses(body)[2]) | set(_row_uses(body))
     for kind, path, text in _walk_strings(body):
         if kind == "ref":
             continue
@@ -450,7 +476,7 @@ def lint(body: Any, variables: List[Dict[str, Any]], kind: str = "template") -> 
         for ref in _placeholders(text):
             if not _valid_reference(ref):
                 findings.append(finding(pointer(path), "error", "bad-placeholder", f"'${{{ref}}}' is not a valid placeholder"))
-            elif ref.startswith(DEVICE_PREFIX) or _endpoint_ref(ref):
+            elif ref.startswith(DEVICE_PREFIX) or _endpoint_ref(ref) or _row_ref(ref):
                 continue
             elif _service_ref(ref):
                 slot = _service_ref(ref)[0]
