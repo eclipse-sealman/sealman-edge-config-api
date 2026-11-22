@@ -285,3 +285,62 @@ def test_row_placeholder_satisfies_a_service_placeholder_of_the_same_slot():
 
 def test_four_part_endpoint_reference_is_still_invalid():
     assert codes(t.lint({"a": "${endpoint.a.b.c}"}, []), "error") == ["bad-placeholder"]
+
+
+ROWS = [{"id": "r1", "identifier": "10330", "crm_id": "21289", "port": 3},
+        {"id": "r2", "identifier": "41234"}]
+ROW_BODY = {"m": "${endpoint.equipment.identifier}", "c": "${endpoint.equipment.crm_id}"}
+
+
+def render_rows(body, equipment, rows=None, **fields):
+    return t.render(body, [], {}, None, {"endpoint": {"equipment": equipment, **fields}}, None, rows=rows)
+
+
+def test_single_row_is_used_without_a_choice():
+    config, findings = render_rows(ROW_BODY, ROWS[:1])
+    assert config == {"m": "10330", "c": "21289"} and findings == []
+
+
+def test_several_rows_need_a_choice_and_the_chosen_row_is_used():
+    _, findings = render_rows(ROW_BODY, ROWS)
+    assert codes(findings, "error") == ["missing-row", "missing-row"]
+    assert findings[0]["message"] == "Choose a row of 'equipment' for 'endpoint'"
+    config, findings = render_rows({"m": "${endpoint.equipment.identifier}"}, ROWS, {"endpoint": {"equipment": "r2"}})
+    assert config == {"m": "41234"} and findings == []
+
+
+def test_chosen_row_without_the_sub_field_is_an_error():
+    config, findings = render_rows(ROW_BODY, ROWS, {"endpoint": {"equipment": "r2"}})
+    assert config == {"m": "41234"} and codes(findings, "error") == ["missing-row-field"]
+    assert findings[0]["message"] == "'endpoint.equipment.crm_id': the chosen row has no 'crm_id'"
+
+
+@pytest.mark.parametrize("equipment", [None, [], "10.0.0.1", ["junk", 3]])
+def test_field_without_rows_is_a_missing_endpoint_field(equipment):
+    _, findings = render_rows({"m": "${endpoint.equipment.identifier}"}, equipment)
+    assert codes(findings, "error") == ["missing-endpoint-field"]
+    assert findings[0]["message"] == "'endpoint.equipment.identifier': the chosen endpoint has no rows in 'equipment'"
+
+
+def test_row_value_keeps_its_type_as_a_whole_placeholder_and_is_text_inside_a_string():
+    config, _ = render_rows({"p": "${endpoint.equipment.port}", "s": "port ${endpoint.equipment.port}"}, ROWS[:1])
+    assert config == {"p": 3, "s": "port 3"}
+
+
+def test_two_list_fields_of_one_slot_are_chosen_independently():
+    body = {"a": "${endpoint.equipment.identifier}", "b": "${endpoint.sensors.tag}"}
+    endpoint = {"equipment": ROWS, "sensors": [{"id": "s1", "tag": "T1"}]}
+    config, findings = t.render(body, [], {}, None, {"endpoint": endpoint}, None, rows={"endpoint": {"equipment": "r1"}})
+    assert config == {"a": "10330", "b": "T1"} and findings == []
+
+
+def test_row_choice_inside_a_block_copy_is_keyed_by_the_copy():
+    blocks = {1: {"body": {"m": "${endpoint[plc].equipment.identifier}"}, "variables": []}}
+    config, findings = t.render({"sep": {"$ref": "1"}}, [], {}, None, {"sep/plc": {"equipment": ROWS}}, blocks,
+                                rows={"sep/plc": {"equipment": "r2"}})
+    assert config == {"sep": {"m": "41234"}} and findings == []
+
+
+def test_row_placeholder_is_kept_without_device_context():
+    config, _ = t.render({"m": "${endpoint.equipment.identifier}"}, [], {}, None, None, None)
+    assert config == {"m": "${endpoint.equipment.identifier}"}

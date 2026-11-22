@@ -514,13 +514,21 @@ def _scoped(entries: Optional[Dict[str, Any]], prefix: str) -> Optional[Dict[str
             if k.startswith(start) and COPY_SEP not in k[len(start):]}
 
 
+def rows_of(value: Any) -> List[Dict[str, Any]]:
+    """The row objects of a list field's value; empty for anything that is not a list."""
+    return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
+
+
 class _Renderer:
     def __init__(self, variables: List[Dict[str, Any]], values: Dict[str, Any], device: Optional[Dict[str, Any]],
                  endpoints: Optional[Dict[str, Optional[Dict[str, Any]]]], blocks: Optional[BlockVersions] = None,
                  prefix: str = "", stack: Tuple[int, ...] = (),
                  lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
-                 services: Optional[Dict[str, Optional[Dict[str, Any]]]] = None):
+                 services: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
+                 rows: Optional[Dict[str, Dict[str, str]]] = None):
         self.findings: List[Dict[str, str]] = []
+        self.all_rows = rows
+        self.rows = _scoped(rows, prefix) or {}
         self.all_services = services
         self.services = _scoped(services, prefix)
         self.lists = lists or {}
@@ -567,10 +575,41 @@ class _Renderer:
                                          f"Block {ref} includes itself"))
             return OMIT
         child = _Renderer(block.get("variables") or [], self.all_values, self.device, self.all_endpoints,
-                          self.blocks, _key(self.prefix, name), self.stack + (ref,), services=self.all_services)
+                          self.blocks, _key(self.prefix, name), self.stack + (ref,), services=self.all_services,
+                          rows=self.all_rows)
         rendered = child.node(block.get("body"), path)
         self.findings.extend(child.findings)
         return rendered
+
+    def _resolve_row(self, ref: str, row_ref: Tuple[str, str, str], path: Tuple[Any, ...]) -> Any:
+        slot, field, sub = row_ref
+        if self.endpoints is None:  # no device context (template preview): keep the placeholder
+            return "${" + ref + "}"
+        endpoint = self.endpoints.get(slot)
+        if endpoint is None:
+            self.findings.append(finding(pointer(path), "error", "missing-endpoint",
+                                         f"Choose an endpoint for '{slot}'"))
+            return OMIT
+        rows = rows_of(endpoint.get(field))
+        if not rows:
+            self.findings.append(finding(pointer(path), "error", "missing-endpoint-field",
+                                         f"'{ref}': the chosen endpoint has no rows in '{field}'"))
+            return OMIT
+        chosen = (self.rows.get(slot) or {}).get(field)
+        if chosen is not None:
+            matching = [row for row in rows if row.get("id") == chosen]
+            row = matching[0] if matching else None
+        else:
+            row = rows[0] if len(rows) == 1 else None
+        if row is None:
+            self.findings.append(finding(pointer(path), "error", "missing-row",
+                                         f"Choose a row of '{field}' for '{slot}'"))
+            return OMIT
+        if row.get(sub) is None:
+            self.findings.append(finding(pointer(path), "error", "missing-row-field",
+                                         f"'{ref}': the chosen row has no '{sub}'"))
+            return OMIT
+        return row[sub]
 
     def _resolve(self, ref: str, path: Tuple[Any, ...]) -> Any:
         service_ref = _service_ref(ref)
@@ -588,6 +627,9 @@ class _Renderer:
                                              f"'{ref}': the chosen service has no '{field}'"))
                 return OMIT
             return service[field]
+        row_ref = _row_ref(ref)
+        if row_ref:
+            return self._resolve_row(ref, row_ref, path)
         endpoint_ref = _endpoint_ref(ref)
         if endpoint_ref:
             slot, field = endpoint_ref
@@ -669,6 +711,7 @@ def render(
     kind: str = "template",
     lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     services: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
+    rows: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Tuple[Optional[Any], List[Dict[str, str]]]:
     """Renders a template. Returns (config, findings); config is None if the template itself is invalid.
     `endpoints` maps each endpoint slot to the chosen endpoint's flat fields (see `endpoint_fields`);
@@ -677,12 +720,13 @@ def render(
     versions; None leaves references as they are. `kind` "block" also renders an array body. `lists` maps
     each list to its entries `[{"name", "block_id"}]` (see `check_entries`); a list without entries renders `{}`.
     `services` maps endpoint slots (keyed like `endpoints`) to the chosen service's flat fields (see
-    `service_fields`); None leaves service placeholders as they are."""
+    `service_fields`); None leaves service placeholders as they are. `rows` maps endpoint slots (keyed like
+    `endpoints`) to `{list field: chosen row id}`; a list field with a single row needs no choice."""
     findings = lint(body, variables, kind)
     if has_errors(findings):
         return None, findings
     values = values or {}
-    renderer = _Renderer(variables, values, device, endpoints, blocks, lists=lists, services=services)
+    renderer = _Renderer(variables, values, device, endpoints, blocks, lists=lists, services=services, rows=rows)
     config = renderer.node(body)
     copy_keys = {c["key"] for c in copies(body, blocks)} if blocks is not None else set()
     for list_key, _, node_kind, _ in _direct_names(body):  # list entries render like copies
