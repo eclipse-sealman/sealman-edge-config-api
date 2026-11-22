@@ -661,6 +661,14 @@ class TestRows:
         # the body key depends on the app's HTTPException handler, so match the text
         assert "Row chosen for 'endpoint' in 'equipment' is not on the chosen endpoint" in response.text
 
+        # a row id for an endpoint without rows: the renderer's finding, not the 422 above
+        empty = await seed_endpoint(db_session, device, ep_type, {})
+        response = await client.post(apply, json={"template_id": template["id"], "endpoints": {"endpoint": empty},
+                                                  "rows": {"endpoint": {"equipment": "r1"}}})
+        assert response.status_code == 422, response.text
+        assert {f["code"] for f in response.json()["findings"]} == {"missing-endpoint-field"}
+        assert "Row chosen for" not in response.text
+
         # one row: used without a choice
         response = await client.post(apply, json={"template_id": template["id"], "endpoints": {"endpoint": one}})
         assert response.status_code == 200, response.text
