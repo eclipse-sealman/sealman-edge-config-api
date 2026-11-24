@@ -167,6 +167,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
             select(Service, ServiceType)
             .join(ServiceType, Service.type_id == ServiceType.type_id)
             .where(Service.endpoint_id == endpoint_id)
+            .order_by(Service.created_at, Service.service_id)
         )
         if type_id is not None:
             stmt = stmt.where(Service.type_id == type_id)
