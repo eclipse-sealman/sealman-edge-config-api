@@ -302,14 +302,6 @@ class SQLAlchemyModuleConfigRepository(ModuleConfigRepository):
         await self._session.refresh(row)
         return _revision_dict(row)
 
-    async def delete_revision(self, device_id: str, module_name: str, revision_id: int) -> None:
-        await self._session.execute(delete(ModuleConfigRevision).where(
-            ModuleConfigRevision.id == revision_id,
-            ModuleConfigRevision.device_id == device_id,
-            ModuleConfigRevision.module_name == module_name,
-        ))
-        await self._session.commit()
-
     async def list_revisions(self, device_id: str, module_name: str, limit: int = 100) -> List[Dict]:
         rows = (await self._session.execute(
             select(ModuleConfigRevision)

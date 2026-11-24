@@ -85,9 +85,6 @@ class ModuleConfigRepository(ABC):
         secret paths."""
 
     @abstractmethod
-    async def delete_revision(self, device_id: str, module_name: str, revision_id: int) -> None: ...
-
-    @abstractmethod
     async def list_revisions(self, device_id: str, module_name: str, limit: int = 100) -> List[Dict]: ...
 
     @abstractmethod

@@ -968,6 +968,25 @@ class TestSecretFilesInRevisions:
         assert "PRIVATE KEY" not in response.text
         assert hub["desired"][(device, MODULE)]["configId"] == current
 
+    async def test_twin_patch_failing_after_it_applied_keeps_the_revision(self, client, hub, device, tls, monkeypatch):
+        from exceptions import IoTBackendAPIError
+        applied_patch = service._patch_twin
+
+        async def patch_then_time_out(device_id, module, config_id):
+            await applied_patch(device_id, module, config_id)
+            raise IoTBackendAPIError("timed out", 504)
+
+        monkeypatch.setattr(service, "_patch_twin", patch_then_time_out)
+        response = await client.post(f"/{device}/modules/{MODULE}/config/apply", json={
+            "template_id": tls["template"]["id"], "endpoints": {"endpoint": tls["endpoint_id"]}})
+        assert response.status_code == 504
+
+        [revision] = (await client.get(f"/{device}/modules/{MODULE}/config/revisions")).json()["revisions"]
+        assert revision["source"] == "template" and revision["config_id"] == hub["desired"][(device, MODULE)]["configId"]
+        read = await client.get(f"/{device}/twin/config/{MODULE}")
+        assert read.status_code == 200 and "PRIVATE KEY" not in read.text
+        assert SECRET_MASK.fullmatch(read.json()["clients"][0]["clientPrivateKey"])
+
     async def test_external_row_for_the_config_id_is_upgraded(self, client, hub, device, tls):
         config_id = "e" * 32
         hub["desired"][(device, MODULE)] = {"configId": config_id, "configBlobUrl": "blob://x", "_blob": config_id}

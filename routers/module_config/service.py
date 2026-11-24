@@ -115,15 +115,8 @@ async def _record_before_patch(repo: Optional[ModuleConfigRepository], fields: D
         return await _with_repo(repo, lambda r: r.add_revision(**fields))
     except Exception as exc:
         logger.error(f"Could not record module config revision for {fields['device_id']}/{fields['module_name']}: {exc}")
-        raise IoTBackendAPIError("Could not record the module configuration revision; nothing was written", 500)
-
-
-async def _forget(repo: Optional[ModuleConfigRepository], revision: Dict) -> None:
-    """Best effort: removes a revision whose twin patch failed."""
-    try:
-        await _with_repo(repo, lambda r: r.delete_revision(revision["device_id"], revision["module_name"], revision["id"]))
-    except Exception as exc:
-        logger.error(f"Could not remove module config revision {revision['id']} after a failed twin update: {exc}")
+        raise IoTBackendAPIError(
+            "Could not record the module configuration revision; the configuration was not applied", 500)
 
 
 async def write_module_config(
@@ -141,7 +134,10 @@ async def write_module_config(
     secret_paths: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """Writes `content` to the device module and records the revision. Returns
-    `{"configId", "revision"}`; `revision` is None if it could not be recorded."""
+    `{"configId", "revision"}`. Without secret paths, `revision` is None if it could not be recorded.
+    With secret paths the revision is recorded before the twin is patched: a failed insert raises and
+    the twin is not patched; a failed twin patch raises and keeps the revision (the hub may have applied
+    the patch anyway, so the reads stay masked; a revision nothing points to leaks nothing)."""
     validate_iothub_id(device)
     validate_iothub_id(module)
     if secret_paths:
@@ -165,11 +161,7 @@ async def write_module_config(
     if not secret_paths:
         return {"configId": config_id, "revision": await _record(repo, fields)}
     revision = await _record_before_patch(repo, fields)
-    try:
-        await _patch_twin(device, module, config_id)
-    except Exception:
-        await _forget(repo, revision)
-        raise
+    await _patch_twin(device, module, config_id)
     return {"configId": config_id, "revision": revision}
 
 
