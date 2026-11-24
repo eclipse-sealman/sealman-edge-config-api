@@ -30,10 +30,12 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
             raise APIError(f"ServiceType '{type_id}' not found", 404)
         return service_type
 
-    async def _get_service(self, service_id: str) -> Optional[Service]:
-        result = await self._session.execute(
-            select(Service).where(Service.service_id == service_id)
-        )
+    async def _get_service(self, service_id: str, for_update: bool = False) -> Optional[Service]:
+        query = select(Service).where(Service.service_id == service_id)
+        if for_update:
+            # Locks the row until commit, so a concurrent upload or remove is not overwritten.
+            query = query.with_for_update().execution_options(populate_existing=True)
+        result = await self._session.execute(query)
         return result.scalar_one_or_none()
 
     def _serialize_type(self, entity_type: Any) -> Dict[str, Any]:
@@ -218,7 +220,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         service_id: str,
         service_data: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
-        service = await self._get_service(service_id)
+        service = await self._get_service(service_id, for_update=True)
         if service is None:
             return None
         service_type = await self._get_service_type_or_raise(service.type_id)

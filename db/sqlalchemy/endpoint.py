@@ -36,10 +36,12 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             raise APIError(f"EndpointType '{type_id}' not found", 404)
         return et
 
-    async def _get_endpoint(self, endpoint_id: str) -> Optional[Endpoint]:
-        result = await self._session.execute(
-            select(Endpoint).where(Endpoint.endpoint_id == endpoint_id)
-        )
+    async def _get_endpoint(self, endpoint_id: str, for_update: bool = False) -> Optional[Endpoint]:
+        query = select(Endpoint).where(Endpoint.endpoint_id == endpoint_id)
+        if for_update:
+            # Locks the row until commit, so a concurrent upload or remove is not overwritten.
+            query = query.with_for_update().execution_options(populate_existing=True)
+        result = await self._session.execute(query)
         return result.scalar_one_or_none()
 
     async def get_endpoint_types(self) -> List[Dict[str, Any]]:
@@ -207,7 +209,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         endpoint_data: Optional[Dict[str, Any]] = None,
         type_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        endpoint = await self._get_endpoint(endpoint_id)
+        endpoint = await self._get_endpoint(endpoint_id, for_update=True)
         if endpoint is None:
             return None
 

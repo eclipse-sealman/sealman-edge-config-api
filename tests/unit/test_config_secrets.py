@@ -6,7 +6,7 @@ from cryptography.fernet import Fernet
 from db.repos.field_file import FieldFile
 from file_crypto import encrypt
 from routers.module_config.secrets import (
-    SecretRestoreError, contains_mask, mask_config, mask_text, restore_secrets)
+    SecretRestoreError, contains_mask, load_render_files, mask_config, mask_text, restore_secrets)
 
 
 def test_mask_config():
@@ -86,12 +86,31 @@ async def test_restore_refuses_unknown_mask_and_missing_file(key, monkeypatch):
             await restore_secrets(content, previous, _Files({}), by=by)
         assert str(exc.value) == removed
 
-    # a file that can no longer be decrypted counts as removed; the message never carries content
+    # a file that can no longer be decrypted has its own message, which never carries content
     files = _Files({("endpoint", "ep1", "key"): _row("NEW KEY PEM")})
     monkeypatch.setenv("FILE_ENCRYPTION_KEY", Fernet.generate_key().decode())
     with pytest.raises(SecretRestoreError) as exc:
         await restore_secrets({"k": "OLD KEY PEM"}, previous, files, by="path")
-    assert str(exc.value) == removed
+    assert str(exc.value) == "The file 'client.key' (endpoint field 'key') cannot be read: check FILE_ENCRYPTION_KEY"
+
+
+async def test_a_file_that_cannot_be_decrypted_is_an_unreadable_file_finding(key, monkeypatch):
+    from routers.module_config import templating
+
+    row = _row("NEW KEY PEM")
+
+    class _Many:
+        async def get_many(self, ids):
+            return {row.id: row}
+
+    monkeypatch.setenv("FILE_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    ref = {"$file": "f-new", "name": "client.key"}
+    files = await load_render_files(_Many(), [("endpoint", "ep1", {"key": ref})])
+    config, findings = templating.render({"k": "${endpoint.key}"}, [], {}, None, {"endpoint": {"key": ref}},
+                                         files=files, secrets=[])
+    assert [(f["path"], f["code"], f["message"]) for f in findings] == [
+        ("/k", "unreadable-file", "'${endpoint.key}': the file cannot be read")]
+    assert "NEW KEY" not in str(config)
 
 
 async def test_restore_by_mask_drops_overwritten_secrets(key):

@@ -802,7 +802,7 @@ async def reapply_module_config_revision(
     files_repo: FieldFileRepository = _files_repo,
 ):
     """Rollback: writes the exact content of an earlier revision again as a new revision, except that its
-    secret paths get the content of the file as it is now (refused if that file has been removed).
+    secret paths get the content of the file as it is now (refused if that file has been removed or cannot be read).
     A template revision needs `device.module_config.apply`, anything else the raw write action."""
     validate_iothub_id(device)
     validate_iothub_id(module)

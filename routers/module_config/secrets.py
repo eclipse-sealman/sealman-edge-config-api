@@ -69,7 +69,7 @@ async def load_render_files(files_repo: FieldFileRepository, sources: Iterable[R
     """The decrypted files of the entities being rendered. Only a reference that is the whole value of a
     top-level field is loaded, and only if the stored file belongs to that entity and field: a reference
     nested in another value or pointing at a file of another owner is left out, so the renderer reports it
-    as missing. A file that is gone or cannot be decrypted is left out as well."""
+    as missing, as it does for a file that is gone. A file that cannot be decrypted comes without text."""
     wanted: Dict[str, Set[Tuple[str, str, str]]] = {}
     for owner_kind, owner_id, fields in sources:
         for key, value in (fields or {}).items():
@@ -82,9 +82,9 @@ async def load_render_files(files_repo: FieldFileRepository, sources: Iterable[R
         if (row.owner_kind, row.owner_id, row.field) not in wanted.get(file_id, ()):
             continue
         try:
-            text = decrypt(row.content)
+            text: Optional[str] = decrypt(row.content)
         except FileEncryptionError:
-            continue
+            text = None
         out[file_id] = RenderFile(text=text, secret=row.secret, name=row.name, sha256=row.sha256,
                                   owner_kind=row.owner_kind, owner_id=row.owner_id, field=row.field)
     return out
@@ -120,7 +120,7 @@ async def restore_secrets(
     `by="path"` (rollback): every path of `previous` gets the current file of its owner and field.
     `by="mask"` (write-back of an edited configuration): every string equal to the mask of an entry of
     `previous`, wherever it stands, gets that entry's current file; any other mask-like string is refused.
-    Raises SecretRestoreError for such a string and for a file that is gone or cannot be decrypted."""
+    Raises SecretRestoreError for such a string, for a file that is gone and for one that cannot be decrypted."""
     restored = copy.deepcopy(content)
     current: Dict[Tuple[str, str, str], Tuple[Any, str]] = {}
 
@@ -128,15 +128,14 @@ async def restore_secrets(
         owner = (entry["owner_kind"], entry["owner_id"], entry["field"])
         if owner not in current:
             row = await files_repo.get(*owner)
-            text: Optional[str] = None
-            if row is not None:
-                try:
-                    text = decrypt(row.content)
-                except FileEncryptionError:
-                    text = None
-            if text is None:
+            where = f"({entry['owner_kind']} field '{entry['field']}')"
+            if row is None:
+                raise SecretRestoreError(f"The file '{entry['name']}' {where} has been removed")
+            try:
+                text = decrypt(row.content)
+            except FileEncryptionError:
                 raise SecretRestoreError(
-                    f"The file '{entry['name']}' ({entry['owner_kind']} field '{entry['field']}') has been removed")
+                    f"The file '{row.name}' {where} cannot be read: check FILE_ENCRYPTION_KEY") from None
             current[owner] = (row, text)
         return current[owner]
 

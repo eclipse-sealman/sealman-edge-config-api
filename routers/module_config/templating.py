@@ -544,8 +544,9 @@ def rows_of(value: Any) -> List[Dict[str, Any]]:
 
 @dataclass(frozen=True)
 class RenderFile:
-    """A decrypted file a field value can reference; `secret` is the flag of the stored file."""
-    text: str
+    """A decrypted file a field value can reference; `secret` is the flag of the stored file. `text` is None
+    for a stored file that cannot be decrypted."""
+    text: Optional[str]
     secret: bool
     name: str
     sha256: str
@@ -703,10 +704,14 @@ class _Renderer:
                                      f"'${{{ref}}}' holds a file and must be the whole value of a field, not part of a text"))
         return OMIT
 
-    def _file_text(self, reference: Dict[str, Any], path: Tuple[Any, ...]) -> Any:
+    def _file_text(self, ref: str, reference: Dict[str, Any], path: Tuple[Any, ...]) -> Any:
         file = self.files.get(reference["$file"])
         if file is None:
             self.findings.append(finding(pointer(path), "error", "missing-file", "The file is not available"))
+            return OMIT
+        if file.text is None:
+            self.findings.append(finding(pointer(path), "error", "unreadable-file",
+                                         f"'${{{ref}}}': the file cannot be read"))
             return OMIT
         if file.secret:
             self.secrets.append({"path": pointer(path), "owner_kind": file.owner_kind, "owner_id": file.owner_id,
@@ -718,7 +723,7 @@ class _Renderer:
         if whole and _valid_reference(whole.group(1)):
             value = self._resolve(whole.group(1), path)
             if is_file_ref(value):
-                return self._file_text(value, path)
+                return self._file_text(whole.group(1), value, path)
             if holds_file_ref(value):
                 return self._not_whole(whole.group(1), path)
             return value

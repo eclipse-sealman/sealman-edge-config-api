@@ -184,6 +184,7 @@ async def test_service_and_device_files(client, db_session):
     stored_device = (await db_session.execute(
         select(Device.device_data).where(Device.device_id == "dev-1"))).scalar_one()
     assert stored_service["cert"]["$file"] and stored_device["cert"]["$file"]
+    assert (await client.get("/devices/meta-values")).json()["cert"] == ["plc.crt"]
     assert (await _put(client, "/devices/nope/files/cert", make_cert())).status_code == 404
 
 

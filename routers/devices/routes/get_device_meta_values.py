@@ -1,6 +1,7 @@
 import logging
 from typing import Any, Callable, Dict
 from db.repos.device import DeviceRepository
+from field_validation import is_file_ref
 
 logger = logging.getLogger("EdgeConfigAPI")
 
@@ -18,6 +19,8 @@ async def get_device_meta_values(
         if not filter_device(device_data):
             continue
         for key, value in device_data.items():
+            if is_file_ref(value):  # a file is offered by its name
+                value = value.get("name")
             if value is None or str(value).strip() == "":
                 continue
             if key not in meta_values:
