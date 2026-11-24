@@ -53,12 +53,24 @@ class FieldFileRepository(ABC):
         uploaded_by: str,
     ) -> FieldFile:
         """Replaces the file of the field (new id) and writes its reference into the owner's data
-        in the same commit. Raises APIError(404) when the owner does not exist."""
+        in the same commit. Raises APIError(404) when the owner does not exist. Owners of kind `template`
+        and `module` have no row or data of their own (the reference lives in a template version or in
+        the apply values): only the file row is written, the caller checks that the owner exists."""
         ...
 
     @abstractmethod
     async def remove(self, owner_kind: str, owner_id: str, field: str) -> bool:
         """Deletes the file and the reference in one commit. False if there was no file."""
+        ...
+
+    @abstractmethod
+    async def copy_owner(self, owner_kind: str, from_id: str, to_id: str) -> Dict[str, FieldFile]:
+        """Copies every file of one owner to another (new ids, same content), by field."""
+        ...
+
+    @abstractmethod
+    async def remove_except(self, owner_kind: str, owner_id: str, keep_fields: Collection[str]) -> int:
+        """Deletes the files of the owner whose field is not in `keep_fields`. Returns how many."""
         ...
 
     @abstractmethod

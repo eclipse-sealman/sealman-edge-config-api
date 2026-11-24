@@ -10,16 +10,18 @@ from db.base import Base
 
 class FieldFile(Base):
     """
-    A file (certificate, private key, CRL) held by a file field of an endpoint, service or device.
-    The owner's data holds only a reference object. The owner is addressed by kind and id without
-    a foreign key (three owner tables), so rows left behind are removed by `delete_orphans`.
+    A file (certificate, private key, CRL) held by a file field of an endpoint, service or device, or the
+    default file of a file variable of a template (`template`, id of the template) or the file of a
+    variable of a module's applied values (`module`, "<device>/<module>"). The owner's data holds only a
+    reference object. The owner is addressed by kind and id without a foreign key, so rows left behind are
+    removed by `delete_orphans` (entity owners) or by the template and module routes.
     `content` is encrypted and deferred, so listing queries never read it.
     """
 
     __tablename__ = "field_files"
     __table_args__ = (
         UniqueConstraint("owner_kind", "owner_id", "field", name="field_files_owner_field"),
-        CheckConstraint("owner_kind IN ('endpoint', 'service', 'device')", name="field_files_owner_kind"),
+        CheckConstraint("owner_kind IN ('endpoint', 'service', 'device', 'template', 'module')", name="field_files_owner_kind"),
     )
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)

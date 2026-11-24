@@ -177,6 +177,12 @@ A template placeholder that is exactly a file field (`"${endpoint.key}"`) render
 
 Known limits: the delivered configuration in Azure storage contains keys in plain text; whoever can apply a template to a device can put that device's key into its configuration (the key never comes back to the browser); losing `FILE_ENCRYPTION_KEY` makes stored files unreadable, so they must be uploaded again.
 
+## File variables
+
+A template or block variable can be of type `file` (`secret: true` optional, `options` not allowed). It may carry a default file: `default` holds the reference object (same keys as above) and the file is stored in `field_files` with `owner_kind` `template`, `owner_id` the template's id (a block is a template of kind `block` and has its own id) and `field` the variable name. These owners have no row of their own, so `delete_orphans()` leaves them alone and the template routes manage them. Lint refuses `options` on a file variable (`file-variable-options`), `secret` or `default` on another type (`secret-without-file`, `default-without-file`) and a default that is not a file reference (`bad-default`); a value for a non-file variable that is a file reference is a `bad-value`.
+
+Routes `PUT`, `GET`, `DELETE /module-config-templates/{template_id}/files/{variable}` (`module_config.template.write` / `.read`; `PUT` takes `?name=` and `?secret=true|false`, which is copied onto the file row because the declaration may not be saved yet). Upload limits, formats, encryption and the rule that a private key needs `secret` are those of file fields; a secret default can never be downloaded. A new version saves the reference in the variable's `default`; the server accepts only the file uploaded for that variable of that template (and with the same `secret` flag) and writes the stored reference, so a version cannot point at another owner's file. Saving a version deletes the files of variables it no longer declares as files. A duplicate copies the default files to the new template with new ids and points its defaults at the copies.
+
 ## Deployment architecture
 
 Devices are targeted by IoT Hub deployment conditions based on device-twin tags:

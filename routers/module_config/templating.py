@@ -43,7 +43,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from field_validation import holds_file_ref, is_file_ref
 
-VARIABLE_TYPES = ("string", "text", "number", "integer", "boolean", "enum")
+VARIABLE_TYPES = ("string", "text", "number", "integer", "boolean", "enum", "file")
 RESERVED_KEYS = ("$secret",)
 REF_KEY = "$ref"
 REF_RE = re.compile(r"\d+")
@@ -369,6 +369,10 @@ def references(body: Any, blocks: Optional[BlockVersions] = None) -> Dict[str, L
                                          for f, subs in e["row_fields"].items() for sub in subs])}
 
 
+def valid_variable_name(name: str) -> bool:
+    return bool(_VARIABLE_NAME_RE.fullmatch(name))
+
+
 def coerce(value: Any, decl: Dict[str, Any]) -> Any:
     """Converts a supplied value to the declared type. Raises ValueError with a readable message."""
     var_type = decl.get("type", "string")
@@ -415,6 +419,10 @@ def coerce(value: Any, decl: Dict[str, Any]) -> Any:
             if isinstance(value, str) and str(option) == value:
                 return option
         raise ValueError(f"must be one of {', '.join(map(str, options))}")
+    if var_type == "file":
+        if is_file_ref(value):
+            return value
+        raise ValueError("expected an uploaded file")
     raise ValueError(f"unknown type '{var_type}'")
 
 
@@ -453,6 +461,17 @@ def lint(body: Any, variables: List[Dict[str, Any]], kind: str = "template",
         if var_type == "enum" and not decl.get("options"):
             findings.append(finding(path, "error", "enum-without-options", f"Enum variable '{name}' needs options"))
             continue
+        if var_type == "file" and decl.get("options"):
+            findings.append(finding(path, "error", "file-variable-options", f"File variable '{name}' takes no options"))
+        if var_type != "file" and decl.get("secret"):
+            findings.append(finding(path, "error", "secret-without-file",
+                                    f"Variable '{name}' is not a file, only file variables can be secret"))
+        if var_type != "file" and decl.get("default") is not None:
+            findings.append(finding(path, "error", "default-without-file",
+                                    f"Variable '{name}' is not a file, only file variables have a default"))
+        elif var_type == "file" and decl.get("default") is not None and not is_file_ref(decl["default"]):
+            findings.append(finding(path, "error", "bad-default",
+                                    f"The default of '{name}' must be an uploaded file"))
 
     used = set()
     endpoint_slots = set(_uses(body)[2]) | set(_row_uses(body))

@@ -7,7 +7,7 @@ import pytest
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from db.models.device import Device
 from db.models.device_type import DeviceType
@@ -1061,3 +1061,145 @@ class TestSecretFilesInRevisions:
             f"/{device}/modules/{MODULE}/config/revisions/{applied['revision']['id']}/reapply", json={})
         assert response.status_code == 200, response.text
         assert json.dumps(hub["blobs"][(device, MODULE, response.json()["configId"])]) == json.dumps(blob)
+
+
+STREAM = {"content-type": "application/octet-stream"}
+
+
+def _file_variable(name, **extra):
+    return {"name": name, "type": "file", **extra}
+
+
+class TestFileVariableDefaults:
+    @pytest.fixture(autouse=True)
+    def file_encryption_key(self, monkeypatch):
+        monkeypatch.setenv("FILE_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+    @staticmethod
+    def _put(client, template, variable, content, secret=False, name="root.crt"):
+        return client.put(f"/module-config-templates/{template['id']}/files/{variable}",
+                          params={"name": name, "secret": secret}, content=content, headers=STREAM)
+
+    @staticmethod
+    async def _rows(db_session):
+        from db.models.field_file import FieldFile
+        result = await db_session.execute(select(FieldFile.field, FieldFile.id).where(FieldFile.owner_kind == "template"))
+        return dict(result.all())
+
+    @staticmethod
+    def _version(client, template, variables):
+        return client.post(f"/module-config-templates/{template['id']}/versions", json={
+            "body": {"a": "${ca}"}, "variables": variables})
+
+    async def test_default_file_upload_download_remove(self, client, db_session):
+        template = await _create(client, body={"a": "${ca}"}, variables=[_file_variable("ca")])
+        cert = make_cert()
+        path = f"/module-config-templates/{template['id']}/files/ca"
+
+        first = await self._put(client, template, "ca", cert)
+        assert first.status_code == 200, first.text
+        assert set(first.json()) == {"$file", "name", "kind", "not_after", "uploaded_at"}
+        assert first.json()["name"] == "root.crt" and first.json()["kind"] == "certificate"
+        assert (await client.get(path)).content == cert
+
+        second = await self._put(client, template, "ca", cert)
+        assert second.json()["$file"] != first.json()["$file"]
+        assert list(await self._rows(db_session)) == ["ca"]
+
+        assert (await client.delete(path)).status_code == 204
+        assert (await client.get(path)).status_code == 404
+        assert (await client.delete(path)).status_code == 404
+
+    async def test_secret_default_is_never_downloadable_and_a_private_key_must_be_secret(self, client, db_session):
+        template = await _create(client, body={"a": "${ca}"}, variables=[_file_variable("ca")])
+        key = make_key()
+        refused = await self._put(client, template, "ca", key, secret=False)
+        assert refused.status_code == 422
+        assert refused.json() == {"message": "'ca' holds a private key: mark the variable as secret"}
+        assert await self._rows(db_session) == {}
+
+        assert (await self._put(client, template, "ca", key, secret=True, name="ca.key")).status_code == 200
+        download = await client.get(f"/module-config-templates/{template['id']}/files/ca")
+        assert download.status_code == 403 and "BEGIN" not in download.text
+
+    async def test_permissions_unknown_template_and_variable_names(self, client, db_session):
+        template = await _create(client, body={"a": "${ca}"}, variables=[_file_variable("ca")])
+        assert (await self._put(client, {"id": 9999}, "ca", make_cert())).status_code == 404
+        assert (await client.get("/module-config-templates/9999/files/ca")).status_code == 404
+        for bad in ("a-b", "1x"):
+            response = await self._put(client, template, bad, make_cert())
+            assert response.status_code == 422
+            assert response.json() == {"message": f"'{bad}' is not a valid variable name"}
+
+    async def test_saving_a_version_drops_files_of_removed_variables(self, client, db_session):
+        template = await _create(client, body={"a": "${ca}"}, variables=[_file_variable("ca"), _file_variable("old")])
+        ca = (await self._put(client, template, "ca", make_cert())).json()
+        await self._put(client, template, "old", make_cert())
+        assert set(await self._rows(db_session)) == {"ca", "old"}
+
+        saved = await self._version(client, template, [_file_variable("ca", default=ca)])
+        assert saved.status_code == 201, saved.text
+        assert set(await self._rows(db_session)) == {"ca"}
+        assert saved.json()["variables"][0]["default"]["$file"] == ca["$file"]
+
+    async def test_a_default_must_be_the_file_uploaded_for_that_variable(self, client, db_session):
+        template = await _create(client, body={"a": "${ca}"}, variables=[_file_variable("ca")])
+        other = await _create(client, body={"a": "${ca}"}, name="other", variables=[_file_variable("ca")])
+        foreign = (await self._put(client, other, "ca", make_cert())).json()
+
+        for default in (foreign, {**foreign, "$file": "nope"}):
+            refused = await self._version(client, template, [_file_variable("ca", default=default)])
+            assert refused.status_code == 422
+            assert [f["code"] for f in refused.json()["findings"]] == ["bad-default"]
+
+        mine = (await self._put(client, template, "ca", make_cert(), secret=False)).json()
+        flipped = await self._version(client, template, [_file_variable("ca", default=mine, secret=True)])
+        assert flipped.status_code == 422
+        assert [f["code"] for f in flipped.json()["findings"]] == ["default-secret-mismatch"]
+
+    async def test_duplicate_copies_default_files(self, client, db_session):
+        template = await _create(client, body={"a": "${ca}"}, variables=[_file_variable("ca")])
+        cert = make_cert()
+        ca = (await self._put(client, template, "ca", cert)).json()
+        saved = await self._version(client, template, [_file_variable("ca", default=ca)])
+        assert saved.status_code == 201, saved.text
+
+        copied = await client.post(f"/module-config-templates/{template['id']}/duplicate",
+                                   json={"name": "copy", "version": 2})
+        assert copied.status_code == 201, copied.text
+        version = (await client.get(f"/module-config-templates/{copied.json()['id']}/versions/latest")).json()
+        new_ref = version["variables"][0]["default"]
+        assert new_ref["$file"] != ca["$file"] and new_ref["name"] == "root.crt"
+
+        assert (await client.delete(f"/module-config-templates/{template['id']}/files/ca")).status_code == 204
+        download = await client.get(f"/module-config-templates/{copied.json()['id']}/files/ca")
+        assert download.status_code == 200 and download.content == cert
+
+
+class TestFileVariablePermissions:
+    @pytest.fixture
+    def fake_jwt_user(self):
+        return {"oid": "reader-oid", "sub": "reader-oid", "preferred_username": "reader@test.com",
+                "name": "Reader", "roles": []}
+
+    @pytest.fixture(autouse=True)
+    def file_encryption_key(self, monkeypatch):
+        monkeypatch.setenv("FILE_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+    async def test_reading_needs_template_read_and_writing_needs_template_write(self, client, db_session):
+        await AbacFixtures(db_session).setup(
+            users={"reader": "reader-oid"},
+            roles={"r": ["module_config.template.read"]},
+            teams={"team": {"scope": None, "roles": ["r"], "users": ["reader"]}},
+        )
+        from db.sqlalchemy.module_config import SQLAlchemyModuleConfigRepository
+        repo = SQLAlchemyModuleConfigRepository(db_session)
+        group = await repo.create_group(name="g", description=None, module_names=[MODULE], scope_ids=[], created_by="admin")
+        template = await repo.create_template(
+            name="t", description=None, group_id=group["id"], body={"a": "${ca}"},
+            variables=[_file_variable("ca")], comment=None, created_by="admin")
+        path = f"/module-config-templates/{template['id']}/files/ca"
+
+        assert (await client.put(path, params={"name": "a.crt"}, content=make_cert(), headers=STREAM)).status_code == 403
+        assert (await client.delete(path)).status_code == 403
+        assert (await client.get(path)).status_code == 404  # allowed to look, nothing there

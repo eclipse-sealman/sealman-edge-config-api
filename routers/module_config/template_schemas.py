@@ -33,9 +33,11 @@ class ListEntry(BaseModel):
 
 class VariableDecl(BaseModel):
     name: str = Field(..., max_length=64)
-    type: Literal["string", "text", "number", "integer", "boolean", "enum"] = "string"
+    type: Literal["string", "text", "number", "integer", "boolean", "enum", "file"] = "string"
     required: bool = True
     options: Optional[List[JsonScalar]] = None
+    secret: Optional[bool] = Field(None, description="file variables only: the file is never shown or downloaded")
+    default: Optional[Dict[str, Any]] = Field(None, description="file variables only: reference of the default file")
     label: Optional[str] = Field(None, max_length=128)
     description: Optional[str] = Field(None, max_length=1024)
 

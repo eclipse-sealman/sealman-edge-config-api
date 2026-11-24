@@ -4,7 +4,7 @@ modules with an audited revision history.
 """
 from typing import Any, Dict, List, Literal, Optional, Type
 
-from fastapi import Depends, HTTPException, Query
+from fastapi import Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
@@ -21,6 +21,7 @@ from db.session import get_repository
 from db.sqlalchemy.module_config import module_matches
 from helper import validate_iothub_id
 from routers.base_api_router import BaseAPIRouter
+from routers.field_files.router import _OCTET_STREAM, _check_file_name, _download, _remove, _store
 from routers.module_config import blocks as block_loader, service, templating
 from routers.module_config.secrets import (
     RenderSource, SecretRestoreError, load_render_files, mask_config, mask_pointers, restore_secrets,
@@ -301,6 +302,37 @@ async def _template_or_404(repo: ModuleConfigRepository, template_id: int) -> Di
     return template
 
 
+def _file_variables(variables: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [v for v in variables if v.get("type") == "file"]
+
+
+async def _check_defaults(files_repo: Optional[FieldFileRepository], template_id: Optional[int],
+                          variables: List[Dict[str, Any]]):
+    """(variables, findings): the default of a file variable must be the file uploaded for that variable of
+    this template (it is rewritten to the stored reference), so a saved version never points at another
+    owner's file. A new template has no files yet."""
+    findings: List[Dict[str, str]] = []
+    checked = []
+    for index, decl in enumerate(variables):
+        default = decl.get("default")
+        if decl.get("type") != "file" or default is None:
+            checked.append(decl)
+            continue
+        path = f"/variables/{index}"
+        stored = await files_repo.get("template", str(template_id), decl["name"]) if template_id is not None else None
+        if stored is None or stored.id != default.get("$file"):
+            findings.append(templating.finding(
+                path, "error", "bad-default",
+                f"The default of '{decl['name']}' must be a file uploaded for this variable (upload it, then save)"))
+        elif bool(decl.get("secret")) != stored.secret:
+            findings.append(templating.finding(
+                path, "error", "default-secret-mismatch",
+                f"'{decl['name']}' was uploaded as {'secret' if stored.secret else 'not secret'}: upload it again"))
+        else:
+            checked.append({**decl, "default": stored.reference()})
+    return checked, findings
+
+
 # ------------------------------------------------------------------ groups
 
 
@@ -477,11 +509,13 @@ async def create_template(req: TemplateCreate, repo: ModuleConfigRepository = _r
     await _group_or_404(repo, req.group_id)
     body, _, findings = await _checked(repo, req.body, _variables(req), req.kind, req.group_id,
                                        slots=_slot_decls(req), endpoint_repo=endpoint_repo, service_repo=service_repo)
+    variables, default_findings = await _check_defaults(None, None, _variables(req))
+    findings += default_findings
     if templating.has_errors(findings):
         return _findings_error("The template has errors", findings)
     created = await repo.create_template(
         name=req.name, description=req.description, group_id=req.group_id,
-        body=body, variables=_variables(req), slots=_slot_decls(req), comment=req.comment,
+        body=body, variables=variables, slots=_slot_decls(req), comment=req.comment,
         created_by=auth["user_name"], kind=req.kind,
     )
     if created is None:
@@ -546,26 +580,31 @@ async def get_template_version(template_id: int, version: str, repo: ModuleConfi
 @module_config_templates.post("/{template_id}/versions", response_model=TemplateVersionOut, status_code=201)
 async def add_template_version(template_id: int, req: TemplateContent, repo: ModuleConfigRepository = _repo,
                                endpoint_repo: EndpointRepository = _endpoint_repo,
-                               service_repo: ServiceRepository = _service_repo, auth=_template_write):
-    """Saves an edit as the next immutable version."""
+                               service_repo: ServiceRepository = _service_repo,
+                               files_repo: FieldFileRepository = _files_repo, auth=_template_write):
+    """Saves an edit as the next immutable version. Default files of variables the version no longer declares
+    as files are removed."""
     template = await _template_or_404(repo, template_id)
     if template["archived"]:
         raise HTTPException(status_code=409, detail="The template is archived")
     body, blocks, findings = await _checked(repo, req.body, _variables(req), template["kind"], template["group_id"],
                                             template_id, slots=_slot_decls(req), endpoint_repo=endpoint_repo,
                                             service_repo=service_repo)
+    variables, default_findings = await _check_defaults(files_repo, template_id, _variables(req))
+    findings += default_findings
     if templating.has_errors(findings):
         return _findings_error("The template has errors", findings)
     version = await repo.add_version(
-        template_id, body=body, variables=_variables(req), slots=_slot_decls(req), comment=req.comment,
+        template_id, body=body, variables=variables, slots=_slot_decls(req), comment=req.comment,
         created_by=auth["user_name"],
     )
+    await files_repo.remove_except("template", str(template_id), [v["name"] for v in _file_variables(variables)])
     return _version_out(version, blocks)
 
 
 @module_config_templates.post("/{template_id}/duplicate", response_model=TemplateOut, status_code=201)
 async def duplicate_template(template_id: int, req: TemplateDuplicate, repo: ModuleConfigRepository = _repo,
-                             auth=_template_write):
+                             files_repo: FieldFileRepository = _files_repo, auth=_template_write):
     """"Save as": copies a version into a new template (version 1) that records where it came from."""
     source = await _template_or_404(repo, template_id)
     version = await repo.get_version(template_id, req.version)
@@ -588,7 +627,63 @@ async def duplicate_template(template_id: int, req: TemplateDuplicate, repo: Mod
     )
     if created is None:
         raise HTTPException(status_code=409, detail=f"A template named '{req.name}' already exists")
+    copies = await files_repo.copy_owner("template", str(template_id), str(created["id"]))
+    if _file_variables(version["variables"]):
+        # the copy's defaults point at the copied files, a default whose file is gone is dropped
+        variables = []
+        for decl in version["variables"]:
+            copy = copies.get(decl["name"]) if decl.get("type") == "file" else None
+            rest = {k: v for k, v in decl.items() if k != "default"}
+            variables.append({**rest, "default": copy.reference()} if copy and decl.get("default") else rest)
+        await repo.set_version_variables(created["id"], 1, variables)
+        created = await repo.get_template(created["id"])
     return created
+
+
+# ------------------------------------------------------------------ default files of file variables
+# Owner kind `template`, owner id the template's id (a block is a template of kind `block`), field the variable.
+# The reference goes into the variable's `default` with the next saved version.
+
+
+def _variable_name(variable: str) -> str:
+    if not templating.valid_variable_name(variable):
+        raise HTTPException(status_code=422, detail=f"'{variable}' is not a valid variable name")
+    return variable
+
+
+@module_config_templates.put("/{template_id}/files/{variable}", openapi_extra=_OCTET_STREAM,
+                             summary="Upload the default file of a file variable")
+async def upload_template_file(
+    template_id: int, variable: str, request: Request,
+    name: str = Query(min_length=1, max_length=255, description="File name"),
+    secret: bool = Query(False, description="a secret file is never shown or downloadable"),
+    repo: ModuleConfigRepository = _repo, files_repo: FieldFileRepository = _files_repo, auth=_template_write,
+):
+    _variable_name(variable)
+    await _template_or_404(repo, template_id)
+    _check_file_name(name)
+    return await _store("template", str(template_id), variable, name, request, secret, "variable", auth, files_repo)
+
+
+@module_config_templates.get("/{template_id}/files/{variable}", summary="Download the default file of a file variable")
+async def download_template_file(
+    template_id: int, variable: str, repo: ModuleConfigRepository = _repo,
+    files_repo: FieldFileRepository = _files_repo, _=_template_read,
+):
+    _variable_name(variable)
+    await _template_or_404(repo, template_id)
+    return await _download("template", str(template_id), variable, files_repo)
+
+
+@module_config_templates.delete("/{template_id}/files/{variable}", status_code=204,
+                                summary="Remove the default file of a file variable")
+async def remove_template_file(
+    template_id: int, variable: str, repo: ModuleConfigRepository = _repo,
+    files_repo: FieldFileRepository = _files_repo, _=_template_write,
+):
+    _variable_name(variable)
+    await _template_or_404(repo, template_id)
+    return await _remove("template", str(template_id), variable, files_repo)
 
 
 # ------------------------------------------------------------------ device modules

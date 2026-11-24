@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -254,6 +254,15 @@ class SQLAlchemyModuleConfigRepository(ModuleConfigRepository):
         await self._session.commit()
         await self._session.refresh(row)
         return _version_dict(row)
+
+    async def set_version_variables(self, template_id, version, variables) -> None:
+        await self._session.execute(
+            update(ModuleConfigTemplateVersion)
+            .where(ModuleConfigTemplateVersion.template_id == template_id,
+                   ModuleConfigTemplateVersion.version == version)
+            .values(variables=variables)
+        )
+        await self._session.commit()
 
     async def list_versions(self, template_id: int) -> List[Dict]:
         rows = (await self._session.execute(

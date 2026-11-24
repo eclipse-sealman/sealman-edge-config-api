@@ -70,6 +70,11 @@ class ModuleConfigRepository(ABC):
         """Adds the next version. Returns None if the template does not exist."""
 
     @abstractmethod
+    async def set_version_variables(self, template_id: int, version: int, variables: List[Dict]) -> None:
+        """Rewrites the variable declarations of a version. Only for the copy made by "save as", right after
+        it was created, to point the default files at the copied files."""
+
+    @abstractmethod
     async def list_versions(self, template_id: int) -> List[Dict]: ...
 
     @abstractmethod

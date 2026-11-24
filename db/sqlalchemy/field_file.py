@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Collection, Dict, Optional
 from uuid import uuid4
 
-from sqlalchemy import delete, exists, select
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
@@ -15,7 +15,8 @@ from db.registry import register_repository
 from db.repos.field_file import FieldFile, FieldFileRepository
 from exceptions import APIError
 
-# owner kind -> (model, id column, data column)
+# owner kind -> (model, id column, data column). The kinds `template` and `module` are not here: they have
+# no row to lock and no data to write, and `delete_orphans` leaves their files alone.
 _OWNERS = {
     "endpoint": (Endpoint, "endpoint_id", "endpoint_data"),
     "service": (Service, "service_id", "service_data"),
@@ -44,6 +45,11 @@ class SqlAlchemyFieldFileRepository(FieldFileRepository):
         )
         return result.scalar_one_or_none()
 
+    async def _lock_key(self, owner_kind: str, owner_id: str, field: str) -> None:
+        """Serialises writers of one file without an owner row to lock (until the commit)."""
+        await self._session.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(f"{owner_kind}/{owner_id}/{field}", 0))))
+
     async def _delete_row(self, owner_kind: str, owner_id: str, field: str) -> bool:
         result = await self._session.execute(
             delete(FieldFileRow).where(
@@ -69,9 +75,13 @@ class SqlAlchemyFieldFileRepository(FieldFileRepository):
         not_after: Optional[datetime],
         uploaded_by: str,
     ) -> FieldFile:
-        owner = await self._lock_owner(owner_kind, owner_id)
-        if owner is None:
-            raise APIError(f"{owner_kind.capitalize()} '{owner_id}' not found", 404)
+        owner = None
+        if owner_kind in _OWNERS:
+            owner = await self._lock_owner(owner_kind, owner_id)
+            if owner is None:
+                raise APIError(f"{owner_kind.capitalize()} '{owner_id}' not found", 404)
+        else:
+            await self._lock_key(owner_kind, owner_id, field)
         await self._delete_row(owner_kind, owner_id, field)
         row = FieldFileRow(
             id=str(uuid4()), owner_kind=owner_kind, owner_id=owner_id, field=field, name=name,
@@ -80,14 +90,19 @@ class SqlAlchemyFieldFileRepository(FieldFileRepository):
         )
         self._session.add(row)
         stored = _to_file(row)
-        data_column = _OWNERS[owner_kind][2]
-        # A new dict, so the JSONB change is detected.
-        setattr(owner, data_column, {**(getattr(owner, data_column) or {}), field: stored.reference()})
+        if owner is not None:
+            data_column = _OWNERS[owner_kind][2]
+            # A new dict, so the JSONB change is detected.
+            setattr(owner, data_column, {**(getattr(owner, data_column) or {}), field: stored.reference()})
         await self._session.commit()
         return stored
 
     async def remove(self, owner_kind: str, owner_id: str, field: str) -> bool:
-        owner = await self._lock_owner(owner_kind, owner_id)
+        owner = None
+        if owner_kind in _OWNERS:
+            owner = await self._lock_owner(owner_kind, owner_id)
+        else:
+            await self._lock_key(owner_kind, owner_id, field)
         removed = await self._delete_row(owner_kind, owner_id, field)
         if owner is not None:
             data_column = _OWNERS[owner_kind][2]
@@ -97,6 +112,34 @@ class SqlAlchemyFieldFileRepository(FieldFileRepository):
                 setattr(owner, data_column, {k: v for k, v in data.items() if k != field})
         await self._session.commit()
         return removed
+
+    async def copy_owner(self, owner_kind: str, from_id: str, to_id: str) -> Dict[str, FieldFile]:
+        result = await self._session.execute(
+            select(FieldFileRow).options(undefer(FieldFileRow.content))
+            .where(FieldFileRow.owner_kind == owner_kind, FieldFileRow.owner_id == from_id)
+        )
+        copies: Dict[str, FieldFile] = {}
+        for row in result.scalars().all():
+            copy = FieldFileRow(
+                id=str(uuid4()), owner_kind=owner_kind, owner_id=to_id, field=row.field, name=row.name,
+                content=row.content, secret=row.secret, sha256=row.sha256, kind=row.kind, subject=row.subject,
+                not_after=row.not_after, uploaded_by=row.uploaded_by, uploaded_at=row.uploaded_at,
+            )
+            self._session.add(copy)
+            copies[row.field] = _to_file(copy)
+        await self._session.commit()
+        return copies
+
+    async def remove_except(self, owner_kind: str, owner_id: str, keep_fields: Collection[str]) -> int:
+        result = await self._session.execute(
+            delete(FieldFileRow).where(
+                FieldFileRow.owner_kind == owner_kind,
+                FieldFileRow.owner_id == owner_id,
+                FieldFileRow.field.not_in(list(keep_fields)),
+            )
+        )
+        await self._session.commit()
+        return result.rowcount
 
     async def get(self, owner_kind: str, owner_id: str, field: str) -> Optional[FieldFile]:
         result = await self._session.execute(

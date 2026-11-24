@@ -28,9 +28,9 @@ def test_a_variable_without_value_is_missing_there_are_no_defaults():
     config, findings = t.render({"p": "${port}", "m": "${mode}"}, VARS, {"host": "h"})
     assert {f["path"]: f["code"] for f in findings if f["level"] == "error"} == {
         "/values/port": "missing-variable", "/values/secure": "missing-variable", "/values/mode": "missing-variable"}
-    # a `default` in an old stored declaration is ignored
+    # only a file variable has a default; on another type it is refused instead of silently ignored
     config, findings = t.render({"p": "${port}"}, [{"name": "port", "type": "integer", "default": 4840}], {})
-    assert [f["code"] for f in findings if f["level"] == "error"] == ["missing-variable"]
+    assert config is None and [f["code"] for f in findings if f["level"] == "error"] == ["default-without-file"]
 
 
 def test_values_are_coerced_from_form_strings():
@@ -453,3 +453,32 @@ def test_secret_path_inside_a_block_copy_is_the_final_pointer():
     assert findings == []
     assert config == {"clients": {"sepA": {"key": "KEY PEM"}}}
     assert [s["path"] for s in secrets] == ["/clients/sepA/key"]
+
+
+FILE_REF = {"$file": "f1", "name": "root.crt", "kind": "certificate", "not_after": None,
+            "uploaded_at": "2026-01-01T00:00:00Z"}
+
+
+def _file_variable_findings(decl):
+    return [(f["path"], f["code"]) for f in t.lint({"a": "${v}"}, [{"name": "v", **decl}]) if f["level"] == "error"]
+
+
+def test_file_variable_declaration_rules():
+    for decl in ({"type": "file"}, {"type": "file", "secret": True}, {"type": "file", "default": FILE_REF},
+                 {"type": "file", "required": False}):
+        assert _file_variable_findings(decl) == []
+    assert _file_variable_findings({"type": "file", "options": ["a"]}) == [("/variables/0", "file-variable-options")]
+    assert _file_variable_findings({"type": "string", "secret": True}) == [("/variables/0", "secret-without-file")]
+    assert _file_variable_findings({"type": "string", "default": FILE_REF}) == [("/variables/0", "default-without-file")]
+    assert _file_variable_findings({"type": "file", "default": "text"}) == [("/variables/0", "bad-default")]
+
+
+def test_only_a_file_variable_takes_a_file_reference():
+    assert t.coerce(FILE_REF, {"type": "file"}) == FILE_REF
+    with pytest.raises(ValueError, match="expected an uploaded file"):
+        t.coerce("text", {"type": "file"})
+    config, findings = t.render({"a": "${v}"}, [{"name": "v", "type": "string"}], {"v": FILE_REF})
+    assert "bad-value" in codes(findings, "error") and config in (None, {})
+    declared = [{"name": "ca", "type": "file", "secret": True, "default": FILE_REF}]
+    found = t.inputs({"a": "${ca}"}, declared, None)["variables"]
+    assert found[0]["secret"] is True and found[0]["default"] == FILE_REF

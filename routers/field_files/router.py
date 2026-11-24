@@ -37,15 +37,16 @@ _device_write = Depends(ABACPermissionCheck(Device.METADATA_WRITE, device_path="
 _device_read = Depends(ABACPermissionCheck(Device.READ, device_path="device_id"))
 
 
-async def _upload(
-    owner_kind: str, owner_id: str, field: str, name: str, request: Request,
-    fields: Dict[str, Any], auth: dict, repo: FieldFileRepository,
-) -> Dict[str, Any]:
+def _check_file_name(name: str) -> None:
     if any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in name):
         raise HTTPException(422, "The file name contains characters that are not allowed")
-    definition = fields.get(field)
-    if not isinstance(definition, dict) or definition.get("type") != "file":
-        raise HTTPException(422, f"'{field}' is not a file field")
+
+
+async def _store(
+    owner_kind: str, owner_id: str, field: str, name: str, request: Request,
+    secret: bool, noun: str, auth: dict, repo: FieldFileRepository,
+) -> Dict[str, Any]:
+    """Reads, checks, encrypts and stores the uploaded body. `noun` names the thing that is secret in messages."""
     raw = await _read_body_limited(request, MAX_FILE_BYTES)
     if not raw:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "file is empty")
@@ -55,10 +56,9 @@ async def _upload(
         parsed = parse_upload(raw)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    secret = bool(definition.get("secret"))
     if parsed.kind == "private-key" and not secret:
         raise HTTPException(
-            422, f"'{field}' holds a private key: mark the field as secret"
+            422, f"'{field}' holds a private key: mark the {noun} as secret"
         )
     try:
         content = encrypt(parsed.pem)
@@ -70,6 +70,18 @@ async def _upload(
         subject=parsed.subject, not_after=parsed.not_after, uploaded_by=auth["user_name"],
     )
     return stored.reference()
+
+
+async def _upload(
+    owner_kind: str, owner_id: str, field: str, name: str, request: Request,
+    fields: Dict[str, Any], auth: dict, repo: FieldFileRepository,
+) -> Dict[str, Any]:
+    _check_file_name(name)
+    definition = fields.get(field)
+    if not isinstance(definition, dict) or definition.get("type") != "file":
+        raise HTTPException(422, f"'{field}' is not a file field")
+    return await _store(owner_kind, owner_id, field, name, request, bool(definition.get("secret")), "field",
+                        auth, repo)
 
 
 async def _download(owner_kind: str, owner_id: str, field: str, repo: FieldFileRepository) -> Response:
