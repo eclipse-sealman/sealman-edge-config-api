@@ -6,12 +6,16 @@ re-apply) goes through `write_module_config`: the content is uploaded to the imm
 `iotedge-device-twin/{device}/{module}/{configId}`, the module twin's desired properties get
 only `configBlobUrl` + `configId` (the device contract is unchanged) and an audited revision is
 recorded. Configurations written by other means are picked up lazily by `sync_external`.
+
+A revision rendered from secret files stores their JSON pointers (`secret_paths`). Writers of a
+configuration supplied by a caller (raw editor, typed legacy endpoints, extension `twin_write`) go
+through `write_supplied_config`, which turns the masks of the current revision back into the files.
 """
 import hashlib
 import json
 import logging
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from async_requests import patch_async
 from blob_service import BlobContainerContext, blob_url
@@ -19,12 +23,14 @@ from constants import (
     BLOB_SAS_TOKEN_MODULE_CONF, IOT_HUB_NAME, MODULE_CONFIG_DEVICE_STORAGE_URL, MODULE_CONFIG_STORAGE_URL,
     PUBLIC_STORAGE_ACCOUNT_NAME,
 )
+from db.repos.field_file import FieldFileRepository
 from db.repos.module_config import ModuleConfigRepository
 from exceptions import IoTBackendAPIError, UploadError
 from helper import encode_iothub_id, get_iothub_auth_headers, validate_iothub_id
 from routers.module_config.routes.get_module_twin_config import (
     blob_name_from_desired, get_module_twin_desired, read_module_config_blob,
 )
+from routers.module_config.secrets import contains_mask, restore_secrets
 
 logger = logging.getLogger("EdgeConfigAPI")
 
@@ -98,6 +104,7 @@ async def write_module_config(
     values: Optional[Dict[str, Any]] = None,
     comment: Optional[str] = None,
     reapplied_from_id: Optional[int] = None,
+    secret_paths: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """Writes `content` to the device module and records the revision. Returns
     `{"configId", "revision"}`; `revision` is None if it could not be recorded."""
@@ -116,8 +123,49 @@ async def write_module_config(
         "actor": actor,
         "comment": comment,
         "reapplied_from_id": reapplied_from_id,
+        "secret_paths": secret_paths or [],
     })
     return {"configId": config_id, "revision": revision}
+
+
+async def write_supplied_config(
+    device: str,
+    module: str,
+    content: Any,
+    *,
+    source: str,
+    actor: Optional[str] = None,
+    repo: Optional[ModuleConfigRepository] = None,
+    files_repo: Optional[FieldFileRepository] = None,
+) -> Dict[str, Any]:
+    """`write_module_config` for a configuration supplied by a caller, usually one read back from here:
+    a mask of the current revision becomes the content of that file as it is now and stays a secret path.
+    Raises SecretRestoreError for any other mask or a file that is gone. Content without a mask is
+    written as it is."""
+    validate_iothub_id(device)
+    validate_iothub_id(module)
+    secret_paths: List[Dict[str, str]] = []
+    if contains_mask(content):
+        if repo is not None and files_repo is not None:
+            content, secret_paths = await _restore_masks(device, module, content, repo, files_repo)
+        else:
+            from db import session as db_session
+            from db.registry import repo_registry
+            async with db_session.AsyncSessionLocal() as session:
+                content, secret_paths = await _restore_masks(
+                    device, module, content, repo_registry.get(ModuleConfigRepository)(session),
+                    repo_registry.get(FieldFileRepository)(session))
+    return await write_module_config(device, module, content, source=source, actor=actor, repo=repo,
+                                     secret_paths=secret_paths)
+
+
+async def _restore_masks(device: str, module: str, content: Any, repo: ModuleConfigRepository,
+                         files_repo: FieldFileRepository):
+    desired = await get_module_twin_desired(device, module)
+    config_id = desired.get("configId")
+    revision = await repo.get_revision_by_config_id(device, module, str(config_id)) if config_id else None
+    previous = (revision or {}).get("secret_paths") or []
+    return await restore_secrets(content, previous, files_repo, by="mask")
 
 
 async def read_revision_content(device: str, module: str, blob_name: str) -> Optional[Any]:

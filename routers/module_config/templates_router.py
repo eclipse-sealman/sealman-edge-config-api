@@ -22,7 +22,7 @@ from db.sqlalchemy.module_config import module_matches
 from helper import validate_iothub_id
 from routers.base_api_router import BaseAPIRouter
 from routers.module_config import blocks as block_loader, service, templating
-from routers.module_config.secrets import load_render_files, mask_config
+from routers.module_config.secrets import SecretRestoreError, load_render_files, mask_config, restore_secrets
 from routers.module_config.config_schemas.network_discover_config_v1 import NetworkDiscoverModuleConfigV1
 from routers.module_config.config_schemas.seal_module_opcua_client_config_v1 import OpcuaClientModuleConfigV1
 from routers.module_config.template_schemas import (
@@ -699,8 +699,8 @@ async def apply_module_config(
     auth=Depends(ABACPermissionCheck(Device.MODULE_CONFIG_APPLY)),
 ):
     """Renders the template for this device and, if there are no errors, writes it to the module."""
-    template, version, config, findings, _ = await _render_for_device(device, module, req, repo, device_repo,
-                                                                      endpoint_repo, service_repo, files_repo)
+    template, version, config, findings, secrets = await _render_for_device(device, module, req, repo, device_repo,
+                                                                            endpoint_repo, service_repo, files_repo)
     if template["archived"]:
         raise HTTPException(status_code=409, detail="The template is archived")
     if config is None or templating.has_errors(findings):
@@ -716,7 +716,7 @@ async def apply_module_config(
         values["$rows"] = req.rows
     result = await service.write_module_config(
         device, module, config, source="template", actor=auth["user_name"], repo=repo,
-        template_id=template["id"], values=values, comment=req.comment,
+        template_id=template["id"], values=values, comment=req.comment, secret_paths=secrets,
     )
     revision = result["revision"]
     if revision:
@@ -759,6 +759,8 @@ async def get_module_config_revision(
     if revision is None:
         raise HTTPException(status_code=404, detail="Revision not found")
     content = await service.read_revision_content(device, module, revision["blob_name"])
+    if content is not None and revision["secret_paths"]:
+        content = mask_config(content, revision["secret_paths"])
     [named] = await _with_template_names(repo, [revision], None)
     named.pop("current")
     return {**named, "content": content, "content_available": content is not None and revision["blob_name"] != "current"}
@@ -772,8 +774,10 @@ async def reapply_module_config_revision(
     auth_context: dict = Depends(validate_jwt),
     user_repo: UserRepository = Depends(get_repository(UserRepository)),
     device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    files_repo: FieldFileRepository = _files_repo,
 ):
-    """Rollback: writes the exact content of an earlier revision again as a new revision.
+    """Rollback: writes the exact content of an earlier revision again as a new revision, except that its
+    secret paths get the content of the file as it is now (refused if that file has been removed).
     A template revision needs `device.module_config.apply`, anything else the raw write action."""
     validate_iothub_id(device)
     validate_iothub_id(module)
@@ -787,10 +791,16 @@ async def reapply_module_config_revision(
     content = await service.read_revision_content(device, module, revision["blob_name"])
     if content is None:
         raise HTTPException(status_code=410, detail="The revision's content is no longer available")
+    secret_paths = revision["secret_paths"]
+    if secret_paths:
+        try:
+            content, secret_paths = await restore_secrets(content, secret_paths, files_repo, by="path")
+        except SecretRestoreError as exc:
+            raise HTTPException(409, str(exc))
     result = await service.write_module_config(
         device, module, content, source="reapply", actor=auth["user_name"], repo=repo,
         template_id=revision["template_id"],
         values=revision["values"], comment=req.comment or f"Re-applied revision {revision_id}",
-        reapplied_from_id=revision_id,
+        reapplied_from_id=revision_id, secret_paths=secret_paths,
     )
     return {"configId": result["configId"], "revision": result["revision"] and {**result["revision"], "current": True}}

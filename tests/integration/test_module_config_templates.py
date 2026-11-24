@@ -1,10 +1,15 @@
 """Module configuration templates: library, versioning, device apply and the revision history."""
+import json
+import re
 import uuid
 
 import pytest
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from routers.module_config import service
+from routers.module_config.routes import get_module_twin_config as twin_reader
 from tests.integration.endpoint_fixtures import (
     _endpoint_repo, _service_repo, seed_endpoint, seed_endpoint_type, seed_service, seed_service_type, unique_label)
 from tests.integration.test_abac_authorization import AbacFixtures
@@ -50,9 +55,10 @@ def hub(monkeypatch):
         return state["blobs"].get((device, module, name))
 
     monkeypatch.setattr(service, "_upload_and_patch", upload_and_patch)
-    monkeypatch.setattr(service, "get_module_twin_desired", desired)
-    monkeypatch.setattr(service, "read_module_config_blob", read_blob)
-    monkeypatch.setattr(service, "blob_name_from_desired", lambda device, module, d: d["_blob"])
+    for module in (service, twin_reader):
+        monkeypatch.setattr(module, "get_module_twin_desired", desired)
+        monkeypatch.setattr(module, "read_module_config_blob", read_blob)
+        monkeypatch.setattr(module, "blob_name_from_desired", lambda device, module, d: d.get("_blob", "current"))
     return state
 
 
@@ -835,3 +841,115 @@ class TestCertificateFiles:
         assert response.status_code == 200, response.text
         assert [f["code"] for f in response.json()["findings"]] == ["missing-file"]
         assert "BEGIN CERTIFICATE" not in response.text
+
+
+def _new_key() -> bytes:
+    return ec.generate_private_key(ec.SECP256R1()).private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+
+
+SECRET_MASK = re.compile(r"<secret: client\.key #[0-9a-f]{8}>")
+TLS_BODY = {"interval": 5, "clients": [{"name": "plc", "clientPrivateKey": "${endpoint.key}"}]}
+
+
+class TestSecretFilesInRevisions:
+    @pytest.fixture
+    async def tls(self, client, db_session, hub, device, monkeypatch):
+        """An endpoint with a secret key file and a template that puts the key into the config."""
+        monkeypatch.setenv("FILE_ENCRYPTION_KEY", Fernet.generate_key().decode())
+        group = await _group(client)
+        endpoint_id = await seed_endpoint(db_session, device, await seed_endpoint_type(
+            db_session, {"key": {"type": "file", "label": "Key", "secret": True}}))
+        template = await _block(client, group, "Tls", TLS_BODY, kind="template")
+        state = {"endpoint_id": endpoint_id, "template": template}
+
+        async def upload(key):
+            put = await client.put(f"/endpoints/{endpoint_id}/files/key", params={"name": "client.key"}, content=key,
+                                   headers={"content-type": "application/octet-stream"})
+            assert put.status_code == 200, put.text
+
+        async def apply():
+            response = await client.post(f"/{device}/modules/{MODULE}/config/apply", json={
+                "template_id": template["id"], "endpoints": {"endpoint": endpoint_id}})
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        state.update(upload=upload, apply=apply, key=_new_key())
+        await upload(state["key"])
+        return state
+
+    async def test_apply_delivers_the_key_and_reads_stay_masked(self, client, hub, device, tls):
+        applied = await tls["apply"]()
+        assert "PRIVATE KEY" not in json.dumps(applied)
+        blob = hub["blobs"][(device, MODULE, applied["configId"])]
+        assert blob == {"interval": 5, "clients": [{"name": "plc", "clientPrivateKey": tls["key"].decode()}]}
+
+        base = f"/{device}/modules/{MODULE}/config/revisions"
+        detail = await client.get(f"{base}/{applied['revision']['id']}")
+        listed = await client.get(base)
+        read = await client.get(f"/{device}/twin/config/{MODULE}")
+        for response in (detail, listed, read):
+            assert response.status_code == 200, response.text
+            assert "PRIVATE KEY" not in response.text
+        for content in (detail.json()["content"], read.json()):
+            assert content["interval"] == 5
+            assert SECRET_MASK.fullmatch(content["clients"][0]["clientPrivateKey"]), content
+
+    async def test_reapply_uses_the_current_key(self, client, hub, device, tls):
+        first = await tls["apply"]()
+        replaced = _new_key()
+        await tls["upload"](replaced)
+        await tls["apply"]()
+
+        reapply = f"/{device}/modules/{MODULE}/config/revisions/{first['revision']['id']}/reapply"
+        response = await client.post(reapply, json={})
+        assert response.status_code == 200, response.text
+        assert "PRIVATE KEY" not in response.text
+        blob = hub["blobs"][(device, MODULE, response.json()["configId"])]
+        assert blob == {"interval": 5, "clients": [{"name": "plc", "clientPrivateKey": replaced.decode()}]}
+        detail = await client.get(f"/{device}/modules/{MODULE}/config/revisions/{response.json()['revision']['id']}")
+        assert SECRET_MASK.fullmatch(detail.json()["content"]["clients"][0]["clientPrivateKey"])
+
+        assert (await client.delete(f"/endpoints/{tls['endpoint_id']}/files/key")).status_code == 204
+        blobs = len(hub["blobs"])
+        response = await client.post(reapply, json={})
+        assert response.status_code == 409
+        assert response.json()["message"] == "The file 'client.key' (endpoint field 'key') has been removed"
+        assert len(hub["blobs"]) == blobs
+
+    async def test_raw_write_back_keeps_the_key(self, client, hub, device, tls):
+        await tls["apply"]()
+        raw = f"/{device}/twin/config/{MODULE}"
+        config = (await client.get(raw)).json()
+        mask = config["clients"][0]["clientPrivateKey"]
+        config["interval"] = 10
+        config["clients"].insert(0, {"name": "inserted"})
+
+        response = await client.post(raw, json=config)
+        assert response.status_code == 200, response.text
+        blob = hub["blobs"][(device, MODULE, response.json()["configId"])]
+        assert blob == {"interval": 10, "clients": [
+            {"name": "inserted"}, {"name": "plc", "clientPrivateKey": tls["key"].decode()}]}
+        assert (await client.get(raw)).json() == {**config, "clients": [{"name": "inserted"}, {"name": "plc", "clientPrivateKey": mask}]}
+
+        unknown = await client.post(raw, json={**config, "extra": "<secret: other.key #00000000>"})
+        assert unknown.status_code == 409
+        assert unknown.json()["message"] == "The value at /extra is a secret placeholder that cannot be restored"
+
+        config["clients"][1]["clientPrivateKey"] = "abc"
+        response = await client.post(raw, json=config)
+        assert response.status_code == 200, response.text
+        assert hub["blobs"][(device, MODULE, response.json()["configId"])]["clients"][1]["clientPrivateKey"] == "abc"
+        assert (await client.get(raw)).json()["clients"][1]["clientPrivateKey"] == "abc"
+
+    async def test_revisions_without_secrets_unchanged(self, client, hub, device):
+        template = await _create(client, body={"b": 2, "a": ["${x}"]}, variables=[{"name": "x"}])
+        applied = (await client.post(f"/{device}/modules/{MODULE}/config/apply",
+                                     json={"template_id": template["id"], "values": {"x": "y"}})).json()
+        blob = hub["blobs"][(device, MODULE, applied["configId"])]
+        assert (await client.get(f"/{device}/twin/config/{MODULE}")).json() == blob
+
+        response = await client.post(
+            f"/{device}/modules/{MODULE}/config/revisions/{applied['revision']['id']}/reapply", json={})
+        assert response.status_code == 200, response.text
+        assert json.dumps(hub["blobs"][(device, MODULE, response.json()["configId"])]) == json.dumps(blob)

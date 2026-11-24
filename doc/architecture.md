@@ -161,6 +161,20 @@ A field of type `file` on an endpoint, service or device type holds a certificat
 
 Routes: `PUT` (raw body, `?name=`), `GET` and `DELETE` on `/endpoints/{id}/files/{field}`, `/services/{id}/files/{field}` (permissions `device.endpoint.write` / `.read`) and `/devices/{id}/files/{field}` (`device.metadata.write` / `device.read`). Content is encrypted with Fernet; `FILE_ENCRYPTION_KEY` holds one or more keys separated by commas (the first encrypts, all decrypt, so keys can be rotated) and is read on every call. Without it uploads answer 503. A `secret` file (a private key) can never be downloaded: `GET` answers 403, and a private key is accepted only by a `secret` field.
 
+### Files in module configurations
+
+A template placeholder that is exactly a file field (`"${endpoint.key}"`) renders the file's PEM text; anything else (part of a longer text) is a finding. The delivered blob contains the plain text, because the module reads it. For every value that came from a `secret` file (the flag on the stored file row) the renderer records an entry, and apply stores the list on the revision in `module_config_revisions.secret_paths` (JSONB, `[]` for revisions without secrets, raw, external and older ones):
+
+```json
+{"path": "/clients/0/clientPrivateKey", "owner_kind": "endpoint", "owner_id": "…", "field": "key", "name": "client.key", "sha256": "…"}
+```
+
+- **Masking.** Every route that returns a configuration replaces the value at each secret path with `<secret: client.key #a1b2c3d4>` (file name and the first 8 characters of the sha256, so a comparison still shows a changed key): preview, render, revision detail and the module configuration reads (`GET /{device}/twin/config/{module}` and the two typed ones, masked with the revision of the current `configId`; no revision, no masking). `GET …/binary` serves the internal storage account's single file of the module, not these blobs, and is not masked.
+- **Rollback.** Re-applying a revision writes its old content, but at its secret paths the content of the file of that owner and field as it is now, so a replaced key never comes back. If that file has been removed (or cannot be decrypted) the re-apply answers 409 `The file 'client.key' (endpoint field 'key') has been removed`. Revisions without secret paths are written byte for byte as before.
+- **Write-back.** Raw writes (`POST /{device}/twin/config/{module}`), the typed legacy writes and extension `twin_write` go through `service.write_supplied_config`: a string that is exactly a mask of the current revision (at any path, so inserting an item above it does not break it) becomes the file's current content and a secret path of the new revision (same 409 if the file is gone); any other value is taken as the new value and is no longer masked. A string matching `^<secret: .+ #[0-9a-f]{8}>$` that matches no mask of the current revision answers 409 `The value at /x is a secret placeholder that cannot be restored`, so a mask is never delivered as a key. The typed writes still echo the request as sent.
+
+Known limits: the delivered configuration in Azure storage contains keys in plain text; whoever can apply a template to a device can put that device's key into its configuration (the key never comes back to the browser); losing `FILE_ENCRYPTION_KEY` makes stored files unreadable, so they must be uploaded again.
+
 ## Deployment architecture
 
 Devices are targeted by IoT Hub deployment conditions based on device-twin tags:

@@ -414,21 +414,29 @@ def test_file_reference_inside_a_structured_value_is_an_error():
 def test_secret_paths_follow_the_final_array_positions():
     from routers.module_config.secrets import mask_config
     files = {"f2": _file("KEY PEM", "key", True, "client.key")}
+    mask = "<secret: client.key #abababab>"
+    opt = {"name": "opt", "type": "string", "required": False}
     ep = {"endpoint": {"key": _ref("f2")}}
-    bodies = [
-        {"c": ["${opt}", "${endpoint.key}", "other"]},
-        {"c": ["${endpoint.nope}", {"k": "${endpoint.key}"}, "other"]},
-        {"c": [["${opt}", "${endpoint.key}"], ["x"]]},
-        {"c": ["${opt}", ["${opt}", {"k": "${endpoint.key}"}]]},
+    cases = [
+        ({"c": ["${opt}", "${endpoint.key}", "other"]}, {"c": [mask, "other"]}),
+        ({"c": ["${endpoint.nope}", {"k": "${endpoint.key}"}, "other"]}, {"c": [{"k": mask}, "other"]}),
+        ({"c": [["${opt}", "${endpoint.key}"], ["x"]]}, {"c": [[mask], ["x"]]}),
+        ({"c": ["${opt}", ["${opt}", {"k": "${endpoint.key}"}]]}, {"c": [[{"k": mask}]]}),
     ]
-    for body in bodies:
+    for body, expected in cases:
         secrets = []
-        config, findings = t.render(body, [{"name": "opt", "type": "string", "required": False}], {}, None, ep,
-                                    files=files, secrets=secrets)
+        config, findings = t.render(body, [opt], {}, None, ep, files=files, secrets=secrets)
         assert len(secrets) == 1, body
-        masked = mask_config(config, secrets)
-        assert "KEY PEM" not in str(masked), (body, secrets, masked)
-        assert "<secret: client.key" in str(masked) and "other" in str(masked) or "other" not in str(body)
+        assert mask_config(config, secrets) == expected, (body, secrets)
+
+    # an omitted item before the secret inside a block used via $ref
+    blocks = {1: {"body": {"arr": ["${opt}", "${endpoint.key}", "other"]}, "variables": [opt], "name": "Tls"}}
+    secrets = []
+    config, findings = t.render({"x": {"$ref": "1"}}, [], {}, None, {"x/endpoint": {"key": _ref("f2")}}, blocks,
+                                files=files, secrets=secrets)
+    assert findings == []
+    assert [s["path"] for s in secrets] == ["/x/arr/0"]
+    assert mask_config(config, secrets) == {"x": {"arr": [mask, "other"]}}
 
 
 def test_unknown_file_id():

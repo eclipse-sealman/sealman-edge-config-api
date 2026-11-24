@@ -78,7 +78,9 @@ class ModuleConfigRepository(ABC):
 
     # revisions
     @abstractmethod
-    async def add_revision(self, **fields: Any) -> Dict: ...
+    async def add_revision(self, **fields: Any) -> Dict:
+        """`fields` are the revision's columns; `secret_paths` (the JSON pointers whose value came from a
+        secret file, with owner, field, name and sha256) defaults to []."""
 
     @abstractmethod
     async def list_revisions(self, device_id: str, module_name: str, limit: int = 100) -> List[Dict]: ...
