@@ -401,7 +401,34 @@ def test_file_placeholder_inside_text_is_an_error():
     config, findings = t.render({"a": {"b": "cert: ${endpoint.key}"}}, [], {}, None,
                                 {"endpoint": {"key": _ref("f2")}}, files=files, secrets=[])
     assert [(f["path"], f["code"]) for f in findings] == [("/a/b", "file-not-whole-value")]
-    assert "TOP SECRET" not in str(findings)
+    assert "TOP SECRET" not in str(findings) and "TOP SECRET" not in str(config)
+
+
+def test_file_reference_inside_a_structured_value_is_an_error():
+    files = {"f1": _file("CERT PEM", "certs")}
+    config, findings = t.render({"a": "${device.certs}"}, [], {}, {"certs": [_ref("f1")]}, files=files, secrets=[])
+    assert [(f["path"], f["code"]) for f in findings] == [("/a", "file-not-whole-value")]
+    assert "CERT PEM" not in str(config) and "$file" not in str(config)
+
+
+def test_secret_paths_follow_the_final_array_positions():
+    from routers.module_config.secrets import mask_config
+    files = {"f2": _file("KEY PEM", "key", True, "client.key")}
+    ep = {"endpoint": {"key": _ref("f2")}}
+    bodies = [
+        {"c": ["${opt}", "${endpoint.key}", "other"]},
+        {"c": ["${endpoint.nope}", {"k": "${endpoint.key}"}, "other"]},
+        {"c": [["${opt}", "${endpoint.key}"], ["x"]]},
+        {"c": ["${opt}", ["${opt}", {"k": "${endpoint.key}"}]]},
+    ]
+    for body in bodies:
+        secrets = []
+        config, findings = t.render(body, [{"name": "opt", "type": "string", "required": False}], {}, None, ep,
+                                    files=files, secrets=secrets)
+        assert len(secrets) == 1, body
+        masked = mask_config(config, secrets)
+        assert "KEY PEM" not in str(masked), (body, secrets, masked)
+        assert "<secret: client.key" in str(masked) and "other" in str(masked) or "other" not in str(body)
 
 
 def test_unknown_file_id():

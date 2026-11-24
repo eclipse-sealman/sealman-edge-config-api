@@ -25,12 +25,15 @@ def mask_config(config: Any, secret_paths: List[Dict[str, str]]) -> Any:
             if node is None:
                 break
         else:
-            last = parts[-1]
-            if isinstance(node, dict) and last in node:
-                node[last] = mask_text(entry["name"], entry["sha256"])
-            elif isinstance(node, list) and last.isdigit() and int(last) < len(node):
-                node[int(last)] = mask_text(entry["name"], entry["sha256"])
+            _set(node, parts[-1], mask_text(entry["name"], entry["sha256"]))
     return masked
+
+
+def _set(node: Any, part: str, value: str) -> None:
+    if isinstance(node, dict) and part in node:
+        node[part] = value
+    elif isinstance(node, list) and part.isdigit() and int(part) < len(node):
+        node[int(part)] = value
 
 
 def _child(node: Any, part: str) -> Any:

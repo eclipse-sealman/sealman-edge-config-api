@@ -554,6 +554,14 @@ class RenderFile:
     field: str
 
 
+def _holds_file_ref(value: Any) -> bool:
+    """True for a file reference and for a dict or list that contains one."""
+    if is_file_ref(value):
+        return True
+    items = value.values() if isinstance(value, dict) else value if isinstance(value, list) else ()
+    return any(_holds_file_ref(v) for v in items)
+
+
 class _Renderer:
     def __init__(self, variables: List[Dict[str, Any]], values: Dict[str, Any], device: Optional[Dict[str, Any]],
                  endpoints: Optional[Dict[str, Optional[Dict[str, Any]]]], blocks: Optional[BlockVersions] = None,
@@ -698,6 +706,11 @@ class _Renderer:
             return node
         return self.scope.get(ref, OMIT)
 
+    def _not_whole(self, ref: str, path: Tuple[Any, ...]) -> Any:
+        self.findings.append(finding(pointer(path), "error", "file-not-whole-value",
+                                     f"'${{{ref}}}' holds a file and must be the whole value of a field, not part of a text"))
+        return OMIT
+
     def _file_text(self, reference: Dict[str, Any], path: Tuple[Any, ...]) -> Any:
         file = self.files.get(reference["$file"])
         if file is None:
@@ -712,7 +725,11 @@ class _Renderer:
         whole = _WHOLE_RE.fullmatch(text)
         if whole and _valid_reference(whole.group(1)):
             value = self._resolve(whole.group(1), path)
-            return self._file_text(value, path) if is_file_ref(value) else value
+            if is_file_ref(value):
+                return self._file_text(value, path)
+            if _holds_file_ref(value):
+                return self._not_whole(whole.group(1), path)
+            return value
 
         def replace(match: re.Match) -> str:
             if match.group(0) == "$${":
@@ -721,9 +738,8 @@ class _Renderer:
             if not _valid_reference(ref):
                 return match.group(0)
             value = self._resolve(ref, path)
-            if is_file_ref(value):
-                self.findings.append(finding(pointer(path), "error", "file-not-whole-value",
-                                             f"'${{{ref}}}' is a file and must be the whole value, not part of a text"))
+            if _holds_file_ref(value):
+                self._not_whole(ref, path)
                 return ""
             return _text(value)
 
@@ -750,8 +766,18 @@ class _Renderer:
                     out[key] = rendered
             return out
         if isinstance(node, list):
-            rendered_items = (self.node(v, path + (i,), names) for i, v in enumerate(node))
-            return [item for item in rendered_items if item is not OMIT]
+            out_items = []
+            for i, v in enumerate(node):
+                mark = len(self.secrets)
+                item = self.node(v, path + (i,), names)
+                if item is OMIT:
+                    continue
+                if len(out_items) != i:  # earlier items were dropped: the item moves up
+                    old, new = pointer(path + (i,)), pointer(path + (len(out_items),))
+                    for entry in self.secrets[mark:]:
+                        entry["path"] = new + entry["path"][len(old):]
+                out_items.append(item)
+            return out_items
         if isinstance(node, str):
             return self._string(node, path)
         return node

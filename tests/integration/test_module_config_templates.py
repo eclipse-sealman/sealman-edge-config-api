@@ -820,3 +820,18 @@ class TestCertificateFiles:
             config = response.json()["config"]
             assert config["serverCertificate"] == cert.decode()
             assert config["clientPrivateKey"].startswith("<secret: client.key #")
+
+    async def test_preview_with_sample_device_never_loads_files(self, client, db_session, hub, device, monkeypatch):
+        monkeypatch.setenv("FILE_ENCRYPTION_KEY", Fernet.generate_key().decode())
+        group = await _group(client)
+        endpoint_id = await seed_endpoint(db_session, device, await seed_endpoint_type(
+            db_session, {"cert": {"type": "file", "label": "Cert"}}))
+        put = await client.put(f"/endpoints/{endpoint_id}/files/cert", params={"name": "a.crt"}, content=make_cert(),
+                               headers={"content-type": "application/octet-stream"})
+        ref = (await client.get(f"/endpoints/{endpoint_id}")).json()["endpoint_data"]["cert"]["value"]
+        assert put.status_code == 200 and ref["$file"]
+        response = await client.post("/module-config-templates/preview", json={
+            "body": {"x": "${device.c}"}, "variables": [], "group_id": group["id"], "device": {"c": ref}})
+        assert response.status_code == 200, response.text
+        assert [f["code"] for f in response.json()["findings"]] == ["missing-file"]
+        assert "BEGIN CERTIFICATE" not in response.text

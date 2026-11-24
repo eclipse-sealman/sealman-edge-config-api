@@ -445,7 +445,8 @@ async def preview_template(
                                           _slot_decls(req))
         rows = _chosen_rows(body, endpoints, req.rows, blocks, lists)
     secrets: List[Dict[str, str]] = []
-    files = await load_render_files(files_repo, device_meta, endpoints, services)
+    # sample metadata comes from the request: it may not pull in stored files (they render as missing-file)
+    files = await load_render_files(files_repo, device_meta if req.device_id is not None else None, endpoints, services)
     config, findings = templating.render(body, _variables(req), req.values, device_meta, endpoints, blocks, req.kind,
                                          lists, services, rows, files=files, secrets=secrets)
     findings = _merge(name_findings, ref_findings + findings)
