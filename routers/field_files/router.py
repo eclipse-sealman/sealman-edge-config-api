@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from typing import Any, Dict
 from urllib.parse import quote
 
@@ -40,6 +41,8 @@ async def _upload(
     owner_kind: str, owner_id: str, field: str, name: str, request: Request,
     fields: Dict[str, Any], auth: dict, repo: FieldFileRepository,
 ) -> Dict[str, Any]:
+    if any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in name):
+        raise HTTPException(422, "The file name contains characters that are not allowed")
     definition = fields.get(field)
     if not isinstance(definition, dict) or definition.get("type") != "file":
         raise HTTPException(422, f"'{field}' is not a file field")

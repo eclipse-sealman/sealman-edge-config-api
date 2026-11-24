@@ -80,7 +80,12 @@ class ModuleConfigRepository(ABC):
     @abstractmethod
     async def add_revision(self, **fields: Any) -> Dict:
         """`fields` are the revision's columns; `secret_paths` (the JSON pointers whose value came from a
-        secret file, with owner, field, name and sha256) defaults to []."""
+        secret file, with owner, field, name and sha256) defaults to []. If the config id is already
+        recorded, returns that revision; an `external` one is first updated with `fields` when they carry
+        secret paths."""
+
+    @abstractmethod
+    async def delete_revision(self, device_id: str, module_name: str, revision_id: int) -> None: ...
 
     @abstractmethod
     async def list_revisions(self, device_id: str, module_name: str, limit: int = 100) -> List[Dict]: ...

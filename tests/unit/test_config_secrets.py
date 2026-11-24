@@ -5,7 +5,8 @@ from cryptography.fernet import Fernet
 
 from db.repos.field_file import FieldFile
 from file_crypto import encrypt
-from routers.module_config.secrets import SecretRestoreError, mask_config, mask_text, restore_secrets
+from routers.module_config.secrets import (
+    SecretRestoreError, contains_mask, mask_config, mask_text, restore_secrets)
 
 
 def test_mask_config():
@@ -102,3 +103,17 @@ async def test_restore_by_mask_drops_overwritten_secrets(key):
 
     assert restored == {"a": "my own key text", "b": "NEW KEY PEM"}
     assert [p["path"] for p in paths] == ["/b"]
+
+
+async def test_mask_detection_is_exact(key):
+    # a file name with a newline still gives a mask; a mask with a trailing newline is just a value
+    mask = mask_text("a\nb.key", OLD_SHA)
+    assert contains_mask({"k": mask})
+    assert not contains_mask({"k": mask_text("client.key", OLD_SHA) + "\n"})
+    with pytest.raises(SecretRestoreError):
+        await restore_secrets({"x": mask}, [_entry("/k")], _Files({}), by="mask")
+
+    previous = [_entry("/k", name="a\nb.key")]
+    files = _Files({("endpoint", "ep1", "key"): _row("NEW KEY PEM")})
+    restored, paths = await restore_secrets({"k": mask}, previous, files, by="mask")
+    assert restored == {"k": "NEW KEY PEM"} and [p["path"] for p in paths] == ["/k"]

@@ -43,6 +43,13 @@ def content_hash(content: Any) -> str:
 
 
 async def _upload_and_patch(device: str, module: str, content: Any) -> str:
+    config_id = await _upload(device, module, content)
+    await _patch_twin(device, module, config_id)
+    return config_id
+
+
+async def _upload(device: str, module: str, content: Any) -> str:
+    """Uploads the immutable blob under a new config id and returns the id."""
     if not PUBLIC_STORAGE_ACCOUNT_NAME:
         raise IoTBackendAPIError("Public storage account name is not set. Cannot upload file.", 500)
     if not BLOB_SAS_TOKEN_MODULE_CONF or not BLOB_SAS_TOKEN_MODULE_CONF.strip():
@@ -59,7 +66,12 @@ async def _upload_and_patch(device: str, module: str, content: Any) -> str:
             await container.get_blob_client(blob_path).upload_blob(json.dumps(content), overwrite=True)
     except Exception as exc:
         raise UploadError(f"could not upload data object to blob storage: {exc}", 400)
+    return config_id
 
+
+async def _patch_twin(device: str, module: str, config_id: str) -> None:
+    """Points the module twin's desired properties at the blob of `config_id`."""
+    blob_path = f"{device}/{module}/{config_id}"
     config_blob_url = blob_url(
         PUBLIC_STORAGE_ACCOUNT_NAME, CONTAINER, blob_path, BLOB_SAS_TOKEN_MODULE_CONF,
         account_url=MODULE_CONFIG_DEVICE_STORAGE_URL or MODULE_CONFIG_STORAGE_URL,
@@ -74,22 +86,44 @@ async def _upload_and_patch(device: str, module: str, content: Any) -> str:
         raise IoTBackendAPIError(
             f"could not update module twin of {module} on {device} on the Azure IoT Hub. "
             f"Config-Id: [{config_id}]. Error: {response.text}", response.status_code)
-    return config_id
+
+
+async def _with_repo(repo: Optional[ModuleConfigRepository], call):
+    if repo is not None:
+        return await call(repo)
+    from db import session as db_session
+    from db.registry import repo_registry
+    async with db_session.AsyncSessionLocal() as session:
+        return await call(repo_registry.get(ModuleConfigRepository)(session))
 
 
 async def _record(repo: Optional[ModuleConfigRepository], fields: Dict[str, Any]) -> Optional[Dict]:
     """Records a revision. Failing to record never undoes a successful device write: the
     revision is then picked up as `external` by the next `sync_external`."""
     try:
-        if repo is not None:
-            return await repo.add_revision(**fields)
-        from db import session as db_session
-        from db.registry import repo_registry
-        async with db_session.AsyncSessionLocal() as session:
-            return await repo_registry.get(ModuleConfigRepository)(session).add_revision(**fields)
+        return await _with_repo(repo, lambda r: r.add_revision(**fields))
     except Exception as exc:
         logger.error(f"Could not record module config revision for {fields['device_id']}/{fields['module_name']}: {exc}")
         return None
+
+
+async def _record_before_patch(repo: Optional[ModuleConfigRepository], fields: Dict[str, Any]) -> Dict:
+    """Records the revision of a configuration with secret paths before the twin points at it, so it is
+    never read without its secret paths (as an unrecorded or `external` revision). Failing to record
+    fails the write."""
+    try:
+        return await _with_repo(repo, lambda r: r.add_revision(**fields))
+    except Exception as exc:
+        logger.error(f"Could not record module config revision for {fields['device_id']}/{fields['module_name']}: {exc}")
+        raise IoTBackendAPIError("Could not record the module configuration revision; nothing was written", 500)
+
+
+async def _forget(repo: Optional[ModuleConfigRepository], revision: Dict) -> None:
+    """Best effort: removes a revision whose twin patch failed."""
+    try:
+        await _with_repo(repo, lambda r: r.delete_revision(revision["device_id"], revision["module_name"], revision["id"]))
+    except Exception as exc:
+        logger.error(f"Could not remove module config revision {revision['id']} after a failed twin update: {exc}")
 
 
 async def write_module_config(
@@ -110,8 +144,11 @@ async def write_module_config(
     `{"configId", "revision"}`; `revision` is None if it could not be recorded."""
     validate_iothub_id(device)
     validate_iothub_id(module)
-    config_id = await _upload_and_patch(device, module, content)
-    revision = await _record(repo, {
+    if secret_paths:
+        config_id = await _upload(device, module, content)
+    else:
+        config_id = await _upload_and_patch(device, module, content)
+    fields = {
         "device_id": device,
         "module_name": module,
         "config_id": config_id,
@@ -124,7 +161,15 @@ async def write_module_config(
         "comment": comment,
         "reapplied_from_id": reapplied_from_id,
         "secret_paths": secret_paths or [],
-    })
+    }
+    if not secret_paths:
+        return {"configId": config_id, "revision": await _record(repo, fields)}
+    revision = await _record_before_patch(repo, fields)
+    try:
+        await _patch_twin(device, module, config_id)
+    except Exception:
+        await _forget(repo, revision)
+        raise
     return {"configId": config_id, "revision": revision}
 
 

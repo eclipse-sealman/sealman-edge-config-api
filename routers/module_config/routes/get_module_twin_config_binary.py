@@ -1,14 +1,17 @@
 import base64
+import json
 
 from constants import BLOB_SAS_TOKEN_MODULE_CONF_INTERNAL, INTERNAL_STORAGE_ACCOUNT_NAME
 from exceptions import IoTBackendAPIError
 from blob_service import BlobContainerContext
 from helper import validate_iothub_id
+from routers.module_config.secrets import mask_config
 
 
-async def get_module_twin_config_binary(device: str, module: str):
+async def get_module_twin_config_binary(device: str, module: str, repo):
     """
-    Returns exactly one module config file from blob storage as base64 payload.
+    Returns exactly one module config file from blob storage as base64 payload. A JSON file that is the
+    blob of a revision with secret paths is masked first.
     """
     prefix = f"{validate_iothub_id(device)}/{validate_iothub_id(module)}/"
 
@@ -39,6 +42,7 @@ async def get_module_twin_config_binary(device: str, module: str):
             if blob_properties and blob_properties.content_settings and blob_properties.content_settings.content_type:
                 content_type = blob_properties.content_settings.content_type
 
+            blob_data = await _masked(device, module, blob_name.split("/")[-1], blob_data, repo)
             return {
                 "filename": blob_name.split("/")[-1],
                 "contentType": content_type,
@@ -49,3 +53,15 @@ async def get_module_twin_config_binary(device: str, module: str):
         raise
     except Exception as ex:
         raise IoTBackendAPIError(f"Could not retrieve module twin binary config: {str(ex)}", 500)
+
+
+async def _masked(device: str, module: str, filename: str, data: bytes, repo) -> bytes:
+    revision = await repo.get_revision_by_config_id(device, module, filename)
+    secret_paths = revision.get("secret_paths") if revision else None
+    if not secret_paths:
+        return data
+    try:
+        content = json.loads(data)
+    except ValueError:
+        return data
+    return json.dumps(mask_config(content, secret_paths)).encode()

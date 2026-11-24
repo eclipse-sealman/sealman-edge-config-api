@@ -106,8 +106,9 @@ async def get_module_twin_config(device: str, module: str,
 @module_config.get("/{device}/twin/config/{module}/binary", response_model=GetModuleTwinBinaryResponse,
                    tags=["Module Configuration"])
 async def get_module_twin_config_binary(device: str, module: str,
-                                        _ = Depends(ABACPermissionCheck(Device.READ))):
-    return await _get_module_twin_config_binary(device, module)
+                                        _ = Depends(ABACPermissionCheck(Device.READ)),
+                                        repo: ModuleConfigRepository = _revisions):
+    return await _get_module_twin_config_binary(device, module, repo)
 
 @module_config.get("/{device}/twin/identity/{module}/reported", response_model=GetModuleTwinIdentityResponse,
                    tags=["Module Configuration"])

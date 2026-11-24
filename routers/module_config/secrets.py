@@ -10,7 +10,8 @@ from file_crypto import FileEncryptionError, decrypt
 from routers.module_config.templating import RenderFile
 
 
-MASK_RE = re.compile(r"^<secret: .+ #[0-9a-f]{8}>$")
+# Used with fullmatch only; DOTALL so a file name with a line break still makes a mask.
+MASK_RE = re.compile(r"<secret: .+ #[0-9a-f]{8}>", re.DOTALL)
 
 
 class SecretRestoreError(Exception):
@@ -103,7 +104,12 @@ def _strings(node: Any, pointer: str = ""):
 
 
 def contains_mask(content: Any) -> bool:
-    return any(MASK_RE.match(value) for _, value in _strings(content))
+    return any(MASK_RE.fullmatch(value) for _, value in _strings(content))
+
+
+def mask_pointers(content: Any) -> List[str]:
+    """The JSON pointers of the strings in `content` that look like a mask."""
+    return [pointer for pointer, value in _strings(content) if MASK_RE.fullmatch(value)]
 
 
 async def restore_secrets(
@@ -151,7 +157,7 @@ async def restore_secrets(
     for entry in previous:
         by_mask.setdefault(mask_text(entry["name"], entry["sha256"]), []).append(entry)
     for pointer, value in list(_strings(content)):
-        if not MASK_RE.match(value):
+        if not MASK_RE.fullmatch(value):
             continue
         entries = by_mask.get(value)
         if not entries:

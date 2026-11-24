@@ -289,9 +289,26 @@ class SQLAlchemyModuleConfigRepository(ModuleConfigRepository):
             existing = await self.get_revision_by_config_id(fields["device_id"], fields["module_name"], fields["config_id"])
             if existing is None:
                 raise
+            if existing["source"] == "external" and fields.get("secret_paths"):
+                # recorded as external meanwhile (lazy sync): this write knows where its secrets are
+                stored = await self._session.get(ModuleConfigRevision, existing["id"])
+                for key, value in fields.items():
+                    if key not in ("device_id", "module_name", "config_id"):
+                        setattr(stored, key, value)
+                await self._session.commit()
+                await self._session.refresh(stored)
+                return _revision_dict(stored)
             return existing
         await self._session.refresh(row)
         return _revision_dict(row)
+
+    async def delete_revision(self, device_id: str, module_name: str, revision_id: int) -> None:
+        await self._session.execute(delete(ModuleConfigRevision).where(
+            ModuleConfigRevision.id == revision_id,
+            ModuleConfigRevision.device_id == device_id,
+            ModuleConfigRevision.module_name == module_name,
+        ))
+        await self._session.commit()
 
     async def list_revisions(self, device_id: str, module_name: str, limit: int = 100) -> List[Dict]:
         rows = (await self._session.execute(

@@ -194,6 +194,10 @@ async def test_upload_refusals(client, db_session, monkeypatch):
     _, endpoint_id = await _endpoint_with(db_session, {"cert": CERT, "x": {"type": "string", "label": "X"}})
     path = f"/endpoints/{endpoint_id}/files/cert"
 
+    refused = await _put(client, path, make_cert(), name="plc\n.crt")
+    assert refused.status_code == 422
+    assert refused.json() == {"message": "The file name contains characters that are not allowed"}
+
     for body in (make_key(), make_cert() + make_key()):
         refused = await _put(client, path, body)
         assert refused.status_code == 422

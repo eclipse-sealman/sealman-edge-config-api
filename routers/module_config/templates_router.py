@@ -22,7 +22,9 @@ from db.sqlalchemy.module_config import module_matches
 from helper import validate_iothub_id
 from routers.base_api_router import BaseAPIRouter
 from routers.module_config import blocks as block_loader, service, templating
-from routers.module_config.secrets import SecretRestoreError, load_render_files, mask_config, restore_secrets
+from routers.module_config.secrets import (
+    SecretRestoreError, load_render_files, mask_config, mask_pointers, restore_secrets,
+)
 from routers.module_config.config_schemas.network_discover_config_v1 import NetworkDiscoverModuleConfigV1
 from routers.module_config.config_schemas.seal_module_opcua_client_config_v1 import OpcuaClientModuleConfigV1
 from routers.module_config.template_schemas import (
@@ -703,6 +705,14 @@ async def apply_module_config(
                                                                             endpoint_repo, service_repo, files_repo)
     if template["archived"]:
         raise HTTPException(status_code=409, detail="The template is archived")
+    if config is not None and not templating.has_errors(findings):
+        # a mask written into the template or a value would reach the device as the key
+        secret_pointers = {s["path"] for s in secrets}
+        findings = findings + [
+            {"path": pointer, "level": "error", "code": "secret-placeholder",
+             "message": "This value is a secret placeholder and cannot be applied"}
+            for pointer in mask_pointers(config) if pointer not in secret_pointers
+        ]
     if config is None or templating.has_errors(findings):
         return _findings_error("The configuration has errors", findings)
     values = {k: v for k, v in req.values.items() if not k.startswith("$")}

@@ -46,17 +46,17 @@ async def get_module_twin_desired(device, module):
     return response.json().get("properties", {}).get("desired", {})
 
 
-async def get_module_twin_config(device, module, repo=None):
+async def get_module_twin_config(device, module, repo):
     """
-        Returns the current configuration from the module-twin. With the revision repository, the
-        secret paths of the revision of the current `configId` are masked.
+        Returns the current configuration from the module-twin, the secret paths of the revision of
+        the current `configId` masked (`repo`: the revision repository).
     """
     desired = await get_module_twin_desired(device, module)
     pointer = desired.get("configBlobUrl")
     filename = blob_name_from_desired(device, module, desired)
     content = await read_module_config_blob(device, module, filename, missing_ok=not pointer)
     config_id = desired.get("configId")
-    if repo is None or content is None or not config_id:
+    if content is None or not config_id:
         return content
     revision = await repo.get_revision_by_config_id(device, module, str(config_id))
     secret_paths = revision.get("secret_paths") if revision else None

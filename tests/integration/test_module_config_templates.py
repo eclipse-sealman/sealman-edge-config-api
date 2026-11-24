@@ -42,11 +42,13 @@ def hub(monkeypatch):
     """In-memory IoT Hub module twins + blob storage behind the service."""
     state = {"blobs": {}, "desired": {}}
 
-    async def upload_and_patch(device, module, content):
-        config_id = uuid.uuid4().hex
+    async def upload(device, module, content):
+        config_id = state.pop("next_id", None) or uuid.uuid4().hex
         state["blobs"][(device, module, config_id)] = content
-        state["desired"][(device, module)] = {"configId": config_id, "configBlobUrl": f"blob://{config_id}", "_blob": config_id}
         return config_id
+
+    async def patch_twin(device, module, config_id):
+        state["desired"][(device, module)] = {"configId": config_id, "configBlobUrl": f"blob://{config_id}", "_blob": config_id}
 
     async def desired(device, module):
         return state["desired"].get((device, module), {})
@@ -54,7 +56,8 @@ def hub(monkeypatch):
     async def read_blob(device, module, name, missing_ok=False):
         return state["blobs"].get((device, module, name))
 
-    monkeypatch.setattr(service, "_upload_and_patch", upload_and_patch)
+    monkeypatch.setattr(service, "_upload", upload)
+    monkeypatch.setattr(service, "_patch_twin", patch_twin)
     for module in (service, twin_reader):
         monkeypatch.setattr(module, "get_module_twin_desired", desired)
         monkeypatch.setattr(module, "read_module_config_blob", read_blob)
@@ -941,6 +944,54 @@ class TestSecretFilesInRevisions:
         assert response.status_code == 200, response.text
         assert hub["blobs"][(device, MODULE, response.json()["configId"])]["clients"][1]["clientPrivateKey"] == "abc"
         assert (await client.get(raw)).json()["clients"][1]["clientPrivateKey"] == "abc"
+
+    async def test_revision_is_recorded_before_the_twin_points_to_a_secret(self, client, hub, device, tls, monkeypatch):
+        from db.sqlalchemy.module_config import SQLAlchemyModuleConfigRepository
+
+        async def failing_insert(self, **fields):
+            raise RuntimeError("database down")
+
+        monkeypatch.setattr(SQLAlchemyModuleConfigRepository, "add_revision", failing_insert)
+
+        # without secret paths: the twin is patched first and a lost revision is tolerated, as before
+        plain = await _create(client, body={"a": 1}, variables=[])
+        response = await client.post(f"/{device}/modules/{MODULE}/config/apply", json={"template_id": plain["id"]})
+        assert response.status_code == 200, response.text
+        assert response.json().get("revision") is None
+        current = hub["desired"][(device, MODULE)]["configId"]
+        assert current == response.json()["configId"]
+
+        # with secret paths: no revision, no twin pointer, and the request fails
+        response = await client.post(f"/{device}/modules/{MODULE}/config/apply", json={
+            "template_id": tls["template"]["id"], "endpoints": {"endpoint": tls["endpoint_id"]}})
+        assert response.status_code == 500
+        assert "PRIVATE KEY" not in response.text
+        assert hub["desired"][(device, MODULE)]["configId"] == current
+
+    async def test_external_row_for_the_config_id_is_upgraded(self, client, hub, device, tls):
+        config_id = "e" * 32
+        hub["desired"][(device, MODULE)] = {"configId": config_id, "configBlobUrl": "blob://x", "_blob": config_id}
+        hub["blobs"][(device, MODULE, config_id)] = {"old": True}
+        [external] = (await client.get(f"/{device}/modules/{MODULE}/config/revisions")).json()["revisions"]
+        assert external["source"] == "external"
+
+        hub["next_id"] = config_id
+        applied = await tls["apply"]()
+        assert applied["configId"] == config_id
+        assert applied["revision"]["id"] == external["id"] and applied["revision"]["source"] == "template"
+        for url in (f"/{device}/twin/config/{MODULE}", f"/{device}/modules/{MODULE}/config/revisions/{external['id']}"):
+            response = await client.get(url)
+            assert response.status_code == 200 and "PRIVATE KEY" not in response.text
+
+    async def test_apply_refuses_a_mask_from_the_template(self, client, hub, device):
+        template = await _create(client, body={"key": "${k}", "fixed": "<secret: a.key #0123abcd>"},
+                                 variables=[{"name": "k"}])
+        response = await client.post(f"/{device}/modules/{MODULE}/config/apply", json={
+            "template_id": template["id"], "values": {"k": "<secret: client.key #a1b2c3d4>"}})
+        assert response.status_code == 422, response.text
+        assert sorted((f["path"], f["code"]) for f in response.json()["findings"] if f["level"] == "error") == [
+            ("/fixed", "secret-placeholder"), ("/key", "secret-placeholder")]
+        assert (device, MODULE) not in hub["desired"]
 
     async def test_revisions_without_secrets_unchanged(self, client, hub, device):
         template = await _create(client, body={"b": 2, "a": ["${x}"]}, variables=[{"name": "x"}])
