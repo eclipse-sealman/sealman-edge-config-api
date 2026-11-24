@@ -8,7 +8,7 @@ from db.models.endpoint import Endpoint
 from db.models.service import Service, ServiceType
 from db.registry import register_repository
 from db.repos.service import UNSET, ServiceRepository, _Unset
-from db.merge import BlueprintResolver, patch_data, patch_fields, validate_instance_data
+from db.merge import BlueprintResolver, patch_data, patch_fields, reject_file_reference_changes, validate_instance_data
 from db.type_roles import SERVICE_ROLE_TYPES, drop_roles_of_missing_fields, validate_type_mapping
 from exceptions import APIError
 
@@ -203,6 +203,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         service_data: Dict[str, Any],
     ) -> Dict[str, Any]:
         service_type = await self._get_service_type_or_raise(type_id)
+        reject_file_reference_changes({}, service_data or {}, service_type.fields or {})
         validate_instance_data(service_data or {}, service_type.fields or {})
         service = Service(
             endpoint_id=endpoint_id, type_id=type_id, service_data=service_data or {}
@@ -221,6 +222,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         if service is None:
             return None
         service_type = await self._get_service_type_or_raise(service.type_id)
+        reject_file_reference_changes(service.service_data or {}, service_data, service_type.fields or {})
         merged_data = patch_data(service.service_data or {}, service_data)
         validate_instance_data(merged_data, service_type.fields or {})
         await self._session.execute(

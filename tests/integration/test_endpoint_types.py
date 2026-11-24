@@ -157,3 +157,32 @@ class TestEndpointTypeRoleValidation:
             json={"fields": {"addr": None}, "mapping": {"addr": "ip"}},
         )
         assert response.status_code == 422, response.text
+
+
+class TestFileFieldDefinition:
+    async def test_file_field_definition_rules(self, client):
+        for field in ({"type": "file", "label": "Cert"}, {"type": "file", "label": "Key", "secret": True}):
+            body = await _create(client, fields={"f": field})
+            assert body["fields"]["f"]["secret"] is bool(field.get("secret"))
+
+        file_field = {"type": "file", "label": "Cert"}
+        invalid = [
+            {**file_field, "required": True},
+            {**file_field, "default": "x"},
+            {**file_field, "options": ["a"]},
+            {**file_field, "validation": {"min_length": 1}},
+            {**file_field, "ui": "input"},
+            {**file_field, "changeable": False},
+            {**STRING_FIELD, "secret": True},
+            {"type": "list", "label": "L", "item_fields": {"f": file_field}},
+        ]
+        for field in invalid:
+            response = await client.post("/endpoint-types", json={"label": _label(), "fields": {"f": field}})
+            assert response.status_code == 400, (field, response.text)
+
+        for path in ("service-types", "device-types"):
+            body = {"label": _label(), "fields": {"f": file_field}}
+            if path == "device-types":
+                body["type_id"] = f"dt-{uuid4().hex[:8]}"
+            response = await client.post(f"/{path}", json=body)
+            assert response.status_code == 201, (path, response.text)

@@ -2,7 +2,7 @@ from typing import Any, Dict, Optional, Protocol, runtime_checkable
 from uuid import uuid4
 
 from exceptions import ValidationError
-from field_validation import validate_value
+from field_validation import is_file_ref, validate_value
 
 
 @runtime_checkable
@@ -164,6 +164,24 @@ def reject_non_changeable_updates(
         current_value = current_data.get(field_key)
         if current_value is not None and new_value != current_value:
             raise ValidationError(f"'{field_key}' is not changeable once set", 422)
+
+
+def reject_file_reference_changes(
+    current_data: Dict[str, Any],
+    data_patch: Dict[str, Any],
+    type_fields: Dict[str, Any],
+) -> None:
+    """Raises ValidationError if the patch sets, changes or clears a file reference. Those are
+    changed only by uploading or removing a file. Clearing a reference under a key that is not
+    (or no longer) a file field of the type is allowed, so a leftover custom value can be dropped.
+    """
+    for key, new_value in data_patch.items():
+        current_value = current_data.get(key)
+        if not (is_file_ref(current_value) or is_file_ref(new_value)) or new_value == current_value:
+            continue
+        if new_value is None and (type_fields.get(key) or {}).get("type") != "file":
+            continue
+        raise ValidationError(f"'{key}' can only be changed by uploading or removing a file", 422)
 
 
 _LIST_KEPT_ON_TYPE_CHANGE = ("label", "description", "required", "show_in_list")

@@ -4,7 +4,7 @@ import re
 
 from field_validation import validate_value
 
-FieldType = Literal["string", "boolean", "integer", "number", "list"]
+FieldType = Literal["string", "boolean", "integer", "number", "list", "file"]
 # Types a list's sub-fields may have (no nested lists).
 SCALAR_FIELD_TYPES: tuple[str, ...] = ("string", "boolean", "integer", "number")
 # Sub-field key reserved for the row identifier.
@@ -109,13 +109,23 @@ class FieldDefinition(BaseModel):
         default=None,
         description="Display order of the sub-fields (type=list, response only, never accepted)",
     )
+    secret: Optional[bool] = Field(
+        default=None,
+        description="type=file only: if true, the file is a secret (a private key) that is never shown or downloaded",
+    )
 
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def _check_consistency(self) -> "FieldDefinition":
         if self.type == "list":
+            if self.secret is not None:
+                raise ValueError("secret is only supported for type='file'")
             return self._check_list()
+        if self.type == "file":
+            return self._check_file()
+        if self.secret is not None:
+            raise ValueError("secret is only supported for type='file'")
         if self.item_fields is not None or self.item_order is not None:
             raise ValueError("item_fields and item_order are only supported for type='list'")
 
@@ -165,6 +175,19 @@ class FieldDefinition(BaseModel):
             except ValueError as exc:
                 raise ValueError(str(exc))
 
+        return self
+
+    def _check_file(self) -> "FieldDefinition":
+        if self.item_fields is not None or self.item_order is not None:
+            raise ValueError("item_fields and item_order are only supported for type='list'")
+        if self.required:
+            raise ValueError("required is not supported for type='file'")
+        if self.validation is not None or self.options is not None or self.default is not None or self.ui is not None:
+            raise ValueError("validation, options, default and ui are not supported for type='file'")
+        if not self.changeable:
+            raise ValueError("changeable=false is not supported for type='file'")
+        if self.secret is None:
+            self.secret = False
         return self
 
     def _check_list(self) -> "FieldDefinition":
@@ -223,6 +246,11 @@ class FieldDefinitionUpdate(BaseModel):
     item_fields: Optional[Dict[str, Optional[FieldDefinition]]] = Field(
         default=None,
         description="Sub-field changes of a list field; a null value removes that sub-field",
+    )
+
+    secret: Optional[bool] = Field(
+        default=None,
+        description="type=file only: if true, the file is a secret (a private key) that is never shown or downloaded",
     )
 
     item_order: Optional[List[str]] = Field(

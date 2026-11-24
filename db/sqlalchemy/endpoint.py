@@ -10,6 +10,7 @@ from db.merge import (
     patch_data,
     patch_fields,
     reject_non_changeable_updates,
+    reject_file_reference_changes,
     normalize_list_values,
     validate_instance_data,
     with_item_order,
@@ -191,6 +192,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         endpoint_data: Dict[str, Any],
     ) -> Dict[str, Any]:
         et = await self._get_endpoint_type_or_raise(type_id)
+        reject_file_reference_changes({}, endpoint_data or {}, et.fields or {})
         endpoint_data = normalize_list_values(endpoint_data or {}, {}, et.fields or {})
         validate_instance_data(endpoint_data, et.fields or {})
         endpoint = Endpoint(device_id=device_id, type_id=type_id, endpoint_data=endpoint_data)
@@ -216,6 +218,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             # Fields (resolve_fields returns them with field=None). `changeable` isn't enforced
             # on retype, as before.
             new_et = await self._get_endpoint_type_or_raise(type_id)
+            reject_file_reference_changes(endpoint.endpoint_data or {}, endpoint_data or {}, new_et.fields or {})
             merged_data = patch_data(endpoint.endpoint_data or {}, endpoint_data or {})
             merged_data = normalize_list_values(
                 merged_data, endpoint.endpoint_data or {}, new_et.fields or {}
@@ -230,6 +233,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             et = await self._get_endpoint_type_or_raise(endpoint.type_id)
             patch = endpoint_data or {}
             reject_non_changeable_updates(endpoint.endpoint_data or {}, patch, et.fields or {})
+            reject_file_reference_changes(endpoint.endpoint_data or {}, patch, et.fields or {})
             merged_data = patch_data(endpoint.endpoint_data or {}, patch)
             merged_data = normalize_list_values(
                 merged_data, endpoint.endpoint_data or {}, et.fields or {}
