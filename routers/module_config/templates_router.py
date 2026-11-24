@@ -23,7 +23,7 @@ from helper import validate_iothub_id
 from routers.base_api_router import BaseAPIRouter
 from routers.module_config import blocks as block_loader, service, templating
 from routers.module_config.secrets import (
-    SecretRestoreError, load_render_files, mask_config, mask_pointers, restore_secrets,
+    RenderSource, SecretRestoreError, load_render_files, mask_config, mask_pointers, restore_secrets,
 )
 from routers.module_config.config_schemas.network_discover_config_v1 import NetworkDiscoverModuleConfigV1
 from routers.module_config.config_schemas.seal_module_opcua_client_config_v1 import OpcuaClientModuleConfigV1
@@ -240,6 +240,19 @@ async def _chosen_services(
     return out
 
 
+def _file_sources(
+    device_id: Optional[str], device_meta: Optional[Dict[str, Any]],
+    endpoints: Optional[Dict[str, Optional[Dict[str, Any]]]], chosen_endpoints: Optional[Dict[str, str]],
+    services: Optional[Dict[str, Optional[Dict[str, Any]]]], chosen_services: Dict[str, str],
+) -> List[RenderSource]:
+    """The entities whose files a render may use, each with its id: the device (only with a stored device,
+    never sample metadata), and the endpoint and service chosen for each slot."""
+    sources: List[RenderSource] = [("device", device_id, device_meta)] if device_id is not None else []
+    sources += [("endpoint", chosen_endpoints[slot], fields) for slot, fields in (endpoints or {}).items() if fields]
+    sources += [("service", chosen_services[slot], fields) for slot, fields in (services or {}).items() if fields]
+    return sources
+
+
 def _chosen_rows(
     body: Any, endpoints: Dict[str, Optional[Dict[str, Any]]], chosen: Dict[str, Dict[str, str]],
     blocks: Optional[templating.BlockVersions], lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
@@ -448,7 +461,8 @@ async def preview_template(
         rows = _chosen_rows(body, endpoints, req.rows, blocks, lists)
     secrets: List[Dict[str, str]] = []
     # sample metadata comes from the request: it may not pull in stored files (they render as missing-file)
-    files = await load_render_files(files_repo, device_meta if req.device_id is not None else None, endpoints, services)
+    files = await load_render_files(files_repo, _file_sources(req.device_id, device_meta, endpoints, req.endpoints,
+                                                             services, req.services))
     config, findings = templating.render(body, _variables(req), req.values, device_meta, endpoints, blocks, req.kind,
                                          lists, services, rows, files=files, secrets=secrets)
     findings = _merge(name_findings, ref_findings + findings)
@@ -610,7 +624,8 @@ async def _render_for_device(
                                       version.get("slots"))
     rows = _chosen_rows(version["body"], endpoints, req.rows, blocks, lists)
     secrets: List[Dict[str, str]] = []
-    files = await load_render_files(files_repo, device_meta, endpoints, services)
+    files = await load_render_files(files_repo, _file_sources(device, device_meta, endpoints, req.endpoints,
+                                                             services, req.services))
     config, findings = templating.render(version["body"], version["variables"], req.values, device_meta, endpoints,
                                          blocks, lists=lists, services=services, rows=rows, files=files,
                                          secrets=secrets)

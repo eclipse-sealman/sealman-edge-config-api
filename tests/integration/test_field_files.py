@@ -39,10 +39,17 @@ async def _check_guard(patch, wrap, set_stored):
     removed = await patch(wrap({"cert": None}))
     assert removed.status_code == 422 and CHANGE_MESSAGE in str(_message(removed))
 
+    # a reference nested in another value, also in a list row, is refused like a top-level one
+    for key, value in (("wrap", {"inner": REF}), ("rows", [{"x": "a", "file": REF}])):
+        nested = await patch(wrap({key: value}))
+        assert nested.status_code == 422
+        assert f"'{key}' can only be changed by uploading or removing a file" in str(_message(nested))
+
 
 async def test_save_cannot_set_or_change_a_file_reference(client, db_session):
     await AbacFixtures(db_session).setup(devices={"dev-1": {}})
-    type_id = await seed_endpoint_type(db_session, {"cert": CERT})
+    rows = {"type": "list", "label": "Rows", "item_fields": {"x": {"type": "string", "label": "X"}}}
+    type_id = await seed_endpoint_type(db_session, {"cert": CERT, "rows": rows})
     endpoint_id = await seed_endpoint(db_session, "dev-1", type_id)
 
     created = await client.post(
@@ -58,6 +65,11 @@ async def test_save_cannot_set_or_change_a_file_reference(client, db_session):
     await _check_guard(
         lambda body: client.patch(f"/endpoints/{endpoint_id}", json=body),
         lambda data: {"endpoint_data": data}, set_stored)
+
+    # Retyping to a type that still defines the file field keeps the reference protected.
+    other_type = await seed_endpoint_type(db_session, {"cert": CERT})
+    retyped = await client.patch(f"/endpoints/{endpoint_id}", json={"type_id": other_type, "endpoint_data": {"cert": None}})
+    assert retyped.status_code == 422 and CHANGE_MESSAGE in str(_message(retyped))
 
     # A reference under a key the type no longer defines is a custom value and can be cleared.
     await db_session.execute(update(Endpoint).where(Endpoint.endpoint_id == endpoint_id)

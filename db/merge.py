@@ -2,7 +2,7 @@ from typing import Any, Dict, Optional, Protocol, runtime_checkable
 from uuid import uuid4
 
 from exceptions import ValidationError
-from field_validation import is_file_ref, validate_value
+from field_validation import holds_file_ref, is_file_ref, validate_value
 
 
 @runtime_checkable
@@ -172,15 +172,20 @@ def reject_file_reference_changes(
     type_fields: Dict[str, Any],
 ) -> None:
     """Raises ValidationError if the patch sets, changes or clears a file reference. Those are
-    changed only by uploading or removing a file. Clearing a reference under a key that is not
-    (or no longer) a file field of the type is allowed, so a leftover custom value can be dropped.
+    changed only by uploading or removing a file. A value holding a reference anywhere inside it
+    (nested, or in a list row) is refused unless it equals the stored value. Clearing a reference
+    under a key that is not (or no longer) a file field of the type is allowed, so a leftover
+    custom value can be dropped.
     """
     for key, new_value in data_patch.items():
         current_value = current_data.get(key)
-        if not (is_file_ref(current_value) or is_file_ref(new_value)) or new_value == current_value:
+        if new_value == current_value:
             continue
-        if new_value is None and (type_fields.get(key) or {}).get("type") != "file":
-            continue
+        if not holds_file_ref(new_value):
+            if not is_file_ref(current_value):
+                continue
+            if new_value is None and (type_fields.get(key) or {}).get("type") != "file":
+                continue
         raise ValidationError(f"'{key}' can only be changed by uploading or removing a file", 422)
 
 

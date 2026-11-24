@@ -41,7 +41,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from field_validation import is_file_ref
+from field_validation import holds_file_ref, is_file_ref
 
 VARIABLE_TYPES = ("string", "text", "number", "integer", "boolean", "enum")
 RESERVED_KEYS = ("$secret",)
@@ -554,14 +554,6 @@ class RenderFile:
     field: str
 
 
-def _holds_file_ref(value: Any) -> bool:
-    """True for a file reference and for a dict or list that contains one."""
-    if is_file_ref(value):
-        return True
-    items = value.values() if isinstance(value, dict) else value if isinstance(value, list) else ()
-    return any(_holds_file_ref(v) for v in items)
-
-
 class _Renderer:
     def __init__(self, variables: List[Dict[str, Any]], values: Dict[str, Any], device: Optional[Dict[str, Any]],
                  endpoints: Optional[Dict[str, Optional[Dict[str, Any]]]], blocks: Optional[BlockVersions] = None,
@@ -727,7 +719,7 @@ class _Renderer:
             value = self._resolve(whole.group(1), path)
             if is_file_ref(value):
                 return self._file_text(value, path)
-            if _holds_file_ref(value):
+            if holds_file_ref(value):
                 return self._not_whole(whole.group(1), path)
             return value
 
@@ -738,7 +730,7 @@ class _Renderer:
             if not _valid_reference(ref):
                 return match.group(0)
             value = self._resolve(ref, path)
-            if _holds_file_ref(value):
+            if holds_file_ref(value):
                 self._not_whole(ref, path)
                 return ""
             return _text(value)

@@ -2,7 +2,7 @@
 current file text where a stored or edited configuration carries a secret."""
 import copy
 import re
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Optional, Set, Tuple
 
 from db.repos.field_file import FieldFileRepository
 from field_validation import is_file_ref
@@ -61,27 +61,26 @@ def _child(node: Any, part: str) -> Any:
     return None
 
 
-def _file_ids(node: Any, found: set) -> None:
-    if is_file_ref(node):
-        found.add(node["$file"])
-    elif isinstance(node, dict):
-        for value in node.values():
-            _file_ids(value, found)
-    elif isinstance(node, list):
-        for value in node:
-            _file_ids(value, found)
+# (owner kind, owner id, flat field values) of an entity being rendered
+RenderSource = Tuple[str, str, Optional[Dict[str, Any]]]
 
 
-async def load_render_files(files_repo: FieldFileRepository, *sources: Any) -> Dict[str, RenderFile]:
-    """The decrypted files referenced anywhere in `sources` (dicts and lists). A file that is gone or cannot
-    be decrypted is left out, so the renderer reports it as missing."""
-    ids: set = set()
-    for source in sources:
-        _file_ids(source, ids)
-    if not ids:
+async def load_render_files(files_repo: FieldFileRepository, sources: Iterable[RenderSource]) -> Dict[str, RenderFile]:
+    """The decrypted files of the entities being rendered. Only a reference that is the whole value of a
+    top-level field is loaded, and only if the stored file belongs to that entity and field: a reference
+    nested in another value or pointing at a file of another owner is left out, so the renderer reports it
+    as missing. A file that is gone or cannot be decrypted is left out as well."""
+    wanted: Dict[str, Set[Tuple[str, str, str]]] = {}
+    for owner_kind, owner_id, fields in sources:
+        for key, value in (fields or {}).items():
+            if is_file_ref(value):
+                wanted.setdefault(value["$file"], set()).add((owner_kind, owner_id, key))
+    if not wanted:
         return {}
     out: Dict[str, RenderFile] = {}
-    for file_id, row in (await files_repo.get_many(ids)).items():
+    for file_id, row in (await files_repo.get_many(wanted)).items():
+        if (row.owner_kind, row.owner_id, row.field) not in wanted.get(file_id, ()):
+            continue
         try:
             text = decrypt(row.content)
         except FileEncryptionError:

@@ -7,6 +7,14 @@ def is_file_ref(value: Any) -> bool:
     return isinstance(value, dict) and isinstance(value.get("$file"), str)
 
 
+def holds_file_ref(value: Any) -> bool:
+    """True for a file reference and for a dict or list that contains one at any depth."""
+    if is_file_ref(value):
+        return True
+    items = value.values() if isinstance(value, dict) else value if isinstance(value, list) else ()
+    return any(holds_file_ref(v) for v in items)
+
+
 def validate_value(field_name: str, value: Any, field_def: Dict[str, Any]) -> None:
     """Validate `value` against a FieldDefinition (as a plain dict) for type, validation, and options.
 

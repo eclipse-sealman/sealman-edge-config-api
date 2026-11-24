@@ -7,6 +7,10 @@ import pytest
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from sqlalchemy import update
+
+from db.models.device import Device
+from db.models.device_type import DeviceType
 
 from routers.module_config import service
 from routers.module_config.routes import get_module_twin_config as twin_reader
@@ -844,6 +848,40 @@ class TestCertificateFiles:
         assert response.status_code == 200, response.text
         assert [f["code"] for f in response.json()["findings"]] == ["missing-file"]
         assert "BEGIN CERTIFICATE" not in response.text
+
+    async def test_files_load_only_for_their_owner_and_field(self, client, db_session, hub, device, monkeypatch):
+        """A reference to another device's file, at a field or nested in another value, never pulls it in."""
+        monkeypatch.setenv("FILE_ENCRYPTION_KEY", Fernet.generate_key().decode())
+        default = await db_session.get(DeviceType, "default")
+        default.fields = {**(default.fields or {}), "cert": {"type": "file", "label": "Cert"},
+                          "key": {"type": "file", "label": "Key", "secret": True}}
+        await db_session.commit()
+        await AbacFixtures(db_session).setup(devices={"mct-dev-2": {}})
+        refs = {}
+        for field, content in (("cert", make_cert()), ("key", make_key())):
+            put = await client.put(f"/devices/mct-dev-2/files/{field}", params={"name": f"b.{field}"}, content=content,
+                                   headers={"content-type": "application/octet-stream"})
+            assert put.status_code == 200, put.text
+            refs[field] = put.json()
+        # stored directly: the save guard refuses both values
+        stored = dict((await db_session.get(Device, device)).device_data)
+        await db_session.execute(update(Device).where(Device.device_id == device).values(
+            device_data={**stored, "cert": refs["cert"], "wrap": {"inner": refs["key"]}}))
+        await db_session.commit()
+
+        body = {"c": "${device.cert}", "k": "${device.wrap.inner}"}
+        template = await _create(client, body=body, variables=[])
+        render = await client.post(f"/{device}/modules/{MODULE}/config/render", json={"template_id": template["id"]})
+        preview = await client.post("/module-config-templates/preview", json={
+            "body": body, "variables": [], "group_id": template["group_id"], "device_id": device})
+        apply = await client.post(f"/{device}/modules/{MODULE}/config/apply", json={"template_id": template["id"]})
+        for response in (render, preview, apply):
+            assert response.status_code in (200, 422), response.text
+            assert "BEGIN CERTIFICATE" not in response.text and "PRIVATE KEY" not in response.text
+            assert sorted((f["path"], f["code"]) for f in response.json()["findings"] if f["level"] == "error") == [
+                ("/c", "missing-file"), ("/k", "missing-file")]
+        assert apply.status_code == 422
+        assert (device, MODULE) not in hub["desired"]
 
 
 def _new_key() -> bytes:
