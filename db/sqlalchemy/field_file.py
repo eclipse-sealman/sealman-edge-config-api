@@ -9,6 +9,7 @@ from sqlalchemy.orm import undefer
 from db.models.device import Device
 from db.models.endpoint import Endpoint
 from db.models.field_file import FieldFile as FieldFileRow
+from db.merge import is_file_ref
 from db.models.service import Service
 from db.registry import register_repository
 from db.repos.field_file import FieldFile, FieldFileRepository
@@ -91,7 +92,8 @@ class SqlAlchemyFieldFileRepository(FieldFileRepository):
         if owner is not None:
             data_column = _OWNERS[owner_kind][2]
             data = getattr(owner, data_column) or {}
-            if field in data:
+            # Only a reference is dropped, so a plain value of another field type stays.
+            if removed or is_file_ref(data.get(field)):
                 setattr(owner, data_column, {k: v for k, v in data.items() if k != field})
         await self._session.commit()
         return removed

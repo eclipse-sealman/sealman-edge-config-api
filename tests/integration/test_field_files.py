@@ -264,3 +264,14 @@ async def test_files_follow_their_owner(client, db_session):
     await _put(client, f"/endpoints/{third}/files/cert", make_cert())
     assert (await client.delete(f"/endpoint-types/{type_id}", params={"cascade": True})).status_code == 204
     assert await _row_count(db_session) == 0
+
+
+async def test_remove_leaves_a_plain_value_alone(client, db_session):
+    type_id = await seed_endpoint_type(db_session, {"name": {"type": "string", "label": "Name"}})
+    await AbacFixtures(db_session).setup(devices={"dev-1": {}})
+    endpoint_id = await seed_endpoint(db_session, "dev-1", type_id, {"name": "plc"})
+
+    response = await client.delete(f"/endpoints/{endpoint_id}/files/name")
+    assert response.status_code == 404
+    shown = await client.get(f"/endpoints/{endpoint_id}")
+    assert shown.json()["endpoint_data"]["name"]["value"] == "plc"
