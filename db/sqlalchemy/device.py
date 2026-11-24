@@ -192,6 +192,12 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
 
         return response
 
+    async def get_effective_fields(self, device_id: str) -> Optional[Dict[str, Any]]:
+        device = await self._get_device(device_id)
+        if not device:
+            return None
+        return await self._effective_fields_for(await self._get_device_type_or_raise(device.type_id))
+
     async def update_device_metadata(
         self,
         device_id: str,

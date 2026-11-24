@@ -7,6 +7,7 @@ from authorization.permission_types import Device
 from db.repos.device import DeviceRepository
 from db.repos.device_search import DeviceSearchRepository
 from db.repos.device_template import DeviceTemplateRepository
+from db.repos.field_file import FieldFileRepository
 from db.repos.user import UserRepository
 from db.session import get_repository
 from exceptions import APIError
@@ -176,9 +177,11 @@ async def create_device_route(
 async def delete_device_route(
     device_id: str,
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    files: FieldFileRepository = Depends(get_repository(FieldFileRepository)),
     _=Depends(ABACPermissionCheck(Device.DELETE, device_path="device_id")),
 ):
     await delete_device(device_id, repo)
+    await files.delete_orphans()
     return {"status": "deleted"}
 
 

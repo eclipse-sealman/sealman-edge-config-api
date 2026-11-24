@@ -185,6 +185,7 @@ def reject_file_reference_changes(
 
 
 _LIST_KEPT_ON_TYPE_CHANGE = ("label", "description", "required", "show_in_list")
+_FILE_KEPT_ON_TYPE_CHANGE = ("label", "description", "show_in_list")
 
 
 def with_item_order(fields: Dict[str, Any]) -> Dict[str, Any]:
@@ -232,6 +233,10 @@ def patch_fields(
             result.pop(field_key, None)
         else:
             existing = dict(result.get(field_key, {}))
+            new_type = field_patch.get("type")
+            if new_type is not None and new_type != existing.get("type") and "file" in (new_type, existing.get("type")):
+                # File fields share almost no keys with other types: keep only what is common.
+                existing = {k: v for k, v in existing.items() if k in _FILE_KEPT_ON_TYPE_CHANGE}
             if "list" in (existing.get("type"), field_patch.get("type")) or field_patch.get("item_fields") is not None:
                 result[field_key] = _patch_list_field(existing, field_patch)
                 continue

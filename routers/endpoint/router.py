@@ -6,6 +6,7 @@ from authorization.abac_permission_check import ABACAnyPermissionCheck, ABACPerm
 from authorization.permission_types import Device, Platform
 from db.repos.device import DeviceRepository
 from db.repos.endpoint import EndpointRepository
+from db.repos.field_file import FieldFileRepository
 from db.session import get_repository
 from db.merge import patch_fields
 from routers.schemas import FieldDefinition, dump_field_patch
@@ -149,12 +150,14 @@ async def delete_endpoint_type(
     type_id: str,
     cascade: bool = False,
     repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
+    files: FieldFileRepository = Depends(get_repository(FieldFileRepository)),
     _auth=_type_write,
 ) -> None:
     try:
         await repo.delete_endpoint_type(type_id, cascade=cascade)
     except APIError as exc:
         _handle_api_error(exc)
+    await files.delete_orphans()
 
 
 @endpoints.get(
@@ -229,6 +232,7 @@ async def update_endpoint(
     endpoint_id: str,
     body: EndpointUpdate,
     repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
+    files: FieldFileRepository = Depends(get_repository(FieldFileRepository)),
     _auth=_endpoint_write,
 ) -> EndpointResponse:
     try:
@@ -245,6 +249,8 @@ async def update_endpoint(
         raise HTTPException(
             status_code=404, detail=f"Endpoint '{endpoint_id}' not found"
         )
+    # A removed custom reference leaves its file without an owner.
+    await files.delete_orphans()
     return EndpointResponse.model_validate(result)
 
 
@@ -257,6 +263,8 @@ async def update_endpoint(
 async def delete_endpoint(
     endpoint_id: str,
     repo: EndpointRepository = Depends(get_repository(EndpointRepository)),
+    files: FieldFileRepository = Depends(get_repository(FieldFileRepository)),
     _auth=_endpoint_write,
 ) -> None:
     await repo.delete_endpoint(endpoint_id=endpoint_id)
+    await files.delete_orphans()

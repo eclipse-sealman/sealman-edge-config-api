@@ -186,3 +186,18 @@ class TestFileFieldDefinition:
                 body["type_id"] = f"dt-{uuid4().hex[:8]}"
             response = await client.post(f"/{path}", json=body)
             assert response.status_code == 201, (path, response.text)
+
+    async def test_changing_the_type_to_or_from_file_resets_the_definition(self, client):
+        select_field = {"type": "string", "label": "Mode", "ui": "select", "options": ["a", "b"]}
+        created = await _create(client, fields={"f": select_field})
+        url = f"/endpoint-types/{created['type_id']}"
+
+        to_file = await client.patch(url, json={"fields": {"f": {"type": "file", "secret": True}}})
+        assert to_file.status_code == 200, to_file.text
+        stored = to_file.json()["fields"]["f"]
+        assert stored["type"] == "file" and stored["secret"] is True and stored["label"] == "Mode"
+        assert stored["ui"] is None and stored["options"] is None
+
+        back = await client.patch(url, json={"fields": {"f": {"type": "string"}}})
+        assert back.status_code == 200, back.text
+        assert not back.json()["fields"]["f"]["secret"]

@@ -146,6 +146,21 @@ class ConfigStatus(BaseModel):
     appMessage:     Union[str, None]
 ```
 
+## File fields
+
+A field of type `file` on an endpoint, service or device type holds a certificate, private key or CRL (PEM, or a DER certificate that is stored as PEM; at most 64 KB). The value in the owner's data is only a reference object, `{"$file": "<id>", "name", "kind": "certificate"|"private-key"|"crl", "not_after": "<ISO 8601 UTC>"|null, "uploaded_at"}`; a normal save cannot set, change or clear it. The file is stored in `field_files`:
+
+| Column | Meaning |
+|---|---|
+| `id` | the `$file` id, new on every upload |
+| `owner_kind`, `owner_id`, `field` | owner (`endpoint`, `service`, `device`) and field key, unique together; no foreign key, so `delete_orphans()` removes rows after owners, types and references are deleted |
+| `name`, `kind`, `subject`, `not_after`, `sha256` | metadata read from the file |
+| `content` | the PEM text, always encrypted (deferred column) |
+| `secret` | copied from the field definition at upload; later definition changes do not affect existing rows |
+| `uploaded_by`, `uploaded_at` | user name and time of the upload |
+
+Routes: `PUT` (raw body, `?name=`), `GET` and `DELETE` on `/endpoints/{id}/files/{field}`, `/services/{id}/files/{field}` (permissions `device.endpoint.write` / `.read`) and `/devices/{id}/files/{field}` (`device.metadata.write` / `device.read`). Content is encrypted with Fernet; `FILE_ENCRYPTION_KEY` holds one or more keys separated by commas (the first encrypts, all decrypt, so keys can be rotated) and is read on every call. Without it uploads answer 503. A `secret` file (a private key) can never be downloaded: `GET` answers 403, and a private key is accepted only by a `secret` field.
+
 ## Deployment architecture
 
 Devices are targeted by IoT Hub deployment conditions based on device-twin tags:

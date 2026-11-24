@@ -4,6 +4,7 @@ from fastapi import Depends, HTTPException, status
 from authorization.abac_permission_check import ABACPermissionCheck, ABACMetadataPatchCheck
 from authorization.permission_types import Device, Platform
 from db.repos.device import DeviceRepository
+from db.repos.field_file import FieldFileRepository
 from db.session import get_repository
 from routers.base_api_router import BaseAPIRouter
 from routers.platform_configuration.network_scan_guard import (
@@ -42,8 +43,11 @@ logger = logging.getLogger("EdgeConfigAPI")
 @general.patch("/{device}/metadata", response_model=DeviceMetadataResponse, tags=["General"])
 async def patch_device_metadata(device: str, metadata: Dict[str, Any],
                                 repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+                                files: FieldFileRepository = Depends(get_repository(FieldFileRepository)),
                                 _ = Depends(ABACMetadataPatchCheck(Device.METADATA_WRITE))):
     device_metadata = await _patch_device_metadata(device, metadata=metadata, repo=repo)
+    # A removed custom reference leaves its file without an owner.
+    await files.delete_orphans()
     return device_metadata
 
 @general.put("/{device}/deployment", response_model=DeploymentTag, tags=["General"])
