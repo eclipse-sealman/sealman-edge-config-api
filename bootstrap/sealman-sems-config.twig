@@ -1,5 +1,5 @@
 {
-    {% if azure_provisioning is defined and azure_provisioning in ['manual', 'dps'] %}
+    {% if azure_provisioning is defined and azure_provisioning in ['manual', 'dps'] and azure_iot_edge_enabled|default('true') != 'false' %}
     "azure": {
         "config": {
             "hostname": "eg-{{serialNumber}}",

@@ -15,14 +15,22 @@ class SqlAlchemyPlatformFunctionsRepository(PlatformFunctionsRepository):
         row = await self._session.get(PlatformFunctions, 1)
         if row is None:
             return PlatformFunctionSettings()
-        return PlatformFunctionSettings(network_scan_enabled=row.network_scan_enabled)
+        return PlatformFunctionSettings(
+            network_scan_enabled=row.network_scan_enabled,
+            azure_iot_edge_enabled=row.azure_iot_edge_enabled,
+        )
 
     async def save_functions(self, settings: PlatformFunctionSettings) -> PlatformFunctionSettings:
-        stmt = pg_insert(PlatformFunctions).values(id=1, network_scan_enabled=settings.network_scan_enabled)
+        stmt = pg_insert(PlatformFunctions).values(
+            id=1,
+            network_scan_enabled=settings.network_scan_enabled,
+            azure_iot_edge_enabled=settings.azure_iot_edge_enabled,
+        )
         stmt = stmt.on_conflict_do_update(
             index_elements=[PlatformFunctions.id],
             set_={
                 "network_scan_enabled": stmt.excluded.network_scan_enabled,
+                "azure_iot_edge_enabled": stmt.excluded.azure_iot_edge_enabled,
                 "updated_at": stmt.excluded.updated_at,
             },
         )

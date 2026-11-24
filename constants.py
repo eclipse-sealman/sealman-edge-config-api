@@ -99,6 +99,8 @@ BOOTSTRAP_SEMS_TEMPLATE_NAME = os.getenv(
     "BOOTSTRAP_SEMS_TEMPLATE_NAME", "sealman-template"
 )
 BOOTSTRAP_SEMS_DEVICE_TYPE = os.getenv("BOOTSTRAP_SEMS_DEVICE_TYPE", "Edge gateway")
+# SEMS device variable read by the bootstrap twig; "false" drops the azure block from the rendered config.
+AZURE_IOT_EDGE_ENABLED_VARIABLE = "azure_iot_edge_enabled"
 BOOTSTRAP_SEMS_HEALTH_TIMEOUT = int(os.getenv("BOOTSTRAP_SEMS_HEALTH_TIMEOUT", "120"))
 
 # IoTHub Bootstrap — idempotent creation of the base automatic deployment

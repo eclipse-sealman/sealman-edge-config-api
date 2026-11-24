@@ -20,6 +20,7 @@ from .service import (get_available_templates, test_device_config)
 
 from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Platform
+from constants import AZURE_IOT_EDGE_ENABLED_VARIABLE
 
 
 platform_config = BaseAPIRouter(
@@ -87,9 +88,13 @@ async def delete_template_variable(
 @platform_config.post("/test-device-config", response_model=TestDeviceConfigResponse)
 async def test_device_config_route(
     repo: DeviceTemplateRepository = Depends(get_repository(DeviceTemplateRepository)),
+    functions_repo: PlatformFunctionsRepository = Depends(get_repository(PlatformFunctionsRepository)),
     _ = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None)),
 ):
-    return await test_device_config(await repo.get_template_variables())
+    return await test_device_config(
+        await repo.get_template_variables(),
+        (await functions_repo.get_functions()).azure_iot_edge_enabled,
+    )
 
 
 # ==================== PLATFORM FUNCTIONS ====================
@@ -108,4 +113,11 @@ async def update_platform_functions(
     repo: PlatformFunctionsRepository = Depends(get_repository(PlatformFunctionsRepository)),
     _ = Depends(ABACPermissionCheck(Platform.CONFIG_WRITE, device_path=None)),
 ):
-    return asdict(await repo.save_functions(PlatformFunctionSettings(**request.model_dump())))
+    new_settings = PlatformFunctionSettings(**request.model_dump())
+    if new_settings.azure_iot_edge_enabled != (await repo.get_functions()).azure_iot_edge_enabled:
+        # Pushed before saving so a SEMS failure leaves the old state and the change can be retried.
+        await SmartEMS.set_variable_for_all_devices(
+            name=AZURE_IOT_EDGE_ENABLED_VARIABLE,
+            value="true" if new_settings.azure_iot_edge_enabled else "false",
+        )
+    return asdict(await repo.save_functions(new_settings))

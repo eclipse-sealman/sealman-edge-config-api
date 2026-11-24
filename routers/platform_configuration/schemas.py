@@ -37,3 +37,4 @@ class TestDeviceConfigResponse(BaseModel):
 
 class PlatformFunctions(BaseModel):
     network_scan_enabled: bool
+    azure_iot_edge_enabled: bool

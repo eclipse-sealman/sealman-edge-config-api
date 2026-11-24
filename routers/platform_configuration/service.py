@@ -2,7 +2,7 @@ import json
 import logging
 import secrets
 from typing import Any, Dict, List
-from constants import SEMS_URL, BOOTSTRAP_SEMS_TEMPLATE_NAME
+from constants import SEMS_URL, BOOTSTRAP_SEMS_TEMPLATE_NAME, AZURE_IOT_EDGE_ENABLED_VARIABLE
 from exceptions import APIError
 from smart_ems import SmartEMS
 from async_requests import post_async
@@ -62,11 +62,12 @@ async def get_available_templates(selected_names: List[str]):
         raise APIError(f"Failed to fetch templates from SEMS: {str(ex)}", 500)
 
 
-async def test_device_config(template_variables: Dict[str, str]) -> Dict[str, Any]:
+async def test_device_config(template_variables: Dict[str, str], azure_iot_edge_enabled: bool = True) -> Dict[str, Any]:
     """Render the bootstrap config for a throwaway SEMS device using the given platform variables."""
     serial = f"99{secrets.randbelow(10**10):010d}"
     variables = {k: str(v) for k, v in template_variables.items() if v}
     variables["azure_provisioning"] = "dps"
+    variables[AZURE_IOT_EDGE_ENABLED_VARIABLE] = "true" if azure_iot_edge_enabled else "false"
     sems_device_id = None
 
     try:

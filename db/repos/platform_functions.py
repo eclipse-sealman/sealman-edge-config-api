@@ -5,6 +5,7 @@ from dataclasses import dataclass
 @dataclass
 class PlatformFunctionSettings:
     network_scan_enabled: bool = True
+    azure_iot_edge_enabled: bool = True
 
 
 class PlatformFunctionsRepository(ABC):

@@ -4,10 +4,11 @@ from smart_ems import SmartEMS
 from exceptions import APIError, IoTBackendAPIError
 from db.repos.device import DeviceRepository
 from db.repos.device_template import DeviceTemplateRepository
+from db.repos.platform_functions import PlatformFunctionsRepository
 import asyncio
 from smart_ems import generate_resp_from_device_info
 from routers.devices.routes.get_devices import populate_cache_from_iot_hub_query
-from constants import IOT_HUB_NAME, BOOTSTRAP_SEMS_TEMPLATE_NAME
+from constants import IOT_HUB_NAME, BOOTSTRAP_SEMS_TEMPLATE_NAME, AZURE_IOT_EDGE_ENABLED_VARIABLE
 from helper import encode_iothub_id, get_iothub_auth_headers
 from routers.general.routes.put_deployment_tag import put_deployment_tag
 
@@ -20,6 +21,7 @@ async def create_device(
     body: dict,
     repo: DeviceRepository,
     template_repo: DeviceTemplateRepository,
+    functions_repo: PlatformFunctionsRepository,
 ):
     encoded_device = encode_iothub_id(device_id)
     auth_type = body.get("authType")
@@ -90,6 +92,9 @@ async def create_device(
         # Add per-device variables (user input + derived).
         # The template renders the azure block only for "manual" or "dps".
         variables_to_set["azure_provisioning"] = "dps" if is_dps else "manual"
+        # The IoT Hub device is created either way; this only controls whether the azure block is rendered.
+        azure_enabled = (await functions_repo.get_functions()).azure_iot_edge_enabled
+        variables_to_set[AZURE_IOT_EDGE_ENABLED_VARIABLE] = "true" if azure_enabled else "false"
         if is_dps:
             variables_to_set.pop("device_connection_string", None)
         else:
