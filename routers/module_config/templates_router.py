@@ -158,35 +158,48 @@ async def _device_endpoints(endpoint_repo: EndpointRepository, device: str) -> D
 
 
 def _slots(body: Any, blocks: Optional[templating.BlockVersions],
-           lists: Optional[Dict[str, List[Dict[str, Any]]]]) -> List[Dict[str, Any]]:
-    """The endpoint slots of a body (see `templating.inputs`) plus those of the chosen list entries, keyed
-    `<list key>/<entry name>/<slot>`."""
-    slots = templating.inputs(body, [], blocks)["endpoints"]
+           lists: Optional[Dict[str, List[Dict[str, Any]]]],
+           slots: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """The endpoint slots of a body (see `templating.inputs`, `slots` are its declarations) plus those of the
+    chosen list entries, keyed `<list key>/<entry name>/<slot>`. Each carries the types it allows."""
+    slots = templating.inputs(body, [], blocks, slots)["endpoints"]
     for key, entries in (lists or {}).items():
         for entry in entries:
             block = (blocks or {}).get(entry["block_id"])
             if block:
                 prefix = templating.COPY_SEP.join((key, entry["name"], ""))
                 slots += [{**e, "key": prefix + e["key"]}
-                          for e in templating.inputs(block["body"], [], blocks)["endpoints"]]
+                          for e in templating.inputs(block["body"], [], blocks, block.get("slots"))["endpoints"]]
     return slots
 
 
 async def _chosen_endpoints(
     endpoint_repo: EndpointRepository, device: str, body: Any, chosen: Dict[str, str],
     blocks: Optional[templating.BlockVersions], lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    slots: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Optional[Dict[str, Any]]]:
     """Slot -> fields of the endpoint chosen for it (None if none was chosen). Slots of block copies are
     keyed `<copy>/<slot>`, those of list entries `<list key>/<entry name>/<slot>`. A chosen endpoint must
-    belong to the device."""
-    slots = [e["key"] for e in _slots(body, blocks, lists)]
+    belong to the device and be of a type the slot allows."""
+    entries = _slots(body, blocks, lists, slots)
+    slots = [e["key"] for e in entries]
     if not slots:
         return {}
     endpoints = await _device_endpoints(endpoint_repo, device)
     unknown = [slot for slot in slots if chosen.get(slot) and chosen[slot] not in endpoints]
     if unknown:
         raise HTTPException(status_code=422, detail=f"Endpoint chosen for '{unknown[0]}' is not on device '{device}'")
+    for entry in entries:
+        allowed = entry["endpoint_types"]
+        if chosen.get(entry["key"]) and allowed and endpoints[chosen[entry["key"]]]["type_id"] not in allowed:
+            labels = {t["type_id"]: t["label"] for t in await endpoint_repo.get_endpoint_types()}
+            raise HTTPException(status_code=422, detail=_type_text("Endpoint", entry["key"], allowed, labels))
     return {slot: endpoints[chosen[slot]]["fields"] if chosen.get(slot) else None for slot in slots}
+
+
+def _type_text(what: str, slot: str, allowed: List[str], labels: Dict[str, str]) -> str:
+    """422 text for a choice of a type the slot does not allow; a deleted type shows as its id."""
+    return f"{what} chosen for '{slot}' must be of type {', '.join(labels.get(t, t) for t in allowed)}"
 
 
 async def _service_mappings(service_repo: ServiceRepository) -> Dict[str, Dict[str, str]]:
@@ -196,10 +209,14 @@ async def _service_mappings(service_repo: ServiceRepository) -> Dict[str, Dict[s
 async def _chosen_services(
     service_repo: ServiceRepository, body: Any, endpoints: Dict[str, str], chosen: Dict[str, str],
     blocks: Optional[templating.BlockVersions], lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    slots: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Optional[Dict[str, Any]]]:
     """Slot -> fields of the service chosen for it (None if none was chosen), for every endpoint slot used by
-    a `${service[...]}` placeholder. A chosen service must be one of the endpoint chosen for that slot."""
-    slots = [e["key"] for e in _slots(body, blocks, lists) if e["service_fields"]]
+    a `${service[...]}` placeholder. A chosen service must be one of the endpoint chosen for that slot and of
+    a type the slot allows."""
+    used = [e for e in _slots(body, blocks, lists, slots) if e["service_fields"]]
+    slots = [e["key"] for e in used]
+    allowed = {e["key"]: e["service_types"] for e in used}
     if not slots:
         return {}
     mappings = await _service_mappings(service_repo)
@@ -211,6 +228,9 @@ async def _chosen_services(
         found = await service_repo.get_service(chosen[slot])
         if found is None or not endpoints.get(slot) or found["endpoint_id"] != endpoints[slot]:
             raise HTTPException(status_code=422, detail=f"Service chosen for '{slot}' is not on the chosen endpoint")
+        if allowed[slot] and found["type_id"] not in allowed[slot]:
+            labels = {t["type_id"]: t["label"] for t in await service_repo.get_service_types()}
+            raise HTTPException(status_code=422, detail=_type_text("Service", slot, allowed[slot], labels))
         out[slot] = templating.service_fields(found, mappings.get(found["type_id"], {}))
     return out
 
@@ -415,8 +435,10 @@ async def preview_template(
         return _findings_error("The list entries have errors", entry_findings)
     endpoints, services, rows = None, None, None
     if req.device_id is not None and req.endpoints is not None:
-        endpoints = await _chosen_endpoints(endpoint_repo, req.device_id, body, req.endpoints, blocks, lists)
-        services = await _chosen_services(service_repo, body, req.endpoints, req.services, blocks, lists)
+        endpoints = await _chosen_endpoints(endpoint_repo, req.device_id, body, req.endpoints, blocks, lists,
+                                          _slot_decls(req))
+        services = await _chosen_services(service_repo, body, req.endpoints, req.services, blocks, lists,
+                                          _slot_decls(req))
         rows = _chosen_rows(body, endpoints, req.rows, blocks, lists)
     config, findings = templating.render(body, _variables(req), req.values, device_meta, endpoints, blocks, req.kind,
                                          lists, services, rows)
@@ -572,8 +594,10 @@ async def _render_for_device(
     entry_findings = templating.check_entries(version["body"], lists, blocks)
     if templating.has_errors(entry_findings):
         return template, version, None, ref_findings + entry_findings
-    endpoints = await _chosen_endpoints(endpoint_repo, device, version["body"], req.endpoints, blocks, lists)
-    services = await _chosen_services(service_repo, version["body"], req.endpoints, req.services, blocks, lists)
+    endpoints = await _chosen_endpoints(endpoint_repo, device, version["body"], req.endpoints, blocks, lists,
+                                      version.get("slots"))
+    services = await _chosen_services(service_repo, version["body"], req.endpoints, req.services, blocks, lists,
+                                      version.get("slots"))
     rows = _chosen_rows(version["body"], endpoints, req.rows, blocks, lists)
     config, findings = templating.render(version["body"], version["variables"], req.values, device_meta, endpoints,
                                          blocks, lists=lists, services=services, rows=rows)

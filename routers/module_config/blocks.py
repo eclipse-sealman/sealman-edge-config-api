@@ -88,7 +88,7 @@ async def load_blocks(
                                                    f"Block '{template['name']}' belongs to another template group"))
                 continue
             blocks[ref] = {"body": version["body"], "variables": version["variables"],
-                           "name": template["name"]}
+                           "slots": version.get("slots") or [], "name": template["name"]}
             pending.append((origin if origin is not None else path, version["body"]))
     if group_id is not None:
         for path, ref, in_list in _refs(body):

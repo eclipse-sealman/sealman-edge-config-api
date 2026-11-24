@@ -4,7 +4,8 @@ import uuid
 import pytest
 
 from routers.module_config import service
-from tests.integration.endpoint_fixtures import seed_endpoint, seed_endpoint_type, seed_service, seed_service_type
+from tests.integration.endpoint_fixtures import (
+    _endpoint_repo, _service_repo, seed_endpoint, seed_endpoint_type, seed_service, seed_service_type, unique_label)
 from tests.integration.test_abac_authorization import AbacFixtures
 
 DEVICE = "mct-dev-1"
@@ -631,6 +632,86 @@ class TestSlotDeclarations:
         assert version["slots"] == []
         endpoint = version["inputs"]["endpoints"][0]
         assert endpoint["endpoint_types"] == [] and endpoint["service_types"] == []
+
+
+class TestSlotTypeRestriction:
+    async def _seed(self, db_session, device):
+        """Endpoint types PLC/Modbus device, service types OPC UA/modbus-tcp (labels made unique, as the
+        database may already hold such types); one endpoint of each type on the device, and one service of each
+        service type on the PLC endpoint."""
+        mapping = {"addr": "ip"}
+        fields = {"addr": {"type": "string", "required": False}}
+        repo, services = _endpoint_repo(db_session), _service_repo(db_session)
+        plc_label, modbus_label = unique_label("PLC"), unique_label("Modbus device")
+        opcua_label, tcp_label = unique_label("OPC UA"), unique_label("modbus-tcp")
+        plc = (await repo.create_endpoint_type(plc_label, None, fields, mapping))["type_id"]
+        modbus = (await repo.create_endpoint_type(modbus_label, None, fields, mapping))["type_id"]
+        opcua = (await services.create_service_type(opcua_label, None, {"p": {"type": "integer", "required": False}},
+                                                    mapping={"p": "port"}))["type_id"]
+        tcp = (await services.create_service_type(tcp_label, None, {"p": {"type": "integer", "required": False}},
+                                                  mapping={"p": "port"}))["type_id"]
+        plc_ep = await seed_endpoint(db_session, device, plc, {"addr": "10.0.0.1"})
+        modbus_ep = await seed_endpoint(db_session, device, modbus, {"addr": "10.0.0.2"})
+        return {"plc_label": plc_label, "opcua_label": opcua_label, "plc": plc, "modbus": modbus, "opcua": opcua, "tcp": tcp, "plc_ep": plc_ep, "modbus_ep": modbus_ep,
+                "opcua_svc": await seed_service(db_session, plc_ep, opcua, {"p": 4840}),
+                "tcp_svc": await seed_service(db_session, plc_ep, tcp, {"p": 502})}
+
+    async def _render(self, client, device, template, **body):
+        return await client.post(f"/{device}/modules/{MODULE}/config/render", json={"template_id": template["id"], **body})
+
+    async def test_restricted_slot_refuses_an_endpoint_of_another_type(self, client, db_session, device):
+        seeded = await self._seed(db_session, device)
+        template = await _create(client, name="r", body={"a": "${endpoint.ip}"}, variables=[],
+                                 slots=[{"name": "endpoint", "endpoint_types": [seeded["plc"]], "service_types": []}])
+        refused = await self._render(client, device, template, endpoints={"endpoint": seeded["modbus_ep"]})
+        assert refused.status_code == 422
+        assert refused.json()["message"] == f"Endpoint chosen for 'endpoint' must be of type {seeded['plc_label']}"
+        allowed = await self._render(client, device, template, endpoints={"endpoint": seeded["plc_ep"]})
+        assert allowed.status_code == 200 and allowed.json()["config"] == {"a": "10.0.0.1"}
+
+    async def test_block_restriction_applies_to_its_copy_and_to_a_list_entry(self, client, db_session, device):
+        seeded = await self._seed(db_session, device)
+        group = await _group(client)
+        block = await client.post("/module-config-templates", json={
+            "name": "Client", "group_id": group["id"], "kind": "block", "body": {"url": "${endpoint.ip}"},
+            "variables": [], "slots": [{"name": "endpoint", "endpoint_types": [seeded["plc"]], "service_types": []}]})
+        assert block.status_code == 201, block.text
+        block = block.json()
+        copy = await _block(client, group, "A", {"client": _ref(block)}, kind="template")
+        refused = await self._render(client, device, copy, endpoints={"client/endpoint": seeded["modbus_ep"]})
+        assert refused.status_code == 422
+        assert refused.json()["message"] == f"Endpoint chosen for 'client/endpoint' must be of type {seeded['plc_label']}"
+        assert (await self._render(client, device, copy, endpoints={"client/endpoint": seeded["plc_ep"]})
+                ).status_code == 200
+
+        lst = await _block(client, group, "B", {"clients": {"$list": ["Client"]}}, kind="template")
+        entries = {"clients": [{"name": "m1", "block_id": block["id"]}]}
+        refused = await self._render(client, device, lst, lists=entries,
+                                     endpoints={"clients/m1/endpoint": seeded["modbus_ep"]})
+        assert refused.status_code == 422
+        assert refused.json()["message"] == f"Endpoint chosen for 'clients/m1/endpoint' must be of type {seeded['plc_label']}"
+        assert (await self._render(client, device, lst, lists=entries,
+                                   endpoints={"clients/m1/endpoint": seeded["plc_ep"]})).status_code == 200
+
+    async def test_restricted_slot_refuses_a_service_of_another_type(self, client, db_session, device):
+        seeded = await self._seed(db_session, device)
+        template = await _create(client, name="s", body={"a": "${endpoint.ip}:${service.port}"}, variables=[],
+                                 slots=[{"name": "endpoint", "endpoint_types": [], "service_types": [seeded["opcua"]]}])
+        chosen = {"endpoints": {"endpoint": seeded["plc_ep"]}}
+        refused = await self._render(client, device, template, **chosen, services={"endpoint": seeded["tcp_svc"]})
+        assert refused.status_code == 422
+        assert refused.json()["message"] == f"Service chosen for 'endpoint' must be of type {seeded['opcua_label']}"
+        allowed = await self._render(client, device, template, **chosen, services={"endpoint": seeded["opcua_svc"]})
+        assert allowed.status_code == 200 and allowed.json()["config"] == {"a": "10.0.0.1:4840"}
+
+    async def test_deleted_type_is_named_by_id(self, client, db_session, device):
+        seeded = await self._seed(db_session, device)
+        template = await _create(client, name="d", body={"a": "${endpoint.ip}"}, variables=[],
+                                 slots=[{"name": "endpoint", "endpoint_types": [seeded["plc"]], "service_types": []}])
+        await _endpoint_repo(db_session).delete_endpoint_type(seeded["plc"], cascade=True)
+        refused = await self._render(client, device, template, endpoints={"endpoint": seeded["modbus_ep"]})
+        assert refused.status_code == 422
+        assert refused.json()["message"] == f"Endpoint chosen for 'endpoint' must be of type {seeded['plc']}"
 
 
 class TestServices:
