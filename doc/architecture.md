@@ -96,7 +96,7 @@ template + values, content hash, parent revision). The blob is the revision's co
 A configuration written by other means (old clients, direct IoT Hub writes) is recorded as an
 `external` revision the next time the history is read.
 
-Templates (`module_config_templates`, `module_config_template_versions`) are immutable versions (the variable declarations are stored per version in `module_config_template_versions.variables`, JSONB):
+Templates (`module_config_templates`, `module_config_template_versions`) are immutable versions (the variable declarations are stored per version in `module_config_template_versions.variables`, JSONB; the slot declarations in `module_config_template_versions.slots`, JSONB, a list of `{name, endpoint_types, service_types}` that restricts which endpoint and service types may be chosen for an endpoint slot, empty or missing meaning any type):
 every edit inserts the next version (read-only history; devices always render the latest), *duplicate* copies a version into a new template with lineage,
 *archive* hides it.
 

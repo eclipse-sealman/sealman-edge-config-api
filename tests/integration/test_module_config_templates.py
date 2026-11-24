@@ -598,6 +598,41 @@ class TestLists:
         assert render["config"] == {"clients": {"sep1": {"endpoint": "opc.tcp://10.1.2.3:4840"}}}
 
 
+class TestSlotDeclarations:
+    async def test_slots_are_saved_with_the_version_and_copied_on_duplicate(self, client, db_session):
+        plc = await seed_endpoint_type(db_session)
+        slots = [{"name": "endpoint", "endpoint_types": [plc], "service_types": []}]
+        template = await _create(client, name="restricted", body={"a": "${endpoint.ip}"}, variables=[], slots=slots)
+        version = (await client.get(f"/module-config-templates/{template['id']}/versions/1")).json()
+        assert version["slots"] == slots
+        assert version["inputs"]["endpoints"][0]["endpoint_types"] == [plc]
+        copy = (await client.post(f"/module-config-templates/{template['id']}/duplicate", json={"name": "copy"})).json()
+        copied = (await client.get(f"/module-config-templates/{copy['id']}/versions/1")).json()
+        assert copied["slots"] == slots
+
+    async def test_unknown_type_ids_are_findings(self, client, db_session):
+        group = await _group(client)
+        create = lambda body, slots: client.post("/module-config-templates", json={
+            **TEMPLATE, "name": "unknown-types", "group_id": group["id"], "body": body, "variables": [], "slots": slots})
+        response = await create({"a": "${endpoint.ip}"},
+                                [{"name": "endpoint", "endpoint_types": ["nope"], "service_types": []}])
+        assert response.status_code == 422, response.text
+        assert {"path": "/slots/0", "level": "error", "code": "unknown-endpoint-type"}.items() <= next(
+            f for f in response.json()["findings"] if f["code"] == "unknown-endpoint-type").items()
+        response = await create({"a": "${endpoint.ip}", "b": "${service.port}"},
+                                [{"name": "endpoint", "endpoint_types": [], "service_types": ["nope"]}])
+        assert response.status_code == 422, response.text
+        assert {"path": "/slots/0", "level": "error", "code": "unknown-service-type"}.items() <= next(
+            f for f in response.json()["findings"] if f["code"] == "unknown-service-type").items()
+
+    async def test_version_without_slots_is_unrestricted(self, client, db_session):
+        template = await _create(client, name="free", body={"a": "${endpoint.ip}"}, variables=[])
+        version = (await client.get(f"/module-config-templates/{template['id']}/versions/1")).json()
+        assert version["slots"] == []
+        endpoint = version["inputs"]["endpoints"][0]
+        assert endpoint["endpoint_types"] == [] and endpoint["service_types"] == []
+
+
 class TestServices:
     async def test_apply_with_service_choice(self, client, db_session, hub, device):
         group = await _group(client)

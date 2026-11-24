@@ -344,3 +344,23 @@ def test_row_choice_inside_a_block_copy_is_keyed_by_the_copy():
 def test_row_placeholder_is_kept_without_device_context():
     config, _ = t.render({"m": "${endpoint.equipment.identifier}"}, [], {}, None, None, None)
     assert config == {"m": "${endpoint.equipment.identifier}"}
+
+
+def test_lint_slot_declarations():
+    body = {"a": "${endpoint.ip}", "b": "${endpoint[plc].ip}"}
+    codes = lambda slots: [f["code"] for f in t.lint(body, [], "template", slots)]
+    assert codes([{"name": "plc", "endpoint_types": ["plc"], "service_types": []}]) == []
+    assert codes([{"name": "other", "endpoint_types": ["plc"], "service_types": []}]) == ["unknown-slot"]
+    assert codes([{"name": "plc", "endpoint_types": [], "service_types": []}] * 2) == ["duplicate-slot"]
+    assert codes([{"name": "plc", "endpoint_types": [], "service_types": ["opcua"]}]) == ["service-types-without-service"]
+
+
+def test_inputs_carry_the_restriction_of_the_body_and_of_block_copies():
+    block = {"name": "Client", "body": {"url": "${endpoint.ip}:${service.port}"}, "variables": [],
+             "slots": [{"name": "endpoint", "endpoint_types": ["plc"], "service_types": ["opcua"]}]}
+    body = {"own": "${endpoint[gw].ip}", "client": {"$ref": "7"}}
+    found = {e["key"]: e for e in t.inputs(
+        body, [], {7: block}, [{"name": "gw", "endpoint_types": ["gateway"], "service_types": []}])["endpoints"]}
+    assert found["gw"]["endpoint_types"] == ["gateway"] and found["gw"]["service_types"] == []
+    assert found["client/endpoint"]["endpoint_types"] == ["plc"]
+    assert found["client/endpoint"]["service_types"] == ["opcua"]

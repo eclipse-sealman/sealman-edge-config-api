@@ -51,6 +51,7 @@ class ModuleConfigTemplateVersion(Base):
     version = Column(Integer, nullable=False)
     body = Column(JSONB, nullable=False)
     variables = Column(JSONB, nullable=False, default=list)
+    slots = Column(JSONB, nullable=False, default=list, server_default="[]")
     comment = Column(Text)
     created_by = Column(Text)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)

@@ -66,6 +66,7 @@ def _version_dict(row: ModuleConfigTemplateVersion) -> Dict[str, Any]:
         "version": row.version,
         "body": row.body,
         "variables": list(row.variables or []),
+        "slots": list(row.slots or []),
         "comment": row.comment,
         "created_by": row.created_by,
         "created_at": row.created_at,
@@ -191,7 +192,7 @@ class SQLAlchemyModuleConfigRepository(ModuleConfigRepository):
 
     async def create_template(
         self, *, name, description, group_id, body, variables, comment, created_by,
-        derived_from_template_id=None, derived_from_version=None, kind="template",
+        derived_from_template_id=None, derived_from_version=None, kind="template", slots=None,
     ) -> Optional[Dict]:
         template = ModuleConfigTemplate(
             name=name, description=description, kind=kind, group_id=group_id, created_by=created_by,
@@ -202,6 +203,7 @@ class SQLAlchemyModuleConfigRepository(ModuleConfigRepository):
             await self._session.flush()
             self._session.add(ModuleConfigTemplateVersion(
                 template_id=template.id, version=1, body=body, variables=variables,
+                slots=slots or [],
                 comment=comment, created_by=created_by,
             ))
             await self._session.commit()
@@ -230,7 +232,7 @@ class SQLAlchemyModuleConfigRepository(ModuleConfigRepository):
             raise ValueError("name taken")
         return await self.get_template(template_id)
 
-    async def add_version(self, template_id, *, body, variables, comment, created_by) -> Optional[Dict]:
+    async def add_version(self, template_id, *, body, variables, comment, created_by, slots=None) -> Optional[Dict]:
         # Locks the template row so concurrent saves get consecutive versions.
         template = (await self._session.execute(
             select(ModuleConfigTemplate).where(ModuleConfigTemplate.id == template_id).with_for_update()
@@ -244,6 +246,7 @@ class SQLAlchemyModuleConfigRepository(ModuleConfigRepository):
         number = (current or 0) + 1
         row = ModuleConfigTemplateVersion(
             template_id=template_id, version=number, body=body, variables=variables,
+            slots=slots or [],
             comment=comment, created_by=created_by,
         )
         self._session.add(row)

@@ -44,6 +44,10 @@ def _variables(model: Any) -> List[Dict[str, Any]]:
     return [v.model_dump(exclude_none=True) for v in model.variables]
 
 
+def _slot_decls(model: Any) -> List[Dict[str, Any]]:
+    return [s.model_dump() for s in model.slots]
+
+
 def _findings_error(message: str, findings: List[Dict[str, str]]) -> JSONResponse:
     # The app-wide HTTPException handler stringifies `detail`; findings must stay structured for the UI.
     return JSONResponse(status_code=422, content={"message": message, "findings": findings})
@@ -53,7 +57,7 @@ def _version_out(version: Dict[str, Any], blocks: templating.BlockVersions) -> D
     """A stored version as people see it: references written by block name."""
     return {**version, "body": block_loader.show_names(version["body"], blocks),
             "references": templating.references(version["body"], blocks),
-            "inputs": templating.inputs(version["body"], version["variables"], blocks)}
+            "inputs": templating.inputs(version["body"], version["variables"], blocks, version.get("slots"))}
 
 
 def _merge(name_findings: List[Dict[str, str]], findings: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -67,17 +71,39 @@ def _lists(model: Any) -> Dict[str, List[Dict[str, Any]]]:
     return {key: [entry.model_dump() for entry in entries] for key, entries in model.lists.items()}
 
 
+async def _type_findings(slots: List[Dict[str, Any]], endpoint_repo: EndpointRepository,
+                         service_repo: ServiceRepository) -> List[Dict[str, str]]:
+    """Slot declarations that name an endpoint or service type that does not exist."""
+    endpoint_ids = {t["type_id"] for t in await endpoint_repo.get_endpoint_types()}
+    service_ids = {t["type_id"] for t in await service_repo.get_service_types()}
+    findings: List[Dict[str, str]] = []
+    for index, decl in enumerate(slots):
+        for type_id in decl.get("endpoint_types") or []:
+            if type_id not in endpoint_ids:
+                findings.append(templating.finding(f"/slots/{index}", "error", "unknown-endpoint-type",
+                                                   f"Endpoint type '{type_id}' does not exist"))
+        for type_id in decl.get("service_types") or []:
+            if type_id not in service_ids:
+                findings.append(templating.finding(f"/slots/{index}", "error", "unknown-service-type",
+                                                   f"Service type '{type_id}' does not exist"))
+    return findings
+
+
 async def _checked(
     repo: ModuleConfigRepository, body: Any, variables: List[Dict[str, Any]], kind: str, group_id: Optional[int],
-    self_id: Optional[int] = None, by_name: bool = True,
+    self_id: Optional[int] = None, by_name: bool = True, slots: Optional[List[Dict[str, Any]]] = None,
+    endpoint_repo: Optional[EndpointRepository] = None, service_repo: Optional[ServiceRepository] = None,
 ):
     """(stored body, blocks, findings) of a body: references written by name resolved (`by_name`, else the body
-    is already stored), lint for its kind plus, with a group, the checks of its block references. Blocks is None
-    without a group (references stay unresolved)."""
+    is already stored), lint for its kind (with the slot declarations) plus, with a group, the checks of its block
+    references. Blocks is None without a group (references stay unresolved). The type ids of the slot
+    declarations are checked when the repositories are given."""
     name_findings: List[Dict[str, str]] = []
     if by_name:
         body, name_findings = await block_loader.resolve_names(repo, body)
-    findings = _merge(name_findings, templating.lint(body, variables, kind))
+    findings = _merge(name_findings, templating.lint(body, variables, kind, slots))
+    if slots and endpoint_repo is not None and service_repo is not None:
+        findings += await _type_findings(slots, endpoint_repo, service_repo)
     if group_id is None:
         return body, None, findings
     blocks, ref_findings = await block_loader.load_blocks(repo, body, group_id, self_id)
@@ -341,12 +367,15 @@ async def list_templates(
 
 
 @module_config_templates.post("/lint", response_model=LintResponse)
-async def lint_template(req: LintRequest, repo: ModuleConfigRepository = _repo, _=_template_read):
+async def lint_template(req: LintRequest, repo: ModuleConfigRepository = _repo,
+                        endpoint_repo: EndpointRepository = _endpoint_repo, service_repo: ServiceRepository = _service_repo,
+                        _=_template_read):
     """Checks an unsaved template or block; with `group_id` also its block references."""
-    body, blocks, findings = await _checked(repo, req.body, _variables(req), req.kind, req.group_id)
+    body, blocks, findings = await _checked(repo, req.body, _variables(req), req.kind, req.group_id,
+                                            slots=_slot_decls(req), endpoint_repo=endpoint_repo, service_repo=service_repo)
     return {"ok": not templating.has_errors(findings), "findings": findings,
             "references": templating.references(body, blocks),
-            "inputs": templating.inputs(body, _variables(req), blocks)}
+            "inputs": templating.inputs(body, _variables(req), blocks, _slot_decls(req))}
 
 
 @module_config_templates.post("/preview", response_model=RenderResponse)
@@ -396,14 +425,17 @@ async def preview_template(
 
 
 @module_config_templates.post("", response_model=TemplateOut, status_code=201)
-async def create_template(req: TemplateCreate, repo: ModuleConfigRepository = _repo, auth=_template_write):
+async def create_template(req: TemplateCreate, repo: ModuleConfigRepository = _repo,
+                          endpoint_repo: EndpointRepository = _endpoint_repo, service_repo: ServiceRepository = _service_repo,
+                          auth=_template_write):
     await _group_or_404(repo, req.group_id)
-    body, _, findings = await _checked(repo, req.body, _variables(req), req.kind, req.group_id)
+    body, _, findings = await _checked(repo, req.body, _variables(req), req.kind, req.group_id,
+                                       slots=_slot_decls(req), endpoint_repo=endpoint_repo, service_repo=service_repo)
     if templating.has_errors(findings):
         return _findings_error("The template has errors", findings)
     created = await repo.create_template(
         name=req.name, description=req.description, group_id=req.group_id,
-        body=body, variables=_variables(req), comment=req.comment,
+        body=body, variables=_variables(req), slots=_slot_decls(req), comment=req.comment,
         created_by=auth["user_name"], kind=req.kind,
     )
     if created is None:
@@ -467,17 +499,20 @@ async def get_template_version(template_id: int, version: str, repo: ModuleConfi
 
 @module_config_templates.post("/{template_id}/versions", response_model=TemplateVersionOut, status_code=201)
 async def add_template_version(template_id: int, req: TemplateContent, repo: ModuleConfigRepository = _repo,
-                               auth=_template_write):
+                               endpoint_repo: EndpointRepository = _endpoint_repo,
+                               service_repo: ServiceRepository = _service_repo, auth=_template_write):
     """Saves an edit as the next immutable version."""
     template = await _template_or_404(repo, template_id)
     if template["archived"]:
         raise HTTPException(status_code=409, detail="The template is archived")
     body, blocks, findings = await _checked(repo, req.body, _variables(req), template["kind"], template["group_id"],
-                                            template_id)
+                                            template_id, slots=_slot_decls(req), endpoint_repo=endpoint_repo,
+                                            service_repo=service_repo)
     if templating.has_errors(findings):
         return _findings_error("The template has errors", findings)
     version = await repo.add_version(
-        template_id, body=body, variables=_variables(req), comment=req.comment, created_by=auth["user_name"],
+        template_id, body=body, variables=_variables(req), slots=_slot_decls(req), comment=req.comment,
+        created_by=auth["user_name"],
     )
     return _version_out(version, blocks)
 
@@ -493,13 +528,14 @@ async def duplicate_template(template_id: int, req: TemplateDuplicate, repo: Mod
     group_id = req.group_id if req.group_id is not None else source["group_id"]
     await _group_or_404(repo, group_id)
     await _refuse_group_move(repo, source, group_id)
-    _, _, findings = await _checked(repo, version["body"], version["variables"], source["kind"], group_id, by_name=False)
+    _, _, findings = await _checked(repo, version["body"], version["variables"], source["kind"], group_id, by_name=False,
+                                   slots=version.get("slots"))
     if templating.has_errors(findings):
         return _findings_error("The copy has errors", findings)
     created = await repo.create_template(
         name=req.name,
         description=req.description if req.description is not None else source["description"],
-        group_id=group_id, body=version["body"], variables=version["variables"],
+        group_id=group_id, body=version["body"], variables=version["variables"], slots=version.get("slots"),
         comment=f"Duplicated from {source['name']} #{version['version']}", created_by=auth["user_name"],
         derived_from_template_id=template_id, derived_from_version=version["version"],
         kind=source["kind"],

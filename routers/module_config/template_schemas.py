@@ -40,6 +40,13 @@ class VariableDecl(BaseModel):
     description: Optional[str] = Field(None, max_length=1024)
 
 
+class SlotDecl(BaseModel):
+    """Which endpoint and service types may be chosen for an endpoint slot (empty list: any type)."""
+    name: str = Field(..., max_length=64)
+    endpoint_types: List[str] = []
+    service_types: List[str] = []
+
+
 class Finding(BaseModel):
     path: str
     level: Literal["error", "warning", "hint"]
@@ -50,6 +57,7 @@ class Finding(BaseModel):
 class TemplateContent(BaseModel):
     body: Body
     variables: List[VariableDecl] = []
+    slots: List[SlotDecl] = []
     comment: Optional[str] = Field(None, max_length=1024)
 
 
@@ -129,6 +137,7 @@ class TemplateVersionOut(BaseModel):
     version: int
     body: Body
     variables: List[VariableDecl]
+    slots: List[SlotDecl] = []
     comment: Optional[str] = None
     created_by: Optional[str] = None
     created_at: datetime
@@ -147,6 +156,7 @@ class TemplateVersionSummary(BaseModel):
 class LintRequest(BaseModel):
     body: Body
     variables: List[VariableDecl] = []
+    slots: List[SlotDecl] = []
     kind: Kind = "template"
     group_id: Optional[int] = Field(
         None, description="group the template belongs to: its blocks are loaded and checked; omitted, block "

@@ -308,17 +308,20 @@ def copies(body: Any, blocks: BlockVersions, prefix: str = "", _base: Tuple[Any,
     return out
 
 
-def inputs(body: Any, variables: List[Dict[str, Any]], blocks: Optional[BlockVersions]) -> Dict[str, Any]:
+def inputs(body: Any, variables: List[Dict[str, Any]], blocks: Optional[BlockVersions],
+           slots: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Everything a rendering needs: variables and endpoint slots of the body and of every block copy
-    (keyed `<copy>/<name>`), the device fields used anywhere, and the copies."""
+    (keyed `<copy>/<name>`), the device fields used anywhere, and the copies. Each endpoint slot carries the
+    endpoint and service types its body (or block) declares for it (empty: any type)."""
     all_copies = copies(body, blocks or {})
-    bodies = [(None, body, variables)]
+    bodies = [(None, body, variables, slots)]
     for copy in all_copies:
         block = (blocks or {}).get(copy["block_id"])
         if block:
-            bodies.append((copy["key"], block.get("body"), block.get("variables") or []))
+            bodies.append((copy["key"], block.get("body"), block.get("variables") or [], block.get("slots")))
     out_vars, out_endpoints, device = [], [], set()
-    for copy_key, copy_body, copy_vars in bodies:
+    for copy_key, copy_body, copy_vars, copy_slots in bodies:
+        declared = {d.get("name"): d for d in copy_slots or [] if isinstance(d, dict)}
         _, used_device, slots = _uses(copy_body)
         services = _service_uses(copy_body)
         rows = _row_uses(copy_body)
@@ -326,6 +329,8 @@ def inputs(body: Any, variables: List[Dict[str, Any]], blocks: Optional[BlockVer
         out_vars += [{**decl, "key": _key(copy_key or "", decl.get("name")), "copy": copy_key}
                      for decl in copy_vars if isinstance(decl.get("name"), str)]
         out_endpoints += [{"key": _key(copy_key or "", slot), "copy": copy_key, "slot": slot,
+                           "endpoint_types": list(declared.get(slot, {}).get("endpoint_types") or []),
+                           "service_types": list(declared.get(slot, {}).get("service_types") or []),
                            "fields": sorted(slots.get(slot, ())), "service_fields": sorted(services.get(slot, ())),
                            "row_fields": {f: sorted(subs) for f, subs in sorted(rows.get(slot, {}).items())}}
                           for slot in sorted(set(slots) | set(services) | set(rows))]
@@ -336,7 +341,7 @@ def inputs(body: Any, variables: List[Dict[str, Any]], blocks: Optional[BlockVer
             block = (blocks or {}).get(block_id)
             entry_blocks.append({
                 "block_id": block_id, "name": block.get("name") if block else None,
-                "inputs": inputs(block.get("body"), block.get("variables") or [], blocks) if block
+                "inputs": inputs(block.get("body"), block.get("variables") or [], blocks, block.get("slots")) if block
                 else {"variables": [], "endpoints": [], "device": [], "copies": [], "lists": []}})
         out_lists.append({"key": item["key"], "label": item["key"].replace(COPY_SEP, " · "),
                           "item_label": item["item_label"], "path": item["path"], "blocks": entry_blocks})
@@ -410,7 +415,8 @@ def coerce(value: Any, decl: Dict[str, Any]) -> Any:
     raise ValueError(f"unknown type '{var_type}'")
 
 
-def lint(body: Any, variables: List[Dict[str, Any]], kind: str = "template") -> List[Dict[str, str]]:
+def lint(body: Any, variables: List[Dict[str, Any]], kind: str = "template",
+         slots: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, str]]:
     """Static checks of a template or block (no values, no device). A template body must be an object,
     a block body an object or an array."""
     findings: List[Dict[str, str]] = []
@@ -447,6 +453,20 @@ def lint(body: Any, variables: List[Dict[str, Any]], kind: str = "template") -> 
 
     used = set()
     endpoint_slots = set(_uses(body)[2]) | set(_row_uses(body))
+    service_slots = set(_service_uses(body))
+    seen_slots = set()
+    for index, decl in enumerate(slots or []):
+        path, name = f"/slots/{index}", decl.get("name")
+        if name in seen_slots:
+            findings.append(finding(path, "error", "duplicate-slot", f"Slot '{name}' is declared twice"))
+            continue
+        seen_slots.add(name)
+        if name not in endpoint_slots | service_slots:
+            findings.append(finding(path, "error", "unknown-slot", f"Slot '{name}' is not used in the body"))
+        elif decl.get("service_types") and name not in service_slots:
+            findings.append(finding(path, "error", "service-types-without-service",
+                                    f"Slot '{name}' restricts service types but the body has no service placeholder "
+                                    f"of that slot"))
     for kind, path, text in _walk_strings(body):
         if kind == "ref":
             continue
