@@ -364,3 +364,57 @@ def test_inputs_carry_the_restriction_of_the_body_and_of_block_copies():
     assert found["gw"]["endpoint_types"] == ["gateway"] and found["gw"]["service_types"] == []
     assert found["client/endpoint"]["endpoint_types"] == ["plc"]
     assert found["client/endpoint"]["service_types"] == ["opcua"]
+
+
+def _ref(file_id):
+    return {"$file": file_id, "name": "x", "kind": "certificate", "not_after": None, "uploaded_at": "2026-01-01T00:00:00Z"}
+
+
+def _file(text, field, secret=False, name="client.crt", owner_kind="endpoint"):
+    return t.RenderFile(text=text, secret=secret, name=name, sha256="ab" * 32, owner_kind=owner_kind,
+                        owner_id="o1", field=field)
+
+
+def _secret(path, field, name, owner_kind="endpoint"):
+    return {"path": path, "owner_kind": owner_kind, "owner_id": "o1", "field": field, "name": name, "sha256": "ab" * 32}
+
+
+def test_file_reference_renders_pem_and_reports_secret_paths():
+    files = {"f1": _file("CERT PEM\nSECOND", "cert"), "f2": _file("KEY PEM", "key", True, "client.key"),
+             "f3": _file("SVC KEY", "skey", True, "svc.key", "service"),
+             "f4": _file("DEV KEY", "dkey", True, "dev.key", "device")}
+    body = {"c": [{"serverCertificate": "${endpoint.cert}", "clientPrivateKey": "${endpoint.key}"}],
+            "s": "${service[endpoint].skey}", "d": "${device.dkey}"}
+    secrets = []
+    config, findings = t.render(
+        body, [], {}, {"dkey": _ref("f4")}, {"endpoint": {"cert": _ref("f1"), "key": _ref("f2")}},
+        services={"endpoint": {"skey": _ref("f3")}}, files=files, secrets=secrets)
+    assert findings == []
+    assert config == {"c": [{"serverCertificate": "CERT PEM\nSECOND", "clientPrivateKey": "KEY PEM"}],
+                      "s": "SVC KEY", "d": "DEV KEY"}
+    assert secrets == [_secret("/c/0/clientPrivateKey", "key", "client.key"),
+                       _secret("/s", "skey", "svc.key", "service"), _secret("/d", "dkey", "dev.key", "device")]
+
+
+def test_file_placeholder_inside_text_is_an_error():
+    files = {"f2": _file("TOP SECRET KEY", "key", True, "client.key")}
+    config, findings = t.render({"a": {"b": "cert: ${endpoint.key}"}}, [], {}, None,
+                                {"endpoint": {"key": _ref("f2")}}, files=files, secrets=[])
+    assert [(f["path"], f["code"]) for f in findings] == [("/a/b", "file-not-whole-value")]
+    assert "TOP SECRET" not in str(findings)
+
+
+def test_unknown_file_id():
+    config, findings = t.render({"a": "${endpoint.cert}"}, [], {}, None, {"endpoint": {"cert": _ref("gone")}}, files={})
+    assert [(f["path"], f["code"]) for f in findings] == [("/a", "missing-file")]
+
+
+def test_secret_path_inside_a_block_copy_is_the_final_pointer():
+    blocks = {1: {"body": {"key": "${endpoint[plc].key}"}, "variables": [], "name": "Tls"}}
+    files = {"f2": _file("KEY PEM", "key", True, "client.key")}
+    secrets = []
+    config, findings = t.render({"clients": {"sepA": {"$ref": "1"}}}, [], {}, None,
+                                {"sepA/plc": {"key": _ref("f2")}}, blocks, files=files, secrets=secrets)
+    assert findings == []
+    assert config == {"clients": {"sepA": {"key": "KEY PEM"}}}
+    assert [s["path"] for s in secrets] == ["/clients/sepA/key"]

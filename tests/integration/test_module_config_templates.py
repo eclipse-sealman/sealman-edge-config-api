@@ -2,11 +2,13 @@
 import uuid
 
 import pytest
+from cryptography.fernet import Fernet
 
 from routers.module_config import service
 from tests.integration.endpoint_fixtures import (
     _endpoint_repo, _service_repo, seed_endpoint, seed_endpoint_type, seed_service, seed_service_type, unique_label)
 from tests.integration.test_abac_authorization import AbacFixtures
+from tests.pem_fixtures import make_cert, make_key
 
 DEVICE = "mct-dev-1"
 MODULE = "seal-demo-module"
@@ -790,3 +792,31 @@ class TestRows:
         assert response.status_code == 200, response.text
         assert hub["blobs"][(device, MODULE, response.json()["configId"])] == {"id": "10330", "crm": "21289"}
         assert "$rows" not in response.json()["revision"]["values"]
+
+
+class TestCertificateFiles:
+    async def test_render_and_preview_mask_secret_files(self, client, db_session, hub, device, monkeypatch):
+        monkeypatch.setenv("FILE_ENCRYPTION_KEY", Fernet.generate_key().decode())
+        group = await _group(client)
+        fields = {"cert": {"type": "file", "label": "Cert"}, "key": {"type": "file", "label": "Key", "secret": True}}
+        endpoint_id = await seed_endpoint(db_session, device, await seed_endpoint_type(db_session, fields))
+        stream = {"content-type": "application/octet-stream"}
+        cert = make_cert()
+        for field, name, content in (("cert", "client.crt", cert), ("key", "client.key", make_key())):
+            put = await client.put(f"/endpoints/{endpoint_id}/files/{field}", params={"name": name}, content=content,
+                                   headers=stream)
+            assert put.status_code == 200, put.text
+        body = {"serverCertificate": "${endpoint.cert}", "clientPrivateKey": "${endpoint.key}"}
+        template = await _block(client, group, "Tls", body, kind="template")
+
+        render = await client.post(f"/{device}/modules/{MODULE}/config/render", json={
+            "template_id": template["id"], "endpoints": {"endpoint": endpoint_id}})
+        preview = await client.post("/module-config-templates/preview", json={
+            "body": body, "variables": [], "group_id": group["id"], "device_id": device,
+            "endpoints": {"endpoint": endpoint_id}})
+        for response in (render, preview):
+            assert response.status_code == 200, response.text
+            assert "PRIVATE KEY" not in response.text
+            config = response.json()["config"]
+            assert config["serverCertificate"] == cert.decode()
+            assert config["clientPrivateKey"].startswith("<secret: client.key #")

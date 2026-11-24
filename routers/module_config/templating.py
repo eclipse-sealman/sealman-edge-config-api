@@ -38,7 +38,10 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from field_validation import is_file_ref
 
 VARIABLE_TYPES = ("string", "text", "number", "integer", "boolean", "enum")
 RESERVED_KEYS = ("$secret",)
@@ -539,14 +542,29 @@ def rows_of(value: Any) -> List[Dict[str, Any]]:
     return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
 
 
+@dataclass(frozen=True)
+class RenderFile:
+    """A decrypted file a field value can reference; `secret` is the flag of the stored file."""
+    text: str
+    secret: bool
+    name: str
+    sha256: str
+    owner_kind: str
+    owner_id: str
+    field: str
+
+
 class _Renderer:
     def __init__(self, variables: List[Dict[str, Any]], values: Dict[str, Any], device: Optional[Dict[str, Any]],
                  endpoints: Optional[Dict[str, Optional[Dict[str, Any]]]], blocks: Optional[BlockVersions] = None,
                  prefix: str = "", stack: Tuple[int, ...] = (),
                  lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
                  services: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
-                 rows: Optional[Dict[str, Dict[str, str]]] = None):
+                 rows: Optional[Dict[str, Dict[str, str]]] = None,
+                 files: Optional[Dict[str, RenderFile]] = None, secrets: Optional[List[Dict[str, str]]] = None):
         self.findings: List[Dict[str, str]] = []
+        self.files = files or {}
+        self.secrets = secrets if secrets is not None else []
         self.all_rows = rows
         self.rows = _scoped(rows, prefix) or {}
         self.all_services = services
@@ -596,7 +614,7 @@ class _Renderer:
             return OMIT
         child = _Renderer(block.get("variables") or [], self.all_values, self.device, self.all_endpoints,
                           self.blocks, _key(self.prefix, name), self.stack + (ref,), services=self.all_services,
-                          rows=self.all_rows)
+                          rows=self.all_rows, files=self.files, secrets=self.secrets)
         rendered = child.node(block.get("body"), path)
         self.findings.extend(child.findings)
         return rendered
@@ -680,16 +698,34 @@ class _Renderer:
             return node
         return self.scope.get(ref, OMIT)
 
+    def _file_text(self, reference: Dict[str, Any], path: Tuple[Any, ...]) -> Any:
+        file = self.files.get(reference["$file"])
+        if file is None:
+            self.findings.append(finding(pointer(path), "error", "missing-file", "The file is not available"))
+            return OMIT
+        if file.secret:
+            self.secrets.append({"path": pointer(path), "owner_kind": file.owner_kind, "owner_id": file.owner_id,
+                                 "field": file.field, "name": file.name, "sha256": file.sha256})
+        return file.text
+
     def _string(self, text: str, path: Tuple[Any, ...]) -> Any:
         whole = _WHOLE_RE.fullmatch(text)
         if whole and _valid_reference(whole.group(1)):
-            return self._resolve(whole.group(1), path)
+            value = self._resolve(whole.group(1), path)
+            return self._file_text(value, path) if is_file_ref(value) else value
 
         def replace(match: re.Match) -> str:
             if match.group(0) == "$${":
                 return "${"
             ref = match.group(1)
-            return _text(self._resolve(ref, path)) if _valid_reference(ref) else match.group(0)
+            if not _valid_reference(ref):
+                return match.group(0)
+            value = self._resolve(ref, path)
+            if is_file_ref(value):
+                self.findings.append(finding(pointer(path), "error", "file-not-whole-value",
+                                             f"'${{{ref}}}' is a file and must be the whole value, not part of a text"))
+                return ""
+            return _text(value)
 
         return _TOKEN_RE.sub(replace, text)
 
@@ -732,6 +768,8 @@ def render(
     lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     services: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
     rows: Optional[Dict[str, Dict[str, str]]] = None,
+    files: Optional[Dict[str, RenderFile]] = None,
+    secrets: Optional[List[Dict[str, str]]] = None,
 ) -> Tuple[Optional[Any], List[Dict[str, str]]]:
     """Renders a template. Returns (config, findings); config is None if the template itself is invalid.
     `endpoints` maps each endpoint slot to the chosen endpoint's flat fields (see `endpoint_fields`);
@@ -741,12 +779,16 @@ def render(
     each list to its entries `[{"name", "block_id"}]` (see `check_entries`); a list without entries renders `{}`.
     `services` maps endpoint slots (keyed like `endpoints`) to the chosen service's flat fields (see
     `service_fields`); None leaves service placeholders as they are. `rows` maps endpoint slots (keyed like
-    `endpoints`) to `{list field: chosen row id}`; a list field with a single row needs no choice."""
+    `endpoints`) to `{list field: chosen row id}`; a list field with a single row needs no choice.
+    `files` maps file ids to their decrypted content: a placeholder that is a file reference and the whole
+    value renders the text. For each secret file rendered, `secrets` (if given) gets
+    `{"path", "owner_kind", "owner_id", "field", "name", "sha256"}` with the JSON pointer in the config."""
     findings = lint(body, variables, kind)
     if has_errors(findings):
         return None, findings
     values = values or {}
-    renderer = _Renderer(variables, values, device, endpoints, blocks, lists=lists, services=services, rows=rows)
+    renderer = _Renderer(variables, values, device, endpoints, blocks, lists=lists, services=services, rows=rows,
+                         files=files, secrets=secrets)
     config = renderer.node(body)
     copy_keys = {c["key"] for c in copies(body, blocks)} if blocks is not None else set()
     for list_key, _, node_kind, _ in _direct_names(body):  # list entries render like copies

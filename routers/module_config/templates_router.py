@@ -13,6 +13,7 @@ from authorization.abac_permission_check import ABACDeviceListFilter, ABACPermis
 from authorization.permission_types import Device, ModuleConfig
 from db.repos.device import DeviceRepository
 from db.repos.endpoint import EndpointRepository
+from db.repos.field_file import FieldFileRepository
 from db.repos.module_config import ModuleConfigRepository, UnknownScope
 from db.repos.service import ServiceRepository
 from db.repos.user import UserRepository
@@ -21,6 +22,7 @@ from db.sqlalchemy.module_config import module_matches
 from helper import validate_iothub_id
 from routers.base_api_router import BaseAPIRouter
 from routers.module_config import blocks as block_loader, service, templating
+from routers.module_config.secrets import load_render_files, mask_config
 from routers.module_config.config_schemas.network_discover_config_v1 import NetworkDiscoverModuleConfigV1
 from routers.module_config.config_schemas.seal_module_opcua_client_config_v1 import OpcuaClientModuleConfigV1
 from routers.module_config.template_schemas import (
@@ -32,6 +34,7 @@ from routers.module_config.template_schemas import (
 _repo = Depends(get_repository(ModuleConfigRepository))
 _endpoint_repo = Depends(get_repository(EndpointRepository))
 _service_repo = Depends(get_repository(ServiceRepository))
+_files_repo = Depends(get_repository(FieldFileRepository))
 _template_read = Depends(ABACPermissionCheck(ModuleConfig.TEMPLATE_READ, device_path=None))
 _template_write = Depends(ABACPermissionCheck(ModuleConfig.TEMPLATE_WRITE, device_path=None))
 
@@ -407,6 +410,7 @@ async def preview_template(
     user_repo: UserRepository = Depends(get_repository(UserRepository)),
     endpoint_repo: EndpointRepository = _endpoint_repo,
     service_repo: ServiceRepository = _service_repo,
+    files_repo: FieldFileRepository = _files_repo,
     _=_template_read,
 ):
     """Renders an unsaved template with sample values and either sample device metadata (`device`) or the
@@ -440,10 +444,13 @@ async def preview_template(
         services = await _chosen_services(service_repo, body, req.endpoints, req.services, blocks, lists,
                                           _slot_decls(req))
         rows = _chosen_rows(body, endpoints, req.rows, blocks, lists)
+    secrets: List[Dict[str, str]] = []
+    files = await load_render_files(files_repo, device_meta, endpoints, services)
     config, findings = templating.render(body, _variables(req), req.values, device_meta, endpoints, blocks, req.kind,
-                                         lists, services, rows)
+                                         lists, services, rows, files=files, secrets=secrets)
     findings = _merge(name_findings, ref_findings + findings)
-    return {"ok": config is not None and not templating.has_errors(findings), "config": config, "findings": findings}
+    return {"ok": config is not None and not templating.has_errors(findings), "config": mask_config(config, secrets),
+            "findings": findings}
 
 
 @module_config_templates.post("", response_model=TemplateOut, status_code=201)
@@ -572,7 +579,7 @@ async def duplicate_template(template_id: int, req: TemplateDuplicate, repo: Mod
 
 async def _render_for_device(
     device: str, module: str, req: RenderRequest, repo: ModuleConfigRepository, device_repo: DeviceRepository,
-    endpoint_repo: EndpointRepository, service_repo: ServiceRepository,
+    endpoint_repo: EndpointRepository, service_repo: ServiceRepository, files_repo: FieldFileRepository,
 ):
     validate_iothub_id(device)
     validate_iothub_id(module)
@@ -593,18 +600,21 @@ async def _render_for_device(
     lists = _lists(req)
     entry_findings = templating.check_entries(version["body"], lists, blocks)
     if templating.has_errors(entry_findings):
-        return template, version, None, ref_findings + entry_findings
+        return template, version, None, ref_findings + entry_findings, []
     endpoints = await _chosen_endpoints(endpoint_repo, device, version["body"], req.endpoints, blocks, lists,
                                       version.get("slots"))
     services = await _chosen_services(service_repo, version["body"], req.endpoints, req.services, blocks, lists,
                                       version.get("slots"))
     rows = _chosen_rows(version["body"], endpoints, req.rows, blocks, lists)
+    secrets: List[Dict[str, str]] = []
+    files = await load_render_files(files_repo, device_meta, endpoints, services)
     config, findings = templating.render(version["body"], version["variables"], req.values, device_meta, endpoints,
-                                         blocks, lists=lists, services=services, rows=rows)
+                                         blocks, lists=lists, services=services, rows=rows, files=files,
+                                         secrets=secrets)
     findings = ref_findings + findings
     if not templating.has_errors(findings):
         findings += _schema_findings(module, config)
-    return template, version, config, findings
+    return template, version, config, findings, secrets
 
 
 @module_config_devices.get("/{device}/modules/{module}/config/templates", response_model=List[TemplateOut])
@@ -665,14 +675,15 @@ async def render_module_config(
     device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
     endpoint_repo: EndpointRepository = _endpoint_repo,
     service_repo: ServiceRepository = _service_repo,
+    files_repo: FieldFileRepository = _files_repo,
     _=Depends(ABACPermissionCheck(Device.READ)),
 ):
-    """Dry run: renders the template for this device and returns the config and findings."""
-    _, version, config, findings = await _render_for_device(device, module, req, repo, device_repo, endpoint_repo,
-                                                            service_repo)
+    """Dry run: renders the template for this device and returns the config (secret files masked) and findings."""
+    _, version, config, findings, secrets = await _render_for_device(device, module, req, repo, device_repo,
+                                                                     endpoint_repo, service_repo, files_repo)
     return {
         "ok": config is not None and not templating.has_errors(findings),
-        "template_id": req.template_id, "version": version["version"], "config": config, "findings": findings,
+        "template_id": req.template_id, "version": version["version"], "config": mask_config(config, secrets), "findings": findings,
     }
 
 
@@ -683,11 +694,12 @@ async def apply_module_config(
     device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
     endpoint_repo: EndpointRepository = _endpoint_repo,
     service_repo: ServiceRepository = _service_repo,
+    files_repo: FieldFileRepository = _files_repo,
     auth=Depends(ABACPermissionCheck(Device.MODULE_CONFIG_APPLY)),
 ):
     """Renders the template for this device and, if there are no errors, writes it to the module."""
-    template, version, config, findings = await _render_for_device(device, module, req, repo, device_repo, endpoint_repo,
-                                                                   service_repo)
+    template, version, config, findings, _ = await _render_for_device(device, module, req, repo, device_repo,
+                                                                      endpoint_repo, service_repo, files_repo)
     if template["archived"]:
         raise HTTPException(status_code=409, detail="The template is archived")
     if config is None or templating.has_errors(findings):
