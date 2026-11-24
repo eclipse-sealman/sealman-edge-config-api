@@ -133,6 +133,7 @@ def _dispatch_handler(extension_name: str, upstream: Dict[str, Any], route: Dict
             if errors:
                 raise HTTPException(status_code=422, detail=errors)
         try:
+            request.state.extension_name = extension_name
             if is_device_route:
                 trusted = {"X-Device-Id": request.state.extension_device_id}
                 return await dispatch(request, upstream, route, body=body, trusted_headers=trusted)

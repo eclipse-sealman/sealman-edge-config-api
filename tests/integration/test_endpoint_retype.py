@@ -75,6 +75,34 @@ class TestEndpointRetype:
         response = await client.patch(f"/endpoints/{endpoint_id}", json={"type_id": int_serial_type})
         assert response.status_code == 422, response.text
 
+    async def test_list_survives_retype_away_and_back(self, client, db_session):
+        from tests.integration.test_endpoint_list_field import EQUIPMENT
+
+        await AbacFixtures(db_session).setup(devices={DEVICE: {}})
+        with_list = await _type(client, {"equipment": EQUIPMENT})
+        without = await _type(client, {"location": STRING_FIELD})
+        created = await client.post(
+            f"/endpoints?device_id={DEVICE}",
+            json={"type_id": with_list, "endpoint_data": {"equipment": [{"identifier": "SEP-00412"}]}},
+        )
+        assert created.status_code == 201, created.text
+        endpoint_id = created.json()["endpoint_id"]
+        items = created.json()["endpoint_data"]["equipment"]["value"]
+
+        away = await client.patch(f"/endpoints/{endpoint_id}", json={"type_id": without})
+        assert away.status_code == 200, away.text
+        assert away.json()["endpoint_data"]["equipment"] == {"value": items, "field": None}
+
+        noted = await client.patch(f"/endpoints/{endpoint_id}", json={"endpoint_data": {"note": "x"}})
+        assert noted.status_code == 200, noted.text
+        assert noted.json()["endpoint_data"]["equipment"]["value"] == items
+
+        back = await client.patch(
+            f"/endpoints/{endpoint_id}", json={"type_id": with_list, "endpoint_data": {}}
+        )
+        assert back.status_code == 200, back.text
+        assert back.json()["endpoint_data"]["equipment"]["value"][0]["id"] == items[0]["id"]
+
 
 class TestRetypeIgnoresChangeable:
     async def test_retype_onto_type_with_non_changeable_field_succeeds(self, client, db_session):

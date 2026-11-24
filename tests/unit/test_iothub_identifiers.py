@@ -86,6 +86,7 @@ MODULE_HANDLERS = [
     ("routers.module_config.routes.get_module_twin_config", "get_module_twin_config", ()),
     ("routers.module_config.routes.get_module_twin_config_binary", "get_module_twin_config_binary", ()),
     ("routers.module_config.routes.get_module_twin_identity_reported", "get_module_twin_identity_reported", ()),
+    ("routers.module_config.routes.get_module_twin_reported", "get_module_twin_reported", ()),
     ("routers.module_config.routes.post_module_twin_config", "post_module_twin_config", (SimpleNamespace(),)),
     ("routers.general.routes.post_module_method", "post_module_method", (SimpleNamespace(), None)),
     ("routers.cmd_proxy.routes.get_device_cmd_status", "get_device_module_status", ()),

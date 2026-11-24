@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from typing import Optional, Dict, Any, Union
 from datetime import datetime
 from routers.schemas import ResolvedField, FieldDefinition, FieldDefinitionUpdate
@@ -11,6 +11,13 @@ class EndpointTypeCreate(BaseModel):
     # {field_key: role}. Roles: "ip", "name". Checked against `fields` by db/type_roles.py
     # (422 on violation).
     mapping: Dict[str, str] = {}
+
+    @model_validator(mode="after")
+    def _reject_item_order(self) -> "EndpointTypeCreate":
+        for key, field in self.fields.items():
+            if field.item_order is not None:
+                raise ValueError(f"field '{key}': item_order is not accepted")
+        return self
 
 
 class EndpointTypeUpdate(BaseModel):

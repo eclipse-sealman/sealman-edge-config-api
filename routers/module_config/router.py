@@ -1,22 +1,27 @@
-from typing import Union
+from typing import Any, Dict, Union
 
-from fastapi import Depends
+from fastapi import Body, Depends
 
 from authorization.abac_permission_check import ABACPermissionCheck
 from authorization.permission_types import Device
+from db.repos.module_config import ModuleConfigRepository
+from db.session import get_repository
 
 from routers.base_api_router import BaseAPIRouter
 from routers.module_config.schemas import GetModuleTwinIdentityResponse, GetModuleTwinBinaryResponse, GetModuleTwinResponse, ModuleList, ModuleConfStatus
 from routers.module_config.config_schemas.network_discover_config_v1 import GetNetDiscoverModuleConfigV1, NetworkDiscoverModuleConfigV1
 from routers.module_config.config_schemas.seal_module_opcua_client_config_v1 import OpcuaClientModuleConfigV1
 from routers.module_config.routes.post_module_twin_config import post_module_twin_config as _post_module_twin_config
+from routers.module_config.routes.get_module_twin_reported import get_module_twin_reported as _get_module_twin_reported
 from routers.module_config.routes.get_module_twin_identity_reported import get_module_twin_identity_reported as _get_module_twin_identity_reported
 from routers.module_config.routes.get_module_twin_config import get_module_twin_config as _get_module_twin_config
 from routers.module_config.routes.get_module_twin_config_binary import get_module_twin_config_binary as _get_module_twin_config_binary
+from routers.module_config.service import write_module_config
 from routers.module_config.routes.post_module_config_status import (post_module_config_status
                                                                     as _post_module_config_status)
 
 module_config = BaseAPIRouter()
+_revisions = Depends(get_repository(ModuleConfigRepository))
 
 # ============================================================
 # POST Endpoints - Write Operations  
@@ -25,13 +30,25 @@ module_config = BaseAPIRouter()
 @module_config.post("/{device}/twin/config/seal-module-opcua-client", tags=["Module Configuration"])
 async def post_module_twin_config_opcua(device: str,
                                         request: OpcuaClientModuleConfigV1,
-                                        _ = Depends(ABACPermissionCheck(Device.MODULE_TWIN_CONFIG_WRITE))):
-    return await _post_module_twin_config(device, "seal-module-opcua-client", request)
+                                        auth = Depends(ABACPermissionCheck(Device.MODULE_TWIN_CONFIG_WRITE)),
+                                        repo: ModuleConfigRepository = _revisions):
+    return await _post_module_twin_config(device, "seal-module-opcua-client", request, actor=auth["user_name"], repo=repo)
 
 @module_config.post("/{device}/twin/config/seal-app-net-discover", tags=["Module Configuration"])
 async def post_module_twin_config_discover(device: str, request: NetworkDiscoverModuleConfigV1,
-                                  _ = Depends(ABACPermissionCheck(Device.MODULE_TWIN_CONFIG_WRITE))):
-    return await _post_module_twin_config(device, "seal-app-net-discover", request)
+                                  auth = Depends(ABACPermissionCheck(Device.MODULE_TWIN_CONFIG_WRITE)),
+                                  repo: ModuleConfigRepository = _revisions):
+    return await _post_module_twin_config(device, "seal-app-net-discover", request, actor=auth["user_name"], repo=repo)
+
+# Registered after the typed endpoints above, which keep validating their modules' schemas.
+@module_config.post("/{device}/twin/config/{module}", tags=["Module Configuration"])
+async def post_module_twin_config_raw(device: str, module: str, config: Dict[str, Any] = Body(...),
+                                      auth = Depends(ABACPermissionCheck(Device.MODULE_TWIN_CONFIG_WRITE)),
+                                      repo: ModuleConfigRepository = _revisions):
+    """Writes any JSON object as the module configuration (raw editor) and records a revision."""
+    result = await write_module_config(device, module, config, source="raw", actor=auth["user_name"], repo=repo)
+    revision = result["revision"]
+    return {"configId": result["configId"], "revisionId": revision["id"] if revision else None}
 
 @module_config.post("/{device}/config/status", response_model=ModuleConfStatus,
                     tags=["Module Configuration"])
@@ -74,3 +91,10 @@ async def get_module_twin_config_binary(device: str, module: str,
 async def get_module_twin_identity_reported(device: str, module: str,
                                  _ = Depends(ABACPermissionCheck(Device.READ))):
     return await _get_module_twin_identity_reported(device, module)
+
+@module_config.get("/{device}/twin/reported/{module}", response_model=GetModuleTwinResponse,
+                   tags=["Module Configuration"])
+async def get_module_twin_reported_full(device: str, module: str,
+                                        _ = Depends(ABACPermissionCheck(Device.READ))):
+    """The module's complete reported twin properties (read-only)."""
+    return await _get_module_twin_reported(device, module)
