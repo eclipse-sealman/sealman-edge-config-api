@@ -81,11 +81,11 @@ async def _type_findings(slots: List[Dict[str, Any]], endpoint_repo: EndpointRep
         for type_id in decl.get("endpoint_types") or []:
             if type_id not in endpoint_ids:
                 findings.append(templating.finding(f"/slots/{index}", "error", "unknown-endpoint-type",
-                                                   f"Endpoint type '{type_id}' does not exist"))
+                                                   f"Endpoint type '{type_id}' does not exist (slot '{decl.get('name')}')"))
         for type_id in decl.get("service_types") or []:
             if type_id not in service_ids:
                 findings.append(templating.finding(f"/slots/{index}", "error", "unknown-service-type",
-                                                   f"Service type '{type_id}' does not exist"))
+                                                   f"Service type '{type_id}' does not exist (slot '{decl.get('name')}')"))
     return findings
 
 
