@@ -124,8 +124,8 @@ devices of the affected types, in the same transaction as the type edit. Existin
 (including explicit null, false, zero, and empty strings) are preserved. Changing an
 existing default affects only future devices. Removing defaults/definitions does not
 erase stored metadata, and clearing an optional device value does not reapply a default.
-Endpoint/service defaults are unchanged. A device's type is assigned at creation and
-cannot be changed afterwards; editing the type definition remains supported.
+A device's type is assigned at creation and cannot be changed afterwards; editing the
+type definition remains supported.
 
 Type edits validate the final effective field definitions under lock, before backfilling
 or committing. Backfill rejects non-object metadata on affected device types and aborts
@@ -134,6 +134,36 @@ without committing partial changes.
 For legacy imports or existing devices with unstored defaults, use the
 [explicit cutover backfill](scripts/README.md#device-defaults-cutover-backfill).
 There is no automatic startup data migration.
+
+## Endpoint and service defaults
+
+Endpoint/service scalar defaults now follow the same persisted lifecycle: creation fills
+missing keys before validation; adding a defaulted field or its first default backfills
+only missing keys on instances of that type. Explicit null, false, zero and empty strings
+are preserved. Changing a default does not overwrite existing data. Sending
+`{"default": null}` in a field-definition PATCH removes its default without deleting stored
+values. Ordinary instance PATCHes never refill cleared scalar keys, and reads/search return
+stored values without substituting defaults.
+
+Endpoint list fields keep their existing JSONB representation; no new table is required.
+Defaults belong to scalar columns, not to the list itself. Endpoint creation and new rows
+initialize missing column values. Existing-row updates replace the submitted list but do
+not refill missing/null cells; retain row IDs to identify existing rows. Introducing a
+column's first default backfills missing cells in existing rows, preserving row IDs, order
+and custom properties. Defaults never create lists or rows. Endpoint retyping initializes
+missing fields/cells using the target schema, preserving existing values/custom data and
+explicit clears (`null`); incompatible retained data is still rejected.
+
+Type edits/backfills lock schemas before instances and commit atomically. Malformed legacy
+data in affected fields aborts the backfill rather than being silently normalized. Persisted
+default IPs/ports become actual configured network identities, just like explicit values;
+unconfigured type defaults remain scan suggestions.
+
+Before deploying this read-behavior change over existing data, use the dry-run
+[asset cutover backfill](scripts/README.md#endpoint-and-service-defaults-cutover-backfill),
+then explicitly apply it with writes paused. Missing historical values cannot distinguish
+never-initialized data from previously cleared keys; review that policy before applying.
+There is no automatic startup backfill or stored-value clearing utility.
 
 ## Extension system side apps
 

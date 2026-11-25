@@ -259,6 +259,37 @@ Use this after importing legacy data and before serving devices, preferably whil
 are paused. It preserves current defaults, not unknown historical defaults. This is an
 explicit normalization tool, not an automatic migration or a routine default-change job.
 
+# Endpoint and service defaults cutover backfill
+
+Use the API environment from the repository root. This is separate from the existing
+device backfill and does not change devices:
+
+```bash
+.venv/bin/python -m scripts.backfill_asset_defaults
+.venv/bin/python -m scripts.backfill_asset_defaults --entity endpoints --type-id <type-id>
+.venv/bin/python -m scripts.backfill_asset_defaults --entity services
+```
+
+All commands above are dry runs: updates execute transactionally and roll back. Add
+`--apply` only after reviewing the result and backing up the configured `POSTGRES_URL`.
+`--entity` defaults to `all` (endpoints and services); `--type-id` requires selecting one
+entity kind and accepts an exact stored ID, not a label. Unknown IDs fail explicitly.
+The output counts populated scalar fields and list cells, not distinct entities.
+
+The script uses each type's **current** defaults and fills missing keys only, including
+missing columns on existing endpoint list rows. Explicit null and all other stored
+values, row IDs, array order and unknown properties are preserved. No rows/lists are
+created, and rerunning is idempotent. Non-object instance data or malformed affected
+lists/rows aborts the transaction with the entity/path needing repair; schema/default
+validation errors also abort. Both dry-run and apply acquire schema/instance locks.
+Neither mode calls IoT Hub/SEMS or any device.
+
+Run this before serving the new stored-only endpoint/service reads, preferably while
+writes are paused. Previously cleared keys may be absent and therefore filled too;
+the database does not record their provenance or historical defaults. This is an
+explicit legacy cutover tool, not an automatic migration or a routine job for changing
+existing defaults. No default/stored-value clearing script is provided.
+
 # Remove undefined device fields (development/testing)
 
 From the repository root, using the configured `POSTGRES_URL`:

@@ -114,7 +114,7 @@ async def update_endpoint_type(
                 raise HTTPException(
                     status_code=404, detail=f"EndpointType '{type_id}' not found"
                 )
-            merged_fields = patch_fields(current["fields"], field_patch)
+            merged_fields = patch_fields(current["fields"], field_patch, clear_defaults=True)
             for field_key, field_dict in merged_fields.items():
                 try:
                     FieldDefinition.model_validate(field_dict)

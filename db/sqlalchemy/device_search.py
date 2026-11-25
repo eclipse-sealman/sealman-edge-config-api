@@ -9,14 +9,14 @@ from db.repos.device_search import ColumnFilter, DeviceSearchRepository, SearchF
 _LIKE_ESCAPE = "!"
 
 # One row per (instance, field) with the value as the API resolves it (see db/merge.py
-# resolve_fields): the stored value, or the type's default when none is stored. Fields that are
+# resolve_fields): the stored value, without read-time defaults. Fields that are
 # stored but not declared by the type are included too. `{fields}` is the jsonb field schema,
 # `{data}` the instance's jsonb data; both are evaluated per instance. A non-scalar stored value
 # (a list field's items) yields no text: it is not searchable.
 _RESOLVED_FIELDS = """
     select k.key,
            case when jsonb_typeof({data} -> k.key) in ('array', 'object') then null
-                else coalesce({data} ->> k.key, {fields} -> k.key ->> 'default') end as value,
+                else {data} ->> k.key end as value,
            {fields} -> k.key ->> 'label' as field_label
     from (
         select jsonb_object_keys({fields}) as key
@@ -28,7 +28,7 @@ _RESOLVED_FIELDS = """
 # The value of the field the type's mapping marks with role "name" (see db/type_roles.py).
 _NAME_OF = """
     left join lateral (
-        select coalesce({data} ->> m.field_key, {fields} -> m.field_key ->> 'default') as name
+        select {data} ->> m.field_key as name
         from jsonb_each_text({mapping}) as m(field_key, role)
         where m.role = 'name'
         limit 1
@@ -80,7 +80,7 @@ def _match_any(
 def _field_value(key_param: str) -> str:
     """SQL for the resolved value of the metadata field named by bind parameter `key_param`."""
     key = f"cast(:{key_param} as text)"
-    return f"coalesce(d.device_data ->> {key}, f.fields -> {key} ->> 'default')"
+    return f"d.device_data ->> {key}"
 
 
 def _metadata_values() -> str:

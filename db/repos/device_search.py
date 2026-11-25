@@ -35,8 +35,8 @@ class ColumnFilter:
 class DeviceSearchRepository(ABC):
     """Search over devices, their metadata, endpoints and services.
 
-    Metadata, endpoint and service values are matched as the API resolves them, i.e. the value
-    stored on the instance, or the type's default when none is stored.
+    Metadata, endpoint and service values are matched as stored on the instance, without
+    substituting type defaults.
 
     Every method takes an optional `allowed_device_ids` that restricts it to those devices
     (None = no restriction; an empty list matches nothing). Authorization is the caller's job:
