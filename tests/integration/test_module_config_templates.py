@@ -1142,26 +1142,68 @@ class TestFileVariableDefaults:
         assert set(await self._rows(db_session)) == {"ca"}
         assert saved.json()["variables"][0]["default"]["$file"] == ca["$file"]
 
-    async def test_a_default_must_be_the_file_uploaded_for_that_variable(self, client, db_session):
+        # a file variable saved without a default drops its file too
+        saved = await self._version(client, template, [_file_variable("ca")])
+        assert saved.status_code == 201, saved.text
+        assert await self._rows(db_session) == {}
+
+    async def test_a_default_is_rewritten_to_the_stored_file_of_that_variable(self, client, db_session):
         template = await _create(client, body={"a": "${ca}"}, variables=[_file_variable("ca")])
         other = await _create(client, body={"a": "${ca}"}, name="other", variables=[_file_variable("ca")])
         foreign = (await self._put(client, other, "ca", make_cert())).json()
 
-        for default in (foreign, {**foreign, "$file": "nope"}):
-            refused = await self._version(client, template, [_file_variable("ca", default=default)])
-            assert refused.status_code == 422
-            assert [f["code"] for f in refused.json()["findings"]] == ["bad-default"]
+        # no file stored for the variable: a default is refused, at create too
+        refused = await self._version(client, template, [_file_variable("ca", default=foreign)])
+        assert refused.status_code == 422
+        assert [f["code"] for f in refused.json()["findings"]] == ["bad-default"]
+        group = await _group(client, "g2")
+        created = await client.post("/module-config-templates", json={
+            **TEMPLATE, "name": "fresh", "group_id": group["id"], "body": {"a": "${ca}"},
+            "variables": [_file_variable("ca", default=foreign)]})
+        assert created.status_code == 422
+        assert [f["message"] for f in created.json()["findings"]] == [
+            "A default file can be added after the template is saved"]
 
-        mine = (await self._put(client, template, "ca", make_cert(), secret=False)).json()
-        flipped = await self._version(client, template, [_file_variable("ca", default=mine, secret=True)])
-        assert flipped.status_code == 422
-        assert [f["code"] for f in flipped.json()["findings"]] == ["default-secret-mismatch"]
+        # a stale or foreign reference is replaced by the file uploaded last for this variable
+        first = (await self._put(client, template, "ca", make_cert())).json()
+        last = (await self._put(client, template, "ca", make_cert())).json()
+        for sent in (first, foreign, {**foreign, "$file": "nope"}):
+            saved = await self._version(client, template, [_file_variable("ca", default=sent)])
+            assert saved.status_code == 201, saved.text
+            assert saved.json()["variables"][0]["default"] == last
+
+    async def test_a_save_can_make_a_file_secret_but_never_public(self, client, db_session):
+        template = await _create(client, body={"a": "${ca}"}, variables=[_file_variable("ca")])
+        path = f"/module-config-templates/{template['id']}/files/ca"
+        ref = (await self._put(client, template, "ca", make_cert(), secret=False)).json()
+        assert (await client.get(path)).status_code == 200
+
+        saved = await self._version(client, template, [_file_variable("ca", default=ref, secret=True)])
+        assert saved.status_code == 201, saved.text
+        assert (await client.get(path)).status_code == 403
+
+        saved = await self._version(client, template, [_file_variable("ca", default=ref, secret=False)])
+        assert saved.status_code == 201, saved.text
+        assert (await client.get(path)).status_code == 403
+
+    async def test_archived_template_refuses_default_file_changes(self, client, db_session):
+        template = await _create(client, body={"a": "${ca}"}, variables=[_file_variable("ca")])
+        await self._put(client, template, "ca", make_cert())
+        assert (await client.delete(f"/module-config-templates/{template['id']}")).status_code == 200
+        saved = await self._version(client, template, [_file_variable("ca")])
+        upload = await self._put(client, template, "ca", make_cert())
+        remove = await client.delete(f"/module-config-templates/{template['id']}/files/ca")
+        assert saved.status_code == 409
+        for response in (upload, remove):
+            assert (response.status_code, response.json()) == (saved.status_code, saved.json())
 
     async def test_duplicate_copies_default_files(self, client, db_session):
-        template = await _create(client, body={"a": "${ca}"}, variables=[_file_variable("ca")])
+        template = await _create(client, body={"a": "${ca}"}, variables=[_file_variable("ca"), _file_variable("x")])
         cert = make_cert()
         ca = (await self._put(client, template, "ca", cert)).json()
-        saved = await self._version(client, template, [_file_variable("ca", default=ca)])
+        await self._put(client, template, "x", make_cert())
+        body = {"body": {"a": "${ca}", "b": "${x}"}, "variables": [_file_variable("ca", default=ca), _file_variable("x")]}
+        saved = await client.post(f"/module-config-templates/{template['id']}/versions", json=body)
         assert saved.status_code == 201, saved.text
 
         copied = await client.post(f"/module-config-templates/{template['id']}/duplicate",
@@ -1170,6 +1212,10 @@ class TestFileVariableDefaults:
         version = (await client.get(f"/module-config-templates/{copied.json()['id']}/versions/latest")).json()
         new_ref = version["variables"][0]["default"]
         assert new_ref["$file"] != ca["$file"] and new_ref["name"] == "root.crt"
+        from db.models.field_file import FieldFile
+        copied_fields = (await db_session.execute(select(FieldFile.field).where(
+            FieldFile.owner_kind == "template", FieldFile.owner_id == str(copied.json()["id"])))).scalars().all()
+        assert copied_fields == ["ca"]
 
         assert (await client.delete(f"/module-config-templates/{template['id']}/files/ca")).status_code == 204
         download = await client.get(f"/module-config-templates/{copied.json()['id']}/files/ca")

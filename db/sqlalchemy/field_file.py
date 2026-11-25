@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Collection, Dict, Optional
 from uuid import uuid4
 
-from sqlalchemy import delete, exists, func, select
+from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
@@ -113,11 +113,14 @@ class SqlAlchemyFieldFileRepository(FieldFileRepository):
         await self._session.commit()
         return removed
 
-    async def copy_owner(self, owner_kind: str, from_id: str, to_id: str) -> Dict[str, FieldFile]:
-        result = await self._session.execute(
-            select(FieldFileRow).options(undefer(FieldFileRow.content))
-            .where(FieldFileRow.owner_kind == owner_kind, FieldFileRow.owner_id == from_id)
-        )
+    async def copy_owner(
+        self, owner_kind: str, from_id: str, to_id: str, fields: Optional[Collection[str]] = None
+    ) -> Dict[str, FieldFile]:
+        query = (select(FieldFileRow).options(undefer(FieldFileRow.content))
+                 .where(FieldFileRow.owner_kind == owner_kind, FieldFileRow.owner_id == from_id))
+        if fields is not None:
+            query = query.where(FieldFileRow.field.in_(list(fields)))
+        result = await self._session.execute(query)
         copies: Dict[str, FieldFile] = {}
         for row in result.scalars().all():
             copy = FieldFileRow(
@@ -129,6 +132,16 @@ class SqlAlchemyFieldFileRepository(FieldFileRepository):
             copies[row.field] = _to_file(copy)
         await self._session.commit()
         return copies
+
+    async def mark_secret(self, owner_kind: str, owner_id: str, field: str) -> None:
+        await self._session.execute(
+            update(FieldFileRow).where(
+                FieldFileRow.owner_kind == owner_kind,
+                FieldFileRow.owner_id == owner_id,
+                FieldFileRow.field == field,
+            ).values(secret=True)
+        )
+        await self._session.commit()
 
     async def remove_except(self, owner_kind: str, owner_id: str, keep_fields: Collection[str]) -> int:
         result = await self._session.execute(

@@ -308,29 +308,37 @@ def _file_variables(variables: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 async def _check_defaults(files_repo: Optional[FieldFileRepository], template_id: Optional[int],
                           variables: List[Dict[str, Any]]):
-    """(variables, findings): the default of a file variable must be the file uploaded for that variable of
-    this template (it is rewritten to the stored reference), so a saved version never points at another
-    owner's file. A new template has no files yet."""
+    """(variables, findings, secret fields): the default of a file variable is always the file stored for that
+    variable of this template, whatever reference was sent (another tab may have uploaded a newer one), so a
+    saved version never points at another owner's file. Without a stored file a default is refused. A declared
+    `secret` makes a stored file secret (`secret fields`, to be applied after the save is accepted); a file
+    never becomes public by a save. A new template has no files yet."""
     findings: List[Dict[str, str]] = []
-    checked = []
+    checked, secret_fields = [], []
     for index, decl in enumerate(variables):
-        default = decl.get("default")
-        if decl.get("type") != "file" or default is None:
+        if decl.get("type") != "file" or decl.get("default") is None:
             checked.append(decl)
             continue
-        path = f"/variables/{index}"
         stored = await files_repo.get("template", str(template_id), decl["name"]) if template_id is not None else None
-        if stored is None or stored.id != default.get("$file"):
-            findings.append(templating.finding(
-                path, "error", "bad-default",
-                f"The default of '{decl['name']}' must be a file uploaded for this variable (upload it, then save)"))
-        elif bool(decl.get("secret")) != stored.secret:
-            findings.append(templating.finding(
-                path, "error", "default-secret-mismatch",
-                f"'{decl['name']}' was uploaded as {'secret' if stored.secret else 'not secret'}: upload it again"))
-        else:
-            checked.append({**decl, "default": stored.reference()})
-    return checked, findings
+        if stored is None:
+            message = ("A default file can be added after the template is saved" if template_id is None else
+                       f"The default of '{decl['name']}' must be a file uploaded for this variable (upload it, then save)")
+            findings.append(templating.finding(f"/variables/{index}", "error", "bad-default", message))
+            continue
+        if decl.get("secret") and not stored.secret:
+            secret_fields.append(decl["name"])
+        checked.append({**decl, "default": stored.reference()})
+    return checked, findings, secret_fields
+
+
+def _file_defaults(variables: List[Dict[str, Any]]) -> List[str]:
+    """Names of the file variables that have a default (only those keep a stored file)."""
+    return [v["name"] for v in _file_variables(variables) if v.get("default") is not None]
+
+
+def _refuse_archived(template: Dict[str, Any]) -> None:
+    if template["archived"]:
+        raise HTTPException(status_code=409, detail="The template is archived")
 
 
 # ------------------------------------------------------------------ groups
@@ -509,8 +517,9 @@ async def create_template(req: TemplateCreate, repo: ModuleConfigRepository = _r
     await _group_or_404(repo, req.group_id)
     body, _, findings = await _checked(repo, req.body, _variables(req), req.kind, req.group_id,
                                        slots=_slot_decls(req), endpoint_repo=endpoint_repo, service_repo=service_repo)
-    variables, default_findings = await _check_defaults(None, None, _variables(req))
-    findings += default_findings
+    variables, default_findings, _ = await _check_defaults(None, None, _variables(req))
+    reported = {f["path"] for f in findings}
+    findings += [f for f in default_findings if f["path"] not in reported]
     if templating.has_errors(findings):
         return _findings_error("The template has errors", findings)
     created = await repo.create_template(
@@ -585,12 +594,11 @@ async def add_template_version(template_id: int, req: TemplateContent, repo: Mod
     """Saves an edit as the next immutable version. Default files of variables the version no longer declares
     as files are removed."""
     template = await _template_or_404(repo, template_id)
-    if template["archived"]:
-        raise HTTPException(status_code=409, detail="The template is archived")
+    _refuse_archived(template)
     body, blocks, findings = await _checked(repo, req.body, _variables(req), template["kind"], template["group_id"],
                                             template_id, slots=_slot_decls(req), endpoint_repo=endpoint_repo,
                                             service_repo=service_repo)
-    variables, default_findings = await _check_defaults(files_repo, template_id, _variables(req))
+    variables, default_findings, secret_fields = await _check_defaults(files_repo, template_id, _variables(req))
     findings += default_findings
     if templating.has_errors(findings):
         return _findings_error("The template has errors", findings)
@@ -598,7 +606,9 @@ async def add_template_version(template_id: int, req: TemplateContent, repo: Mod
         template_id, body=body, variables=variables, slots=_slot_decls(req), comment=req.comment,
         created_by=auth["user_name"],
     )
-    await files_repo.remove_except("template", str(template_id), [v["name"] for v in _file_variables(variables)])
+    for field in secret_fields:
+        await files_repo.mark_secret("template", str(template_id), field)
+    await files_repo.remove_except("template", str(template_id), _file_defaults(variables))
     return _version_out(version, blocks)
 
 
@@ -627,8 +637,9 @@ async def duplicate_template(template_id: int, req: TemplateDuplicate, repo: Mod
     )
     if created is None:
         raise HTTPException(status_code=409, detail=f"A template named '{req.name}' already exists")
-    copies = await files_repo.copy_owner("template", str(template_id), str(created["id"]))
-    if _file_variables(version["variables"]):
+    wanted = _file_defaults(version["variables"])
+    copies = await files_repo.copy_owner("template", str(template_id), str(created["id"]), fields=wanted) if wanted else {}
+    if wanted:
         # the copy's defaults point at the copied files, a default whose file is gone is dropped
         variables = []
         for decl in version["variables"]:
@@ -660,7 +671,7 @@ async def upload_template_file(
     repo: ModuleConfigRepository = _repo, files_repo: FieldFileRepository = _files_repo, auth=_template_write,
 ):
     _variable_name(variable)
-    await _template_or_404(repo, template_id)
+    _refuse_archived(await _template_or_404(repo, template_id))
     _check_file_name(name)
     return await _store("template", str(template_id), variable, name, request, secret, "variable", auth, files_repo)
 
@@ -682,7 +693,7 @@ async def remove_template_file(
     files_repo: FieldFileRepository = _files_repo, _=_template_write,
 ):
     _variable_name(variable)
-    await _template_or_404(repo, template_id)
+    _refuse_archived(await _template_or_404(repo, template_id))
     return await _remove("template", str(template_id), variable, files_repo)
 
 

@@ -64,8 +64,16 @@ class FieldFileRepository(ABC):
         ...
 
     @abstractmethod
-    async def copy_owner(self, owner_kind: str, from_id: str, to_id: str) -> Dict[str, FieldFile]:
-        """Copies every file of one owner to another (new ids, same content), by field."""
+    async def copy_owner(
+        self, owner_kind: str, from_id: str, to_id: str, fields: Optional[Collection[str]] = None
+    ) -> Dict[str, FieldFile]:
+        """Copies the files of one owner (only those of `fields`, if given) to another (new ids, same
+        content), by field."""
+        ...
+
+    @abstractmethod
+    async def mark_secret(self, owner_kind: str, owner_id: str, field: str) -> None:
+        """Makes the file secret. A file never goes back to not secret except by a new upload."""
         ...
 
     @abstractmethod
