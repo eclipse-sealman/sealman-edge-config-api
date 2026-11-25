@@ -578,6 +578,10 @@ class RenderFile:
 # declares the variable (owner kind `template`); a declaration's own `$file` id never selects the file.
 DefaultFiles = Dict[Tuple[str, str], RenderFile]
 
+# variable key (`name`, `<copy>/<name>`) -> the file uploaded for that variable when applying (owner kind `module`,
+# the device and module rendered for). It renders for a supplied file reference, whatever `$file` id that carries.
+AppliedFiles = Dict[str, RenderFile]
+
 
 class _Renderer:
     def __init__(self, variables: List[Dict[str, Any]], values: Dict[str, Any], device: Optional[Dict[str, Any]],
@@ -587,10 +591,12 @@ class _Renderer:
                  services: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
                  rows: Optional[Dict[str, Dict[str, str]]] = None,
                  files: Optional[Dict[str, RenderFile]] = None, secrets: Optional[List[Dict[str, str]]] = None,
-                 default_files: Optional[DefaultFiles] = None, owner: Optional[str] = None):
+                 default_files: Optional[DefaultFiles] = None, owner: Optional[str] = None,
+                 applied_files: Optional[AppliedFiles] = None):
         self.findings: List[Dict[str, str]] = []
         self.files = files or {}
         self.default_files = default_files or {}
+        self.applied_files = applied_files or {}
         self.variable_files: Dict[str, Optional[RenderFile]] = {}  # variable name -> its file, None if unavailable
         self.secrets = secrets if secrets is not None else []
         self.all_rows = rows
@@ -621,6 +627,9 @@ class _Renderer:
                 except ValueError as exc:
                     self.findings.append(finding(path, "error", "bad-value", f"'{name}': {exc}"))
                     self.scope[name] = OMIT
+                else:
+                    if decl.get("type") == "file":
+                        self.variable_files[name] = self.applied_files.get(_key(prefix, name))
             elif decl.get("type") == "file" and decl.get("default") is not None:
                 self.scope[name] = decl["default"]
                 self.variable_files[name] = self.default_files.get((owner, name))
@@ -646,7 +655,7 @@ class _Renderer:
         child = _Renderer(block.get("variables") or [], self.all_values, self.device, self.all_endpoints,
                           self.blocks, _key(self.prefix, name), self.stack + (ref,), services=self.all_services,
                           rows=self.all_rows, files=self.files, secrets=self.secrets,
-                          default_files=self.default_files, owner=str(ref))
+                          default_files=self.default_files, owner=str(ref), applied_files=self.applied_files)
         rendered = child.node(block.get("body"), path)
         self.findings.extend(child.findings)
         return rendered
@@ -735,10 +744,18 @@ class _Renderer:
                                      f"'${{{ref}}}' holds a file and must be the whole value of a field, not part of a text"))
         return OMIT
 
+    def _file_of(self, ref: str, reference: Dict[str, Any]) -> Optional[RenderFile]:
+        """The file a whole-value placeholder `ref` renders, `reference` being what it resolved to. `_resolve`
+        takes a variable from `scope`, whose names are declared variable names; an entity placeholder
+        (`device.`, `endpoint.`, `service.`) always has a '.', so it is never in `scope`. A variable renders
+        the file chosen for it in `__init__` (default or applied file), an entity field the file loaded for
+        that entity by its id."""
+        if ref in self.scope:
+            return self.variable_files.get(ref)
+        return self.files.get(reference["$file"])
+
     def _file_text(self, ref: str, reference: Dict[str, Any], path: Tuple[Any, ...]) -> Any:
-        # a variable renders the file of its declaring owner (nothing for a supplied value yet), an entity
-        # field the file loaded for that entity
-        file = self.variable_files.get(ref) if _VARIABLE_NAME_RE.fullmatch(ref) else self.files.get(reference["$file"])
+        file = self._file_of(ref, reference)
         if file is None:
             self.findings.append(finding(pointer(path), "error", "missing-file", "The file is not available"))
             return OMIT
@@ -828,6 +845,7 @@ def render(
     secrets: Optional[List[Dict[str, str]]] = None,
     default_files: Optional[DefaultFiles] = None,
     template_id: Optional[int] = None,
+    applied_files: Optional[AppliedFiles] = None,
 ) -> Tuple[Optional[Any], List[Dict[str, str]]]:
     """Renders a template. Returns (config, findings); config is None if the template itself is invalid.
     `endpoints` maps each endpoint slot to the chosen endpoint's flat fields (see `endpoint_fields`);
@@ -838,19 +856,22 @@ def render(
     `services` maps endpoint slots (keyed like `endpoints`) to the chosen service's flat fields (see
     `service_fields`); None leaves service placeholders as they are. `rows` maps endpoint slots (keyed like
     `endpoints`) to `{list field: chosen row id}`; a list field with a single row needs no choice.
-    `files` maps file ids to their decrypted content: a placeholder that is a file reference and the whole
-    value renders the text. For each secret file rendered, `secrets` (if given) gets
-    `{"path", "owner_kind", "owner_id", "field", "name", "sha256"}` with the JSON pointer in the config.
-    A file variable without a value takes its declaration's `default`; it renders the file of `default_files`
-    for the declaring owner (`template_id` for the body's variables, the block id inside a copy) and that
-    variable name, and is a missing file without one."""
+    A placeholder that is the whole value and resolves to a file reference renders the file's text; part of a
+    longer text it is a finding. Which file depends on the placeholder, never on the reference's `$file` id
+    alone: an entity field (`device.`, `endpoint.`, `service.`) renders the file of `files` (file id ->
+    decrypted file, loaded only for that entity and field). A file variable uses the per-declaration maps:
+    without a value it takes its declaration's `default` and renders the file of `default_files` for the
+    declaring owner (`template_id` for the body's variables, the block id inside a copy) and that variable
+    name; with a file reference as value it renders `applied_files[<variable key>]`, whatever id the value
+    carries. Without that file it is a missing file. For each secret file rendered, `secrets` (if given) gets
+    `{"path", "owner_kind", "owner_id", "field", "name", "sha256"}` with the JSON pointer in the config."""
     findings = lint(body, variables, kind)
     if has_errors(findings):
         return None, findings
     values = values or {}
     renderer = _Renderer(variables, values, device, endpoints, blocks, lists=lists, services=services, rows=rows,
                          files=files, secrets=secrets, default_files=default_files,
-                         owner=str(template_id) if template_id is not None else None)
+                         owner=str(template_id) if template_id is not None else None, applied_files=applied_files)
     config = renderer.node(body)
     copy_keys = {c["key"] for c in copies(body, blocks)} if blocks is not None else set()
     for list_key, _, node_kind, _ in _direct_names(body):  # list entries render like copies

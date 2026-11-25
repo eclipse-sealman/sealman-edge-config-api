@@ -2,12 +2,12 @@
 current file text where a stored or edited configuration carries a secret."""
 import copy
 import re
-from typing import Any, Dict, Iterable, List, Literal, Optional, Set, Tuple
+from typing import Any, Collection, Dict, Iterable, List, Literal, Optional, Set, Tuple
 
 from db.repos.field_file import FieldFile, FieldFileRepository
 from field_validation import is_file_ref
 from file_crypto import FileEncryptionError, decrypt
-from routers.module_config.templating import DefaultFiles, RenderFile
+from routers.module_config.templating import AppliedFiles, DefaultFiles, RenderFile
 
 
 # Used with fullmatch only; DOTALL so a file name with a line break still makes a mask.
@@ -113,6 +113,26 @@ async def load_variable_files(files_repo: FieldFileRepository, defaults: Iterabl
             row = await files_repo.get("template", owner_id, name)
             if row is not None:
                 out[(owner_id, name)] = _render_file(row)
+    return out
+
+
+def module_owner(device: str, module: str) -> str:
+    """Owner id of the files uploaded when applying a template to a device's module (owner kind `module`)."""
+    return f"{device}/{module}"
+
+
+async def load_applied_files(files_repo: FieldFileRepository, device: str, module: str, values: Dict[str, Any],
+                             file_keys: Collection[str]) -> AppliedFiles:
+    """The decrypted files uploaded when applying, by variable key: for each file variable key whose value is a
+    file reference, the file stored for this device's module and that key, whatever `$file` id the value names
+    (an id never pulls in another owner's file). A value of a key that is not a file variable loads nothing;
+    a key without a stored file is left out (the renderer reports it as missing)."""
+    out: AppliedFiles = {}
+    for key in file_keys:
+        if is_file_ref(values.get(key)):
+            row = await files_repo.get("module", module_owner(device, module), key)
+            if row is not None:
+                out[key] = _render_file(row)
     return out
 
 

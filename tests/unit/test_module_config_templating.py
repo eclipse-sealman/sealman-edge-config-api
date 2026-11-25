@@ -514,6 +514,18 @@ def test_file_variable_default_and_required():
     assert "CA PEM" not in str(config)
 
 
+def test_secret_default_inside_a_block_copy_names_the_block():
+    blocks = {3: {"body": {"tls": {"key": "${key}"}}, "name": "Tls",
+                  "variables": [{"name": "key", "type": "file", "secret": True, "default": _ref("d1")}]}}
+    defaults = {("3", "key"): _default_file("KEY PEM", secret=True, owner_id="3", field="key", name="client.key")}
+    secrets = []
+    config, findings = t.render({"clients": {"sepA": {"$ref": "3"}}}, [], {}, None, None, blocks,
+                                default_files=defaults, template_id=7, secrets=secrets)
+    assert findings == [] and config == {"clients": {"sepA": {"tls": {"key": "KEY PEM"}}}}
+    assert secrets == [{"path": "/clients/sepA/tls/key", "owner_kind": "template", "owner_id": "3", "field": "key",
+                        "name": "client.key", "sha256": "cd" * 32}]
+
+
 def test_each_declaration_renders_its_own_owners_default_file():
     """The default resolves by (owner, variable name): the `$file` id of a declaration or of a value selects nothing."""
     shared = _ref("same-id")

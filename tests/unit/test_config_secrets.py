@@ -74,6 +74,18 @@ async def test_restore_by_path_writes_the_current_file(key):
     assert paths == [{**_entry("/tls/key"), "sha256": NEW_SHA}]
 
 
+async def test_rollback_restores_a_module_owned_secret(key):
+    """A file uploaded when applying is restored from its owner, the device's module, and the variable key."""
+    entry = {**_entry("/a/tls/key"), "owner_kind": "module", "owner_id": "dev1/mod", "field": "a/key"}
+    files = _Files({("module", "dev1/mod", "a/key"): _row("NEW KEY PEM"),
+                    ("endpoint", "ep1", "key"): _row("ENDPOINT KEY PEM")})
+
+    restored, paths = await restore_secrets({"a": {"tls": {"key": "OLD"}}}, [entry], files, by="path")
+
+    assert restored == {"a": {"tls": {"key": "NEW KEY PEM"}}}
+    assert paths == [{**entry, "sha256": NEW_SHA}]
+
+
 async def test_restore_refuses_unknown_mask_and_missing_file(key, monkeypatch):
     previous = [_entry("/k")]
     with pytest.raises(SecretRestoreError) as exc:

@@ -2,7 +2,7 @@
 Module configuration templates (global library) and template-based configuration of device
 modules with an audited revision history.
 """
-from typing import Any, Dict, List, Literal, Optional, Type
+from typing import Any, Dict, List, Literal, Optional, Set, Type
 
 from fastapi import Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -24,8 +24,8 @@ from routers.base_api_router import BaseAPIRouter
 from routers.field_files.router import _OCTET_STREAM, _check_file_name, _download, _remove, _store
 from routers.module_config import blocks as block_loader, service, templating
 from routers.module_config.secrets import (
-    DefaultSource, RenderSource, SecretRestoreError, load_render_files, load_variable_files, mask_config, mask_pointers,
-    restore_secrets,
+    DefaultSource, RenderSource, SecretRestoreError, load_applied_files, load_render_files, load_variable_files,
+    mask_config, mask_pointers, module_owner, restore_secrets,
 )
 from routers.module_config.config_schemas.network_discover_config_v1 import NetworkDiscoverModuleConfigV1
 from routers.module_config.config_schemas.seal_module_opcua_client_config_v1 import OpcuaClientModuleConfigV1
@@ -340,6 +340,39 @@ async def _check_defaults(files_repo: Optional[FieldFileRepository], template_id
             secret_fields.append(decl["name"])
         checked.append({**decl, "default": stored.reference()})
     return checked, findings, secret_fields
+
+
+def _file_keys(found: Dict[str, Any], lists: Dict[str, List[Dict[str, Any]]]) -> Set[str]:
+    """Keys of the file variables of a rendering (`found` from `templating.inputs`): the body's and its copies',
+    and those of the entries chosen for its lists (`<list>/<entry>/<key in the entry's block>`)."""
+    keys = {v["key"] for v in found["variables"] if v.get("type") == "file"}
+    for item in found["lists"]:
+        entry_inputs = {block["block_id"]: block["inputs"] for block in item["blocks"]}
+        for entry in lists.get(item["key"]) or []:
+            block_inputs = entry_inputs.get(entry.get("block_id"))
+            if block_inputs is not None:
+                prefix = f"{item['key']}{templating.COPY_SEP}{entry['name']}"
+                keys |= {f"{prefix}{templating.COPY_SEP}{key}" for key in _file_keys(block_inputs, {})}
+    return keys
+
+
+def _file_declaration(found: Dict[str, Any], key: str) -> Optional[Dict[str, Any]]:
+    """The declaration of the file variable `key` of a template (`found` from `templating.inputs`), None if there
+    is none. A key inside a list entry (`<list>/<entry name>/<key>`) names no block, as entries are chosen when
+    applying: it is secret if it is secret in any block the list allows."""
+    for decl in found["variables"]:
+        if decl["key"] == key:
+            return decl if decl.get("type") == "file" else None
+    for item in found["lists"]:
+        start = item["key"] + templating.COPY_SEP
+        entry, _, rest = key[len(start):].partition(templating.COPY_SEP) if key.startswith(start) else ("", "", "")
+        if not templating.ENTRY_NAME_RE.fullmatch(entry):
+            continue
+        decls = [d for block in item["blocks"] for d in block["inputs"]["variables"]
+                 if d["key"] == rest and d.get("type") == "file"]
+        if decls:
+            return {**decls[0], "secret": any(d.get("secret") for d in decls)}
+    return None
 
 
 def _file_defaults(variables: List[Dict[str, Any]]) -> List[str]:
@@ -750,9 +783,12 @@ async def _render_for_device(
                                                              services, req.services))
     default_files = await load_variable_files(files_repo,
                                               _default_sources(template["id"], version["variables"], blocks))
+    found = templating.inputs(version["body"], version["variables"], blocks, version.get("slots"))
+    applied_files = await load_applied_files(files_repo, device, module, req.values, _file_keys(found, lists))
     config, findings = templating.render(version["body"], version["variables"], req.values, device_meta, endpoints,
                                          blocks, lists=lists, services=services, rows=rows, files=files,
-                                         secrets=secrets, default_files=default_files, template_id=template["id"])
+                                         secrets=secrets, default_files=default_files, template_id=template["id"],
+                                         applied_files=applied_files)
     findings = ref_findings + findings
     if not templating.has_errors(findings):
         findings += _schema_findings(module, config)
@@ -770,8 +806,61 @@ async def list_templates_for_module(
     module and its scopes (if any) match the device."""
     validate_iothub_id(device)
     validate_iothub_id(module)
+    return await _templates_for_module(repo, device_repo, device, module)
+
+
+async def _templates_for_module(repo: ModuleConfigRepository, device_repo: DeviceRepository, device: str,
+                                module: str) -> List[Dict[str, Any]]:
     device_meta = await device_repo.get_device_meta_raw(device)
     return [t for t in await repo.list_templates(module=module, kind="template") if available_for_device(t, device_meta)]
+
+
+# ------------------------------------------------------------------ files uploaded when applying
+# Owner kind `module`, owner id `<device>/<module>`, field the variable key (`<copy>/<name>` in a block copy).
+# The apply request sends the reference as the variable's value; the file is rendered for this device and module.
+
+
+@module_config_devices.put("/{device}/modules/{module}/config/files", openapi_extra=_OCTET_STREAM,
+                           summary="Upload another file for a file variable when applying a template")
+async def upload_module_file(
+    device: str, module: str, request: Request,
+    variable: str = Query(min_length=1, max_length=512, description="Variable key, `<copy>/<name>` in a block copy"),
+    template_id: int = Query(description="The template being applied"),
+    name: str = Query(min_length=1, max_length=255, description="File name"),
+    repo: ModuleConfigRepository = _repo,
+    device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    files_repo: FieldFileRepository = _files_repo,
+    auth=Depends(ABACPermissionCheck(Device.MODULE_CONFIG_APPLY)),
+):
+    """`secret` is that of the variable's declaration in the template's latest version. Nothing is read back."""
+    validate_iothub_id(device)
+    validate_iothub_id(module)
+    template = next((t for t in await _templates_for_module(repo, device_repo, device, module)
+                     if t["id"] == template_id), None)
+    version = await repo.get_version(template_id) if template is not None else None
+    if version is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    blocks, _ = await _version_blocks(repo, template, version)
+    decl = _file_declaration(templating.inputs(version["body"], version["variables"], blocks, version.get("slots")),
+                             variable)
+    if decl is None:
+        raise HTTPException(status_code=422, detail=f"'{variable}' is not a file variable of this template")
+    _check_file_name(name)
+    return await _store("module", module_owner(device, module), variable, name, request, bool(decl.get("secret")),
+                        "variable", auth, files_repo)
+
+
+@module_config_devices.delete("/{device}/modules/{module}/config/files", status_code=204,
+                              summary="Remove the file uploaded for a file variable when applying")
+async def remove_module_file(
+    device: str, module: str,
+    variable: str = Query(min_length=1, max_length=512, description="Variable key"),
+    files_repo: FieldFileRepository = _files_repo,
+    _=Depends(ABACPermissionCheck(Device.MODULE_CONFIG_APPLY)),
+):
+    validate_iothub_id(device)
+    validate_iothub_id(module)
+    return await _remove("module", module_owner(device, module), variable, files_repo)
 
 
 @module_config_devices.get("/{device}/config/endpoints", response_model=List[DeviceEndpointOption])

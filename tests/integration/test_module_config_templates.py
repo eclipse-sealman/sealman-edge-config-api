@@ -1391,3 +1391,198 @@ class TestFileVariableRendering:
         assert "BEGIN" not in response.text
 
         assert (await preview(9999)).status_code == 404
+
+
+def _put_module_file(client, device, template, variable, content, name="site.crt", module=MODULE):
+    return client.put(f"/{device}/modules/{module}/config/files",
+                      params={"variable": variable, "template_id": template["id"], "name": name},
+                      content=content, headers=STREAM)
+
+
+async def _module_files(db_session):
+    from db.models.field_file import FieldFile
+    result = await db_session.execute(select(FieldFile.owner_id, FieldFile.field).where(FieldFile.owner_kind == "module"))
+    return sorted(result.all())
+
+
+class TestAnotherFileWhenApplying:
+    """A file uploaded when applying (owner kind `module`, owner id `<device>/<module>`, field the variable key)
+    renders in place of the default, for that device and module only."""
+
+    @pytest.fixture(autouse=True)
+    def file_encryption_key(self, monkeypatch):
+        monkeypatch.setenv("FILE_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+    @staticmethod
+    async def _upload(client, device, template, variable, content, name="site.crt"):
+        response = await _put_module_file(client, device, template, variable, content, name)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    async def test_apply_with_another_file(self, client, db_session, hub, device):
+        from db.models.module_config import ModuleConfigRevision
+        from file_parsing import parse_upload
+        body = {"ca": "${ca}", "key": "${key}"}
+        variables = [_file_variable("ca"), _file_variable("key", secret=True, required=False)]
+        template = await _create(client, body=body, variables=variables)
+        default_cert = make_cert("default-ca")
+        default = await TestFileVariableRendering._upload(client, template, "ca", default_cert)
+        await TestFileVariableRendering._save(client, template, body, [
+            _file_variable("ca", default=default), variables[1]])
+        url = f"/{device}/modules/{MODULE}/config"
+
+        site_cert, site_key = make_cert("site-ca"), make_key()
+        ref = await self._upload(client, device, template, "ca", site_cert)
+        assert set(ref) == {"$file", "name", "kind", "not_after", "uploaded_at"}
+        assert ref["name"] == "site.crt" and ref["kind"] == "certificate" and ref["$file"] != default["$file"]
+        key_ref = await self._upload(client, device, template, "key", site_key, name="site.key")
+        assert "PRIVATE KEY" not in json.dumps(key_ref)
+        values = {"ca": ref, "key": key_ref}
+        mask = f"<secret: site.key #{parse_upload(site_key).sha256[:8]}>"
+
+        render = await client.post(f"{url}/render", json={"template_id": template["id"], "values": values})
+        assert render.status_code == 200, render.text
+        assert "PRIVATE KEY" not in render.text
+        assert render.json()["findings"] == []
+        assert render.json()["config"] == {"ca": site_cert.decode(), "key": mask}
+
+        applied = await client.post(f"{url}/apply", json={"template_id": template["id"], "values": values})
+        assert applied.status_code == 200, applied.text
+        assert "PRIVATE KEY" not in applied.text
+        assert hub["blobs"][(device, MODULE, applied.json()["configId"])] == {
+            "ca": site_cert.decode(), "key": site_key.decode()}
+        revision = applied.json()["revision"]
+        assert revision["values"] == values
+        detail = await client.get(f"{url}/revisions/{revision['id']}")
+        assert detail.status_code == 200 and "PRIVATE KEY" not in detail.text
+        assert detail.json()["content"] == {"ca": site_cert.decode(), "key": mask}
+        stored = await db_session.get(ModuleConfigRevision, revision["id"])
+        assert [(s["path"], s["owner_kind"], s["owner_id"], s["field"]) for s in stored.secret_paths] == [
+            ("/key", "module", f"{device}/{MODULE}", "key")]
+
+        # a rollback delivers the file uploaded last for the module's variable
+        replaced = _new_key()
+        await self._upload(client, device, template, "key", replaced, name="site.key")
+        reapply = await client.post(f"{url}/revisions/{revision['id']}/reapply", json={})
+        assert reapply.status_code == 200, reapply.text
+        assert "PRIVATE KEY" not in reapply.text
+        assert hub["blobs"][(device, MODULE, reapply.json()["configId"])]["key"] == replaced.decode()
+
+        # no value: the default, even with a file uploaded for the module
+        plain = await client.post(f"{url}/apply", json={"template_id": template["id"]})
+        assert plain.status_code == 200, plain.text
+        assert hub["blobs"][(device, MODULE, plain.json()["configId"])] == {"ca": default_cert.decode()}
+
+        # removing the module's file: a value naming it is a missing file again
+        delete = f"{url}/files"
+        assert (await client.delete(delete, params={"variable": "ca"})).status_code == 204
+        assert (await client.delete(delete, params={"variable": "ca"})).status_code == 404
+        render = await client.post(f"{url}/render", json={"template_id": template["id"], "values": values})
+        assert [(f["path"], f["code"]) for f in render.json()["findings"]] == [("/ca", "missing-file")]
+
+    async def test_a_value_never_loads_a_file_by_its_id(self, client, db_session, hub, device):
+        await AbacFixtures(db_session).setup(devices={"mct-dev-2": {}})
+        endpoint_id = await seed_endpoint(db_session, "mct-dev-2", await seed_endpoint_type(
+            db_session, {"cert": {"type": "file", "label": "Cert"}}))
+        put = await client.put(f"/endpoints/{endpoint_id}/files/cert", params={"name": "x.crt"},
+                               content=make_cert("other-device"), headers=STREAM)
+        assert put.status_code == 200, put.text
+        other = await _create(client, name="other", body={"ca": "${ca}"}, variables=[_file_variable("ca")])
+        other_default = await TestFileVariableRendering._upload(client, other, "ca", make_cert("other-template"))
+        template = await _create(client, body={"ca": "${ca}"}, variables=[_file_variable("ca")])
+        # the same template and variable on another device
+        other_device = await self._upload(client, "mct-dev-2", template, "ca", make_cert("other-device-module"))
+
+        async def render(ref):
+            response = await client.post(f"/{device}/modules/{MODULE}/config/render",
+                                         json={"template_id": template["id"], "values": {"ca": ref}})
+            assert response.status_code == 200, response.text
+            return response
+
+        for foreign in (put.json(), other_default, other_device):
+            response = await render(foreign)
+            assert [(f["path"], f["code"]) for f in response.json()["findings"]] == [("/ca", "missing-file")]
+            assert "BEGIN CERTIFICATE" not in response.text
+
+        # the owner decides, not the id: the module's own file whatever id the value carries
+        own_cert = make_cert("own")
+        await self._upload(client, device, template, "ca", own_cert)
+        response = await render(put.json())
+        assert response.json()["findings"] == []
+        assert response.json()["config"] == {"ca": own_cert.decode()}
+
+    async def test_applied_file_per_block_copy(self, client, hub, device):
+        group = await _group(client)
+        block = await _block(client, group, "CaBlock", {"ca": "${ca}"}, [_file_variable("ca")])
+        block_cert = make_cert("block-ca")
+        default = await TestFileVariableRendering._upload(client, block, "ca", block_cert)
+        await TestFileVariableRendering._save(client, block, {"ca": "${ca}"}, [_file_variable("ca", default=default)])
+        body = {"a": _ref(block), "b": _ref(block), "more": {"$list": ["CaBlock"]}}
+        template = await _block(client, group, "Copies", body, kind="template")
+
+        copy_cert, entry_cert = make_cert("copy-a"), make_cert("entry-e1")
+        values = {"a/ca": await self._upload(client, device, template, "a/ca", copy_cert),
+                  "more/e1/ca": await self._upload(client, device, template, "more/e1/ca", entry_cert)}
+        entries = [{"name": "e1", "block_id": block["id"]}, {"name": "e2", "block_id": block["id"]}]
+        applied = await client.post(f"/{device}/modules/{MODULE}/config/apply", json={
+            "template_id": template["id"], "values": values, "lists": {"more": entries}})
+        assert applied.status_code == 200, applied.text
+        assert hub["blobs"][(device, MODULE, applied.json()["configId"])] == {
+            "a": {"ca": copy_cert.decode()}, "b": {"ca": block_cert.decode()},
+            "more": {"e1": {"ca": entry_cert.decode()}, "e2": {"ca": block_cert.decode()}}}
+
+    async def test_applied_file_refusals(self, client, db_session, hub, device):
+        template = await _create(client, body={"ca": "${ca}", "n": "${n}"},
+                                 variables=[_file_variable("ca"), {"name": "n", "type": "string"}])
+        for variable in ("nope", "n", "ca/x"):
+            response = await _put_module_file(client, device, template, variable, make_cert())
+            assert (response.status_code, response.json()) == (
+                422, {"message": f"'{variable}' is not a file variable of this template"})
+        refused = await _put_module_file(client, device, template, "ca", make_key(), name="a.key")
+        assert (refused.status_code, refused.json()) == (
+            422, {"message": "'ca' holds a private key: mark the variable as secret"})
+        assert "PRIVATE KEY" not in refused.text
+
+        # a template that cannot be applied to this device and module is not found
+        world = await AbacFixtures(db_session).setup(
+            scopes={"elsewhere": {"attr": {"site": "Elsewhere"}, "access_rule": "ALL"}})
+        scoped = await _create(client, group=await _group(client, "elsewhere", scope_ids=[world.scopes["elsewhere"]]),
+                               name="scoped", body={"ca": "${ca}"}, variables=[_file_variable("ca")])
+        other_module = await _create(client, module_names=("seal-other",), name="other-module",
+                                     body={"ca": "${ca}"}, variables=[_file_variable("ca")])
+        archived = await _create(client, name="archived", body={"ca": "${ca}"}, variables=[_file_variable("ca")])
+        assert (await client.delete(f"/module-config-templates/{archived['id']}")).status_code == 200
+        for unavailable in (scoped, other_module, archived, {"id": 9999}):
+            response = await _put_module_file(client, device, unavailable, "ca", make_cert())
+            assert response.status_code == 404, response.text
+        assert await _module_files(db_session) == []
+
+
+class TestAnotherFilePermissions:
+    @pytest.fixture
+    def fake_jwt_user(self):
+        return {"oid": "viewer-oid", "sub": "viewer-oid", "preferred_username": "viewer@test.com",
+                "name": "Viewer", "roles": []}
+
+    @pytest.fixture(autouse=True)
+    def file_encryption_key(self, monkeypatch):
+        monkeypatch.setenv("FILE_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+    async def test_uploading_and_removing_need_the_apply_permission(self, client, db_session):
+        await AbacFixtures(db_session).setup(
+            users={"viewer": "viewer-oid"},
+            roles={"v": ["device.read", "module_config.template.read"]},
+            teams={"team": {"scope": None, "roles": ["v"], "users": ["viewer"]}},
+            devices={DEVICE: {"site": "Aachen"}},
+        )
+        from db.sqlalchemy.module_config import SQLAlchemyModuleConfigRepository
+        repo = SQLAlchemyModuleConfigRepository(db_session)
+        group = await repo.create_group(name="g", description=None, module_names=[MODULE], scope_ids=[], created_by="admin")
+        template = await repo.create_template(
+            name="t", description=None, group_id=group["id"], body={"a": "${ca}"},
+            variables=[_file_variable("ca")], comment=None, created_by="admin")
+
+        assert (await _put_module_file(client, DEVICE, template, "ca", make_cert())).status_code == 403
+        removed = await client.delete(f"/{DEVICE}/modules/{MODULE}/config/files", params={"variable": "ca"})
+        assert removed.status_code == 403
+        assert await _module_files(db_session) == []
