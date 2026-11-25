@@ -4,10 +4,10 @@ import copy
 import re
 from typing import Any, Dict, Iterable, List, Literal, Optional, Set, Tuple
 
-from db.repos.field_file import FieldFileRepository
+from db.repos.field_file import FieldFile, FieldFileRepository
 from field_validation import is_file_ref
 from file_crypto import FileEncryptionError, decrypt
-from routers.module_config.templating import RenderFile
+from routers.module_config.templating import DefaultFiles, RenderFile
 
 
 # Used with fullmatch only; DOTALL so a file name with a line break still makes a mask.
@@ -81,12 +81,38 @@ async def load_render_files(files_repo: FieldFileRepository, sources: Iterable[R
     for file_id, row in (await files_repo.get_many(wanted)).items():
         if (row.owner_kind, row.owner_id, row.field) not in wanted.get(file_id, ()):
             continue
-        try:
-            text: Optional[str] = decrypt(row.content)
-        except FileEncryptionError:
-            text = None
-        out[file_id] = RenderFile(text=text, secret=row.secret, name=row.name, sha256=row.sha256,
-                                  owner_kind=row.owner_kind, owner_id=row.owner_id, field=row.field)
+        out[file_id] = _render_file(row)
+    return out
+
+
+def _render_file(row: FieldFile) -> RenderFile:
+    """A stored file for the renderer; one that cannot be decrypted comes without text."""
+    try:
+        text: Optional[str] = decrypt(row.content)
+    except FileEncryptionError:
+        text = None
+    return RenderFile(text=text, secret=row.secret, name=row.name, sha256=row.sha256,
+                      owner_kind=row.owner_kind, owner_id=row.owner_id, field=row.field)
+
+
+# (id of the template or block that declares it, variable declaration)
+DefaultSource = Tuple[str, Dict[str, Any]]
+
+
+async def load_variable_files(files_repo: FieldFileRepository, defaults: Iterable[DefaultSource]) -> DefaultFiles:
+    """The decrypted default files of the file variables declared with a default, by (owner id, variable name).
+    Each is the file stored for that template and variable, whatever `$file` id the declaration names: the file
+    of a variable is always the one uploaded last, and an id never pulls in another owner's file. A variable
+    without a stored file is left out (the renderer reports it as missing)."""
+    out: DefaultFiles = {}
+    for owner_id, decl in defaults:
+        name = decl.get("name")
+        if decl.get("type") != "file" or decl.get("default") is None or not isinstance(name, str):
+            continue
+        if (owner_id, name) not in out:
+            row = await files_repo.get("template", owner_id, name)
+            if row is not None:
+                out[(owner_id, name)] = _render_file(row)
     return out
 
 

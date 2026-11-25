@@ -1260,3 +1260,134 @@ class TestFileVariablePermissions:
         assert (await client.put(path, params={"name": "a.crt"}, content=make_cert(), headers=STREAM)).status_code == 403
         assert (await client.delete(path)).status_code == 403
         assert (await client.get(path)).status_code == 404  # allowed to look, nothing there
+
+
+class TestFileVariableRendering:
+    """The default file of a file variable is rendered (masked when secret) for the template that owns it."""
+
+    @pytest.fixture(autouse=True)
+    def file_encryption_key(self, monkeypatch):
+        monkeypatch.setenv("FILE_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+    @staticmethod
+    async def _upload(client, template, variable, content, secret=False, name="root.crt"):
+        response = await client.put(f"/module-config-templates/{template['id']}/files/{variable}",
+                                    params={"name": name, "secret": secret}, content=content, headers=STREAM)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    @staticmethod
+    async def _save(client, template, body, variables):
+        response = await client.post(f"/module-config-templates/{template['id']}/versions",
+                                     json={"body": body, "variables": variables})
+        assert response.status_code == 201, response.text
+        return response.json()
+
+    async def test_render_apply_and_rollback_with_a_default_file(self, client, hub, device):
+        from file_parsing import parse_upload
+        body = {"rootCertificates": ["${ca}"], "privateKey": "${key}"}
+        variables = [_file_variable("ca"), _file_variable("key", secret=True)]
+        template = await _create(client, body=body, variables=variables)
+        cert, key = make_cert("root-ca"), make_key()
+        ca_ref = await self._upload(client, template, "ca", cert)
+        key_ref = await self._upload(client, template, "key", key, secret=True, name="client.key")
+        await self._save(client, template, body, [_file_variable("ca", default=ca_ref),
+                                                  _file_variable("key", secret=True, default=key_ref)])
+        url = f"/{device}/modules/{MODULE}/config"
+        mask = lambda content: f"<secret: client.key #{parse_upload(content).sha256[:8]}>"
+
+        render = await client.post(f"{url}/render", json={"template_id": template["id"]})
+        assert render.status_code == 200, render.text
+        assert "PRIVATE KEY" not in render.text
+        assert render.json()["config"] == {"rootCertificates": [cert.decode()], "privateKey": mask(key)}
+
+        applied = await client.post(f"{url}/apply", json={"template_id": template["id"]})
+        assert applied.status_code == 200, applied.text
+        assert "PRIVATE KEY" not in applied.text
+        assert hub["blobs"][(device, MODULE, applied.json()["configId"])] == {
+            "rootCertificates": [cert.decode()], "privateKey": key.decode()}
+        detail = await client.get(f"{url}/revisions/{applied.json()['revision']['id']}")
+        twin = await client.get(f"/{device}/twin/config/{MODULE}")
+        for response in (detail, twin):
+            assert response.status_code == 200 and "PRIVATE KEY" not in response.text
+        assert detail.json()["content"]["privateKey"] == twin.json()["privateKey"] == mask(key)
+
+        # the file uploaded last is the default, without saving a version
+        replaced = _new_key()
+        await self._upload(client, template, "key", replaced, secret=True, name="client.key")
+        render = await client.post(f"{url}/render", json={"template_id": template["id"]})
+        assert render.json()["config"]["privateKey"] == mask(replaced) != mask(key)
+
+        reapply = await client.post(f"{url}/revisions/{applied.json()['revision']['id']}/reapply", json={})
+        assert reapply.status_code == 200, reapply.text
+        assert "PRIVATE KEY" not in reapply.text
+        assert hub["blobs"][(device, MODULE, reapply.json()["configId"])]["privateKey"] == replaced.decode()
+
+    async def test_block_default_file(self, client, hub, device):
+        group = await _group(client)
+        block = await _block(client, group, "CaBlock", {"ca": "${ca}"}, [_file_variable("ca")])
+        block_cert = make_cert("block-ca")
+        ref = await self._upload(client, block, "ca", block_cert)
+        await self._save(client, block, {"ca": "${ca}"}, [_file_variable("ca", default=ref)])
+        # the template declares a variable of the same name with a file of its own
+        body = {"own": "${ca}", "a": _ref(block), "b": _ref(block)}
+        template = await _block(client, group, "TwoCopies", body, [_file_variable("ca")], kind="template")
+        own_cert = make_cert("template-ca")
+        own = await self._upload(client, template, "ca", own_cert)
+        await self._save(client, template, body, [_file_variable("ca", default=own)])
+
+        render = await client.post(f"/{device}/modules/{MODULE}/config/render", json={"template_id": template["id"]})
+        assert render.status_code == 200, render.text
+        assert render.json()["findings"] == []
+        assert render.json()["config"] == {"own": own_cert.decode(), "a": {"ca": block_cert.decode()},
+                                           "b": {"ca": block_cert.decode()}}
+
+        # preview of an unsaved template: the blocks' defaults, none for its own variable
+        preview = await client.post("/module-config-templates/preview", json={
+            "body": body, "group_id": group["id"], "variables": [_file_variable("ca", default=own)]})
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["config"] == {"a": {"ca": block_cert.decode()}, "b": {"ca": block_cert.decode()}}
+        assert [(f["path"], f["code"]) for f in preview.json()["findings"]] == [("/own", "missing-file")]
+
+    async def test_preview_loads_defaults_only_for_a_visible_template(self, client, hub, device):
+        body = {"ca": "${ca}", "key": "${key}", "extra": "${extra}"}
+        template = await _create(client, body=body, variables=[
+            _file_variable("ca"), _file_variable("key", secret=True), _file_variable("extra")])
+        cert = make_cert("root-ca")
+        ca_ref = await self._upload(client, template, "ca", cert)
+        key_ref = await self._upload(client, template, "key", make_key(), secret=True, name="client.key")
+        other = await _create(client, name="other", body={"ca": "${ca}", "extra": "${extra}"},
+                              variables=[_file_variable("ca"), _file_variable("extra")])
+        foreign_certs = (make_cert("foreign-ca"), make_cert("foreign-extra"))
+        foreign_ca = await self._upload(client, other, "ca", foreign_certs[0])
+        foreign_extra = await self._upload(client, other, "extra", foreign_certs[1])
+
+        def preview(template_id, ca=ca_ref, extra=foreign_extra):
+            request = {"body": body, "group_id": template["group_id"], "variables": [
+                _file_variable("ca", default=ca), _file_variable("key", default=key_ref),
+                _file_variable("extra", default=extra)]}
+            if template_id is not None:
+                request["template_id"] = template_id
+            return client.post("/module-config-templates/preview", json=request)
+
+        def errors(response):
+            return sorted((f["path"], f["code"]) for f in response.json()["findings"] if f["level"] == "error")
+
+        # the declaration is the request's, the file the template's: `secret` is that of the stored file
+        response = await preview(template["id"])
+        assert response.status_code == 200, response.text
+        assert "PRIVATE KEY" not in response.text
+        assert response.json()["config"]["ca"] == cert.decode()
+        assert SECRET_MASK.fullmatch(response.json()["config"]["key"])
+        # another template's file ids select nothing: the template's own file, or missing
+        assert errors(response) == [("/extra", "missing-file")]
+        response = await preview(template["id"], ca=foreign_ca)
+        assert response.json()["config"]["ca"] == cert.decode()
+        assert not {c.decode() for c in foreign_certs} & set(map(str, response.json()["config"].values()))
+
+        response = await preview(None)
+        assert response.status_code == 200, response.text
+        assert errors(response) == [("/ca", "missing-file"), ("/extra", "missing-file"), ("/key", "missing-file")]
+        assert "BEGIN" not in response.text
+
+        assert (await preview(9999)).status_code == 404

@@ -574,6 +574,11 @@ class RenderFile:
     field: str
 
 
+# (owner id, variable name) -> the default file of a file variable. The owner is the template or block that
+# declares the variable (owner kind `template`); a declaration's own `$file` id never selects the file.
+DefaultFiles = Dict[Tuple[str, str], RenderFile]
+
+
 class _Renderer:
     def __init__(self, variables: List[Dict[str, Any]], values: Dict[str, Any], device: Optional[Dict[str, Any]],
                  endpoints: Optional[Dict[str, Optional[Dict[str, Any]]]], blocks: Optional[BlockVersions] = None,
@@ -581,9 +586,12 @@ class _Renderer:
                  lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
                  services: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
                  rows: Optional[Dict[str, Dict[str, str]]] = None,
-                 files: Optional[Dict[str, RenderFile]] = None, secrets: Optional[List[Dict[str, str]]] = None):
+                 files: Optional[Dict[str, RenderFile]] = None, secrets: Optional[List[Dict[str, str]]] = None,
+                 default_files: Optional[DefaultFiles] = None, owner: Optional[str] = None):
         self.findings: List[Dict[str, str]] = []
         self.files = files or {}
+        self.default_files = default_files or {}
+        self.variable_files: Dict[str, Optional[RenderFile]] = {}  # variable name -> its file, None if unavailable
         self.secrets = secrets if secrets is not None else []
         self.all_rows = rows
         self.rows = _scoped(rows, prefix) or {}
@@ -613,6 +621,9 @@ class _Renderer:
                 except ValueError as exc:
                     self.findings.append(finding(path, "error", "bad-value", f"'{name}': {exc}"))
                     self.scope[name] = OMIT
+            elif decl.get("type") == "file" and decl.get("default") is not None:
+                self.scope[name] = decl["default"]
+                self.variable_files[name] = self.default_files.get((owner, name))
             elif decl.get("required", True):
                 self.findings.append(finding(path, "error", "missing-variable",
                                              f"'{decl.get('label') or name}' is required"))
@@ -634,7 +645,8 @@ class _Renderer:
             return OMIT
         child = _Renderer(block.get("variables") or [], self.all_values, self.device, self.all_endpoints,
                           self.blocks, _key(self.prefix, name), self.stack + (ref,), services=self.all_services,
-                          rows=self.all_rows, files=self.files, secrets=self.secrets)
+                          rows=self.all_rows, files=self.files, secrets=self.secrets,
+                          default_files=self.default_files, owner=str(ref))
         rendered = child.node(block.get("body"), path)
         self.findings.extend(child.findings)
         return rendered
@@ -724,7 +736,9 @@ class _Renderer:
         return OMIT
 
     def _file_text(self, ref: str, reference: Dict[str, Any], path: Tuple[Any, ...]) -> Any:
-        file = self.files.get(reference["$file"])
+        # a variable renders the file of its declaring owner (nothing for a supplied value yet), an entity
+        # field the file loaded for that entity
+        file = self.variable_files.get(ref) if _VARIABLE_NAME_RE.fullmatch(ref) else self.files.get(reference["$file"])
         if file is None:
             self.findings.append(finding(pointer(path), "error", "missing-file", "The file is not available"))
             return OMIT
@@ -812,6 +826,8 @@ def render(
     rows: Optional[Dict[str, Dict[str, str]]] = None,
     files: Optional[Dict[str, RenderFile]] = None,
     secrets: Optional[List[Dict[str, str]]] = None,
+    default_files: Optional[DefaultFiles] = None,
+    template_id: Optional[int] = None,
 ) -> Tuple[Optional[Any], List[Dict[str, str]]]:
     """Renders a template. Returns (config, findings); config is None if the template itself is invalid.
     `endpoints` maps each endpoint slot to the chosen endpoint's flat fields (see `endpoint_fields`);
@@ -824,13 +840,17 @@ def render(
     `endpoints`) to `{list field: chosen row id}`; a list field with a single row needs no choice.
     `files` maps file ids to their decrypted content: a placeholder that is a file reference and the whole
     value renders the text. For each secret file rendered, `secrets` (if given) gets
-    `{"path", "owner_kind", "owner_id", "field", "name", "sha256"}` with the JSON pointer in the config."""
+    `{"path", "owner_kind", "owner_id", "field", "name", "sha256"}` with the JSON pointer in the config.
+    A file variable without a value takes its declaration's `default`; it renders the file of `default_files`
+    for the declaring owner (`template_id` for the body's variables, the block id inside a copy) and that
+    variable name, and is a missing file without one."""
     findings = lint(body, variables, kind)
     if has_errors(findings):
         return None, findings
     values = values or {}
     renderer = _Renderer(variables, values, device, endpoints, blocks, lists=lists, services=services, rows=rows,
-                         files=files, secrets=secrets)
+                         files=files, secrets=secrets, default_files=default_files,
+                         owner=str(template_id) if template_id is not None else None)
     config = renderer.node(body)
     copy_keys = {c["key"] for c in copies(body, blocks)} if blocks is not None else set()
     for list_key, _, node_kind, _ in _direct_names(body):  # list entries render like copies

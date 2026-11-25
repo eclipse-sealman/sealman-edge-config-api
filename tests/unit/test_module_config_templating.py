@@ -482,3 +482,57 @@ def test_only_a_file_variable_takes_a_file_reference():
     declared = [{"name": "ca", "type": "file", "secret": True, "default": FILE_REF}]
     found = t.inputs({"a": "${ca}"}, declared, None)["variables"]
     assert found[0]["secret"] is True and found[0]["default"] == FILE_REF
+
+
+def _default_file(text, secret=False, owner_id="7", field="ca", name="root.crt"):
+    return t.RenderFile(text=text, secret=secret, name=name, sha256="cd" * 32, owner_kind="template",
+                        owner_id=owner_id, field=field)
+
+
+def test_file_variable_default_and_required():
+    decl = {"name": "ca", "type": "file", "default": _ref("d1")}
+    body = {"rootCertificates": ["${ca}"]}
+    defaults = {("7", "ca"): _default_file("CA PEM")}
+    config, findings = t.render(body, [decl], {}, default_files=defaults, template_id=7)
+    assert findings == [] and config == {"rootCertificates": ["CA PEM"]}
+
+    secrets = []
+    config, findings = t.render(body, [decl], {}, default_files={("7", "ca"): _default_file("KEY PEM", secret=True)},
+                                template_id=7, secrets=secrets)
+    assert findings == [] and config == {"rootCertificates": ["KEY PEM"]}
+    assert secrets == [{"path": "/rootCertificates/0", "owner_kind": "template", "owner_id": "7", "field": "ca",
+                        "name": "root.crt", "sha256": "cd" * 32}]
+
+    no_default = {"name": "ca", "type": "file"}
+    config, findings = t.render(body, [no_default], {}, default_files=defaults, template_id=7)
+    assert codes(findings) == ["missing-variable"]
+    config, findings = t.render(body, [{**no_default, "required": False}], {}, default_files=defaults, template_id=7)
+    assert findings == [] and config == {"rootCertificates": []}
+
+    config, findings = t.render({"a": "prefix ${ca}"}, [decl], {}, default_files=defaults, template_id=7)
+    assert [(f["path"], f["code"]) for f in findings] == [("/a", "file-not-whole-value")]
+    assert "CA PEM" not in str(config)
+
+
+def test_each_declaration_renders_its_own_owners_default_file():
+    """The default resolves by (owner, variable name): the `$file` id of a declaration or of a value selects nothing."""
+    shared = _ref("same-id")
+    blocks = {3: {"body": {"ca": "${ca}"}, "variables": [{"name": "ca", "type": "file", "default": shared}],
+                  "name": "Tls"}}
+    defaults = {("7", "ca"): _default_file("TEMPLATE CA"), ("3", "ca"): _default_file("BLOCK CA", owner_id="3")}
+    entity = {"same-id": _file("ENDPOINT CERT", "cert")}
+    body = {"own": "${ca}", "a": {"$ref": "3"}, "b": {"$ref": "3"}}
+    config, findings = t.render(body, [{"name": "ca", "type": "file", "default": shared}], {}, None, None, blocks,
+                                files=entity, default_files=defaults, template_id=7)
+    assert findings == []
+    assert config == {"own": "TEMPLATE CA", "a": {"ca": "BLOCK CA"}, "b": {"ca": "BLOCK CA"}}
+
+    # no file for the declaring owner (or no owner known): missing, never another owner's file of the same id
+    config, findings = t.render(body, [{"name": "ca", "type": "file", "default": shared}], {}, None, None, blocks,
+                                files=entity, default_files={("3", "ca"): defaults[("3", "ca")]})
+    assert [(f["path"], f["code"]) for f in findings] == [("/own", "missing-file")]
+    # a supplied value never renders a loaded file by its id
+    config, findings = t.render({"own": "${v}"}, [{"name": "v", "type": "file"}], {"v": _ref("same-id")},
+                                files=entity, default_files=defaults, template_id=7)
+    assert [(f["path"], f["code"]) for f in findings] == [("/own", "missing-file")]
+    assert "ENDPOINT CERT" not in str(config)

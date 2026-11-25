@@ -166,6 +166,8 @@ class LintRequest(BaseModel):
 
 
 class PreviewRequest(LintRequest):
+    template_id: Optional[int] = Field(
+        None, description="the saved template being edited: its file variables render its default files")
     values: Dict[str, Any] = {}
     device: Optional[Dict[str, Any]] = Field(None, description="sample device metadata for ${device.*}")
     device_id: Optional[str] = Field(

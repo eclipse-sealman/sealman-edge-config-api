@@ -24,7 +24,8 @@ from routers.base_api_router import BaseAPIRouter
 from routers.field_files.router import _OCTET_STREAM, _check_file_name, _download, _remove, _store
 from routers.module_config import blocks as block_loader, service, templating
 from routers.module_config.secrets import (
-    RenderSource, SecretRestoreError, load_render_files, mask_config, mask_pointers, restore_secrets,
+    DefaultSource, RenderSource, SecretRestoreError, load_render_files, load_variable_files, mask_config, mask_pointers,
+    restore_secrets,
 )
 from routers.module_config.config_schemas.network_discover_config_v1 import NetworkDiscoverModuleConfigV1
 from routers.module_config.config_schemas.seal_module_opcua_client_config_v1 import OpcuaClientModuleConfigV1
@@ -254,6 +255,16 @@ def _file_sources(
     return sources
 
 
+def _default_sources(template_id: Optional[int], variables: List[Dict[str, Any]],
+                    blocks: Optional[templating.BlockVersions]) -> List[DefaultSource]:
+    """The variable declarations whose default files a render may use, each with the id of the template or
+    block that owns them: the template being rendered (if it has an id) and the blocks it uses."""
+    sources: List[DefaultSource] = [(str(template_id), decl) for decl in variables] if template_id is not None else []
+    for block_id, block in (blocks or {}).items():
+        sources += [(str(block_id), decl) for decl in block.get("variables") or []]
+    return sources
+
+
 def _chosen_rows(
     body: Any, endpoints: Dict[str, Optional[Dict[str, Any]]], chosen: Dict[str, Dict[str, str]],
     blocks: Optional[templating.BlockVersions], lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
@@ -469,7 +480,10 @@ async def preview_template(
     _=_template_read,
 ):
     """Renders an unsaved template with sample values and either sample device metadata (`device`) or the
-    metadata of a real example device (`device_id`, which must be in the caller's scope and in the template group's)."""
+    metadata of a real example device (`device_id`, which must be in the caller's scope and in the template group's).
+    File variables render the default files of `template_id` (the template being edited) and of the blocks used."""
+    if req.template_id is not None:
+        await _template_or_404(repo, req.template_id)  # visible as for get_template
     device_meta = req.device
     if req.device_id is not None:
         if req.group_id is None:
@@ -503,8 +517,10 @@ async def preview_template(
     # sample metadata comes from the request: it may not pull in stored files (they render as missing-file)
     files = await load_render_files(files_repo, _file_sources(req.device_id, device_meta, endpoints, req.endpoints,
                                                              services, req.services))
+    default_files = await load_variable_files(files_repo, _default_sources(req.template_id, _variables(req), blocks))
     config, findings = templating.render(body, _variables(req), req.values, device_meta, endpoints, blocks, req.kind,
-                                         lists, services, rows, files=files, secrets=secrets)
+                                         lists, services, rows, files=files, secrets=secrets,
+                                         default_files=default_files, template_id=req.template_id)
     findings = _merge(name_findings, ref_findings + findings)
     return {"ok": config is not None and not templating.has_errors(findings), "config": mask_config(config, secrets),
             "findings": findings}
@@ -732,9 +748,11 @@ async def _render_for_device(
     secrets: List[Dict[str, str]] = []
     files = await load_render_files(files_repo, _file_sources(device, device_meta, endpoints, req.endpoints,
                                                              services, req.services))
+    default_files = await load_variable_files(files_repo,
+                                              _default_sources(template["id"], version["variables"], blocks))
     config, findings = templating.render(version["body"], version["variables"], req.values, device_meta, endpoints,
                                          blocks, lists=lists, services=services, rows=rows, files=files,
-                                         secrets=secrets)
+                                         secrets=secrets, default_files=default_files, template_id=template["id"])
     findings = ref_findings + findings
     if not templating.has_errors(findings):
         findings += _schema_findings(module, config)
