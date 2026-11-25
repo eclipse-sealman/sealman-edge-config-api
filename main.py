@@ -44,6 +44,7 @@ from routers.general.router import general
 from routers.module_config.router import module_config
 from routers.module_config.templates_router import module_config_template_groups, module_config_templates, module_config_devices
 from routers.smart_ems.router import smart_ems
+from routers.password.router import password, is_password_path, prevent_password_caching
 from routers.network_discovery.router import network_discovery
 from routers.auth.router import auth
 from routers.lines.router import lines
@@ -195,6 +196,8 @@ async def add_path_to_audit_trail_log(request: Request, call_next):
         query_params = f"?{request.query_params}"
     await AuditTrail.log_route(f"{request.method} {request.url.path}{query_params}")
     response = await call_next(request)
+    if is_password_path(request.url.path):
+        prevent_password_caching(response)
     return response
 
 
@@ -216,6 +219,7 @@ app.include_router(module_config_template_groups)
 app.include_router(module_config_templates)
 app.include_router(module_config_devices)
 app.include_router(smart_ems)
+app.include_router(password)
 app.include_router(cmd_proxy)
 app.include_router(network_discovery)
 app.include_router(lines)
@@ -279,7 +283,15 @@ async def handle_fast_api_req_validation_error(_: Request, ex: RequestValidation
 
 
 @app.exception_handler(Exception)
-async def handle(_: Request, ex):
+async def handle(request: Request, ex):
+    if is_password_path(request.url.path):
+        logger.error("Unhandled password operation failure (%s)", type(ex).__name__)
+        response = JSONResponse(
+            status_code=500,
+            content={"message": "Password operation failed; check server diagnostics."},
+        )
+        prevent_password_caching(response)
+        return response
     logger.error(f"Unhandled exception: [{ex}]")
     return JSONResponse(status_code=500, content={"message": str(ex)})
 

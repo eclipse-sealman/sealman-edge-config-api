@@ -6,6 +6,7 @@ from fastapi import Depends
 from db.repos.password_renewal_task import PasswordRenewalTaskRepository
 from db.session import get_repository
 from routers.base_api_router import BaseAPIRouter
+from routers.password.router import prevent_password_caching
 
 from .routes.get_smart_ems_device_info import get_smart_ems_device_info as _get_smart_ems_device_info
 from .routes.get_smart_ems_firmware_status import get_smart_ems_firmware_status as _get_smart_ems_firmware_status
@@ -85,20 +86,24 @@ async def post_smart_ems_config_nat(device: str, nat_config: NatConfig,
     return await _post_smart_ems_config_nat(device, nat_config)
 
 
-@smart_ems.get("/{device}/smartems/secret/info", response_model=DeviceSecretInformation, tags=["Smart-EMS"])
+@smart_ems.get("/{device}/smartems/secret/info", response_model=DeviceSecretInformation, tags=["Smart-EMS"],
+               dependencies=[Depends(prevent_password_caching)])
 async def get_smart_ems_secret_info(device: str,
+                                    renew_task_repo: PasswordRenewalTaskRepository = Depends(get_repository(PasswordRenewalTaskRepository)),
                                     _=Depends(ABACPermissionCheck(Device.READ))):
-    return await _get_smart_ems_secret_info(device)
+    return await _get_smart_ems_secret_info(device, renew_task_repo)
 
 
-@smart_ems.post("/{device}/smartems/secret/renew", tags=["Smart-EMS"])
+@smart_ems.post("/{device}/smartems/secret/renew", tags=["Smart-EMS"],
+                dependencies=[Depends(prevent_password_caching)])
 async def post_smart_ems_secret_renew(device: str,
                                       renew_task_repo: PasswordRenewalTaskRepository = Depends(get_repository(PasswordRenewalTaskRepository)),
                                       _=Depends(ABACPermissionCheck(Device.PASSWORD_WRITE))):
     return await _post_smart_ems_device_secret_renew(device, renew_task_repo)
 
 
-@smart_ems.post("/{device}/smartems/secret/request", response_model=DeviceSecretValue, tags=["Smart-EMS"])
+@smart_ems.post("/{device}/smartems/secret/request", response_model=DeviceSecretValue, tags=["Smart-EMS"],
+                dependencies=[Depends(prevent_password_caching)])
 async def post_smart_ems_secret_request(device: str,
                                         renew_task_repo: PasswordRenewalTaskRepository = Depends(get_repository(PasswordRenewalTaskRepository)),
                                         _=Depends(ABACPermissionCheck(Device.PASSWORD_READ))):

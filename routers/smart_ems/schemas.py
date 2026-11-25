@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, RootModel
 from typing import Annotated, Any, List, Dict, Union, Literal ,Optional
 from common_schemas import IPv4SubnetStr
 from enum import Enum
+from routers.password.schemas import DeviceSecretInformation, DeviceSecretValue
 
 
 class DeviceTags(BaseModel):
@@ -148,21 +149,6 @@ class NatConfig(BaseModel):
         if self.nat_rules is None:
             return []
         return self.nat_rules    
-
-class DeviceSecretInformation(BaseModel):
-    deviceTypeHasAuthSecret: bool
-    forceRenewal: bool = False
-    secretValueRenewAfterDays: int = 0
-    error: str | None = None
-    id: int | None = None
-    secretCreatedAt: datetime | None = None
-    secretUpdatedAt: datetime | None = None
-
-
-class DeviceSecretValue(BaseModel):
-    id: int
-    secretValue: str
-
 
 class DefinedVariable(BaseModel):
     name: str

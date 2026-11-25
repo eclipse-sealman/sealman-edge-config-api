@@ -1,11 +1,26 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List
+from contextlib import AbstractAsyncContextManager
 
 from db.models.password_renewal import PasswordRenewalTask
 
 
 class PasswordRenewalTaskRepository(ABC):
+
+    @abstractmethod
+    def lock_device(self, device: str) -> AbstractAsyncContextManager[None]:
+        pass
+
+    @abstractmethod
+    async def get_latest_task_for_device(self, device: str) -> PasswordRenewalTask | None:
+        pass
+
+    @abstractmethod
+    async def get_pending_task(
+        self, task_id: str, scheduled_time: datetime
+    ) -> PasswordRenewalTask | None:
+        pass
 
     @abstractmethod
     async def get_pending_tasks(self, scheduled_time: datetime) -> List[PasswordRenewalTask]:

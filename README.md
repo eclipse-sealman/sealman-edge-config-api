@@ -56,6 +56,62 @@ python main.py
 
 OpenAPI docs: <http://localhost:5000/docs>
 
+## Device passwords
+
+Password management is a core API, independent of SmartEMS configuration routes.
+It still uses SEMS for live secret metadata and renewal requests.
+
+| Route | Device-scoped permission | Result |
+|---|---|---|
+| `GET /{device}/password/info` | `device.read` | Existing secret metadata plus nullable `renewalTask` |
+| `POST /{device}/password/request` | `device.password.read` | `id`, `secretValue`, nullable `renewalTask` |
+| `POST /{device}/password/renew` | `device.password.write` | `{"requestAccepted": true}` |
+
+Legacy `/{device}/smartems/secret/{info,request,renew}` routes delegate to the
+same core service and keep their existing response fields; legacy renew still
+returns JSON `null`. Password responses, including errors, use `Cache-Control:
+no-store`. Clients must not persist revealed passwords.
+
+Revealing a password automatically schedules a one-time renewal at **23:59:59 UTC
+today before 23:00 UTC, or tomorrow at/after 23:00 UTC**. Before 23:00, an existing
+pending task is retained; at/after 23:00 it is canceled and replaced. When SEMS
+already reports `forceRenewal: true`, revealing does not schedule another task.
+Manual renewal cancels scheduled tasks only after SEMS accepts the request (or
+already reports a pending renewal); failures leave them intact.
+
+`renewalTask` contains `taskId`, `scheduledTime`, `status`, `errorCount`,
+`latestError`, `createdAt`, and `updatedAt`. Times are UTC ISO-8601 strings.
+It selects the pending task if present, otherwise the most recently created task.
+Statuses are `Pending`, `Canceled`, `Completed`, and `Error`. **`Completed` means
+the scheduled renewal request was accepted/already pending in SEMS, not that the
+device rotated its password.** Likewise, `requestAccepted` is not rotation
+confirmation. `forceRenewal` and secret timestamps are refreshed from SEMS;
+`updatedAt` alone is not reliable proof of rotation. Refresh info after actions.
+Five failed worker attempts mark a task `Error`; errors exposed to clients are
+generic and never include raw historical upstream responses. No configurable
+schedule, recurrence, or rotation confirmation tracking is provided.
+
+Workers retain their existing 30-minute polling cadence, so the scheduled time
+is a due time, not an exact execution guarantee. Device-row database locks
+serialize reveals, manual renewal and worker requests across processes; workers
+recheck pending status after locking. Each due task uses a separate database
+session, so a lock or persistence failure for one device is logged without
+skipping the remaining due devices or completed-task cleanup.
+After an upstream failure, the task's failure count and `next_attempt_at` are
+saved together under the device lock. Selection and the post-lock recheck both
+require this retry time to have arrived, so competing workers cannot immediately
+consume the remaining attempts. Retries become eligible 30 minutes after failure
+and run on a subsequent worker pass; the original `scheduled_time` is unchanged.
+Existing tasks with no retry time remain eligible when due. Terminal tasks have
+no next attempt. Deploy the migration before the new worker code and update all
+worker replicas: older code does not enforce retry timing.
+No in-memory claims or new tracking table
+are used. The migration preserves all tasks, cancels duplicate pending rows
+while retaining the earliest deadline, and enforces one pending task per device
+with a partial unique index. A process failure releases its database lock; as
+with any external request, a crash between SEMS acceptance and local commit can
+require a retry (the worker first checks SEMS `forceRenewal`).
+
 ## Device field defaults
 
 Device defaults initialize stored metadata; they are not substituted on reads.

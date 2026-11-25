@@ -7,7 +7,7 @@ from routers.smart_ems.schemas import DeviceSecretInformation
 
 
 @pytest.mark.asyncio
-@patch("routers.smart_ems.routes.get_smart_ems_secret_info.SmartEMS.get_device_secret")
+@patch("routers.password.service.SmartEMS.get_device_secret")
 async def test_get_secret_info_success_with_secret(mock_get_device_secret):
     """Test successful retrieval when device has a secret"""
     # Arrange
@@ -38,7 +38,7 @@ async def test_get_secret_info_success_with_secret(mock_get_device_secret):
 
 
 @pytest.mark.asyncio
-@patch("routers.smart_ems.routes.get_smart_ems_secret_info.SmartEMS.get_device_secret")
+@patch("routers.password.service.SmartEMS.get_device_secret")
 async def test_get_secret_info_success_no_secret(mock_get_device_secret):
     """Test successful retrieval when device has no secret"""
     # Arrange
@@ -62,7 +62,7 @@ async def test_get_secret_info_success_no_secret(mock_get_device_secret):
 
 
 @pytest.mark.asyncio
-@patch("routers.smart_ems.routes.get_smart_ems_secret_info.SmartEMS.get_device_secret")
+@patch("routers.password.service.SmartEMS.get_device_secret")
 async def test_get_secret_info_with_updated_at_none(mock_get_device_secret):
     """Test when secret exists but updatedAt is None"""
     # Arrange
@@ -89,7 +89,7 @@ async def test_get_secret_info_with_updated_at_none(mock_get_device_secret):
 
 
 @pytest.mark.asyncio
-@patch("routers.smart_ems.routes.get_smart_ems_secret_info.SmartEMS.get_device_secret")
+@patch("routers.password.service.SmartEMS.get_device_secret")
 async def test_get_secret_info_sems_firmware_error(mock_get_device_secret):
     """Test when SEMSFirmwareError is raised"""
     # Arrange
@@ -115,10 +115,10 @@ async def test_get_secret_info_sems_firmware_error(mock_get_device_secret):
 
 @pytest.mark.asyncio
 @patch(
-    "routers.smart_ems.routes.get_smart_ems_secret_info.DEVICE_AUTHENTICATION_SECRET_KEY",
+    "routers.password.service.DEVICE_AUTHENTICATION_SECRET_KEY",
     "custom_key",
 )
-@patch("routers.smart_ems.routes.get_smart_ems_secret_info.SmartEMS.get_device_secret")
+@patch("routers.password.service.SmartEMS.get_device_secret")
 async def test_get_secret_info_with_custom_secret_key(mock_get_device_secret):
     """Test that the function uses the correct secret key constant"""
     # Arrange
@@ -137,7 +137,7 @@ async def test_device_secret_information_schema_validation():
     """Test that returned object conforms to DeviceSecretInformation schema"""
     # This test ensures the function returns a properly structured object
     with patch(
-        "routers.smart_ems.routes.get_smart_ems_secret_info.SmartEMS.get_device_secret"
+        "routers.password.service.SmartEMS.get_device_secret"
     ) as mock_get_secret:
         mock_get_secret.return_value = {
             "id": 999,

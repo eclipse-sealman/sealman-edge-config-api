@@ -748,6 +748,10 @@ class SmartEMS:
         if resp[uri].status_code == 200:
             return resp[uri].json()
         else:
+            cls._log.warning(
+                "SEMS password renewal request rejected (HTTP %s)",
+                resp[uri].status_code,
+            )
             raise SEMSError(
                 f"error forcing renewal of secret <{secret_id}>",
                 status_code=resp[uri].status_code,
