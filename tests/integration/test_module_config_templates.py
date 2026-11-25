@@ -1172,6 +1172,17 @@ class TestFileVariableDefaults:
             assert saved.status_code == 201, saved.text
             assert saved.json()["variables"][0]["default"] == last
 
+    async def test_create_refuses_a_default_even_when_the_variable_is_unused(self, client, db_session):
+        group = await _group(client, "g3")
+        ref = {"$file": "x", "name": "a.crt", "kind": "certificate", "not_after": None,
+               "uploaded_at": "2026-01-01T00:00:00Z"}
+        created = await client.post("/module-config-templates", json={
+            **TEMPLATE, "name": "unused", "group_id": group["id"], "body": {"a": 1},
+            "variables": [_file_variable("ca", default=ref)]})
+        assert created.status_code == 422
+        assert "A default file can be added after the template is saved" in [
+            f["message"] for f in created.json()["findings"]]
+
     async def test_a_save_can_make_a_file_secret_but_never_public(self, client, db_session):
         template = await _create(client, body={"a": "${ca}"}, variables=[_file_variable("ca")])
         path = f"/module-config-templates/{template['id']}/files/ca"

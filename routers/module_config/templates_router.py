@@ -518,7 +518,7 @@ async def create_template(req: TemplateCreate, repo: ModuleConfigRepository = _r
     body, _, findings = await _checked(repo, req.body, _variables(req), req.kind, req.group_id,
                                        slots=_slot_decls(req), endpoint_repo=endpoint_repo, service_repo=service_repo)
     variables, default_findings, _ = await _check_defaults(None, None, _variables(req))
-    reported = {f["path"] for f in findings}
+    reported = {f["path"] for f in findings if f["level"] == "error"}
     findings += [f for f in default_findings if f["path"] not in reported]
     if templating.has_errors(findings):
         return _findings_error("The template has errors", findings)
