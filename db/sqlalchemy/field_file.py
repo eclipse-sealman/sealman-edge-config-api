@@ -175,6 +175,17 @@ class SqlAlchemyFieldFileRepository(FieldFileRepository):
         )
         return {row.id: _to_file(row) for row in result.scalars().all()}
 
+    async def remove_device_module_files(self, device_id: str) -> int:
+        # Device ids hold no `/`: the part before the first one is the device, matched exactly (no prefix).
+        result = await self._session.execute(
+            delete(FieldFileRow).where(
+                FieldFileRow.owner_kind == "module",
+                func.split_part(FieldFileRow.owner_id, "/", 1) == device_id,
+            )
+        )
+        await self._session.commit()
+        return result.rowcount
+
     async def delete_orphans(self) -> int:
         deleted = 0
         for owner_kind, (model, id_column, data_column) in _OWNERS.items():

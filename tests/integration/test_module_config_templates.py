@@ -1349,6 +1349,30 @@ class TestFileVariableRendering:
         assert preview.json()["config"] == {"a": {"ca": block_cert.decode()}, "b": {"ca": block_cert.decode()}}
         assert [(f["path"], f["code"]) for f in preview.json()["findings"]] == [("/own", "missing-file")]
 
+    async def test_a_version_shows_the_default_stored_now(self, client, hub, device):
+        group = await _group(client)
+        block = await _block(client, group, "CaBlock", {"ca": "${ca}"}, [_file_variable("ca")])
+        await self._save(client, block, {"ca": "${ca}"}, [_file_variable(
+            "ca", default=await self._upload(client, block, "ca", make_cert()))])
+        body = {"own": "${ca}", "a": _ref(block)}
+        template = await _block(client, group, "WithCopy", body, [_file_variable("ca")], kind="template")
+        await self._save(client, template, body, [_file_variable(
+            "ca", default=await self._upload(client, template, "ca", make_cert()))])
+
+        # replaced without saving a version: what renders is what a version read shows
+        own = await self._upload(client, template, "ca", make_cert(), name="new.crt")
+        copy = await self._upload(client, block, "ca", make_cert(), name="new-block.crt")
+        url = f"/module-config-templates/{template['id']}/versions/latest"
+        version = (await client.get(url)).json()
+        assert version["variables"][0]["default"] == own
+        assert {v["key"]: v["default"] for v in version["inputs"]["variables"]} == {"ca": own, "a/ca": copy}
+
+        # a default whose file is gone is not shown
+        assert (await client.delete(f"/module-config-templates/{template['id']}/files/ca")).status_code == 204
+        version = (await client.get(url)).json()
+        assert "default" not in version["variables"][0]
+        assert [v["key"] for v in version["inputs"]["variables"] if v.get("default")] == ["a/ca"]
+
     async def test_preview_loads_defaults_only_for_a_visible_template(self, client, hub, device):
         body = {"ca": "${ca}", "key": "${key}", "extra": "${extra}"}
         template = await _create(client, body=body, variables=[
@@ -1530,6 +1554,56 @@ class TestAnotherFileWhenApplying:
         assert hub["blobs"][(device, MODULE, applied.json()["configId"])] == {
             "a": {"ca": copy_cert.decode()}, "b": {"ca": block_cert.decode()},
             "more": {"e1": {"ca": entry_cert.decode()}, "e2": {"ca": block_cert.decode()}}}
+
+    async def test_a_list_entry_file_is_secret_if_any_allowed_block_declares_it_secret(self, client, hub, device):
+        from file_parsing import parse_upload
+        group = await _group(client)
+        await _block(client, group, "SecretKey", {"key": "${key}"}, [_file_variable("key", secret=True)])
+        plain = await _block(client, group, "PlainKey", {"key": "${key}"}, [_file_variable("key")])
+        await _block(client, group, "OtherKey", {"key": "${key}"}, [_file_variable("key")])
+        template = await _block(client, group, "Keys", {"mixed": {"$list": ["SecretKey", "PlainKey"]},
+                                                        "plain": {"$list": ["PlainKey", "OtherKey"]}}, kind="template")
+
+        key = make_key()
+        ref = await self._upload(client, device, template, "mixed/e1/key", key, name="e1.key")
+        render = await client.post(f"/{device}/modules/{MODULE}/config/render", json={
+            "template_id": template["id"], "values": {"mixed/e1/key": ref},
+            "lists": {"mixed": [{"name": "e1", "block_id": plain["id"]}]}})
+        assert render.status_code == 200, render.text
+        assert "PRIVATE KEY" not in render.text
+        assert render.json()["config"]["mixed"] == {"e1": {"key": f"<secret: e1.key #{parse_upload(key).sha256[:8]}>"}}
+
+        refused = await _put_module_file(client, device, template, "plain/e1/key", make_key(), name="e1.key")
+        assert (refused.status_code, refused.json()) == (
+            422, {"message": "'plain/e1/key' holds a private key: mark the variable as secret"})
+        assert "PRIVATE KEY" not in refused.text
+
+    async def test_applied_files_go_with_their_device(self, client, db_session, hub, device, monkeypatch):
+        import routers.devices.router as device_router
+
+        # the device route also deletes in IoT Hub and SmartEMS: only its database part runs here
+        async def delete_record(device_id, repo):
+            await repo.delete_device(device_id)
+        monkeypatch.setattr(device_router, "delete_device", delete_record)
+        longer = f"{device}0"  # the deleted id is a prefix of this one
+        await AbacFixtures(db_session).setup(devices={longer: {}})
+        template = await _create(client, body={"key": "${key}"}, variables=[_file_variable("key", secret=True)])
+        values = {"key": await self._upload(client, device, template, "key", make_key(), name="site.key")}
+        await self._upload(client, longer, template, "key", make_key(), name="site.key")
+        applied = await client.post(f"/{device}/modules/{MODULE}/config/apply",
+                                    json={"template_id": template["id"], "values": values})
+        assert applied.status_code == 200, applied.text
+
+        assert (await client.delete(f"/devices/{device}")).status_code == 200
+        assert await _module_files(db_session) == [(f"{longer}/{MODULE}", "key")]
+
+        # a device re-created with the same id never gets the old key by a rollback
+        await AbacFixtures(db_session).setup(devices={device: {"site": "Aachen"}})
+        reapply = await client.post(
+            f"/{device}/modules/{MODULE}/config/revisions/{applied.json()['revision']['id']}/reapply", json={})
+        assert (reapply.status_code, reapply.json()) == (
+            409, {"message": "The file 'site.key' (module field 'key') has been removed"})
+        assert "PRIVATE KEY" not in reapply.text
 
     async def test_applied_file_refusals(self, client, db_session, hub, device):
         template = await _create(client, body={"ca": "${ca}", "n": "${n}"},

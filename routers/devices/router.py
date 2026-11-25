@@ -182,6 +182,7 @@ async def delete_device_route(
 ):
     await delete_device(device_id, repo)
     await files.delete_orphans()
+    await files.remove_device_module_files(device_id)
     return {"status": "deleted"}
 
 

@@ -67,6 +67,32 @@ def _version_out(version: Dict[str, Any], blocks: templating.BlockVersions) -> D
             "inputs": templating.inputs(version["body"], version["variables"], blocks, version.get("slots"))}
 
 
+async def _with_stored_defaults(files_repo: FieldFileRepository, owner_id: str,
+                                variables: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The declarations with the default of each file variable shown as the file stored for it now (a default
+    can be replaced without saving a version, and renders at once); a default whose file is gone is left out."""
+    out = []
+    for decl in variables:
+        if decl.get("type") != "file" or decl.get("default") is None:
+            out.append(decl)
+            continue
+        stored = await files_repo.get("template", owner_id, decl["name"])
+        rest = {k: v for k, v in decl.items() if k != "default"}
+        out.append({**rest, "default": stored.reference()} if stored else rest)
+    return out
+
+
+async def _shown_version(files_repo: FieldFileRepository, version: Dict[str, Any],
+                         blocks: Optional[templating.BlockVersions]) -> Dict[str, Any]:
+    """`_version_out` with the stored default files of the template's and its blocks' variables."""
+    shown = {**version, "variables": await _with_stored_defaults(
+        files_repo, str(version["template_id"]), version["variables"])}
+    if blocks is not None:
+        blocks = {block_id: {**block, "variables": await _with_stored_defaults(
+            files_repo, str(block_id), block.get("variables") or [])} for block_id, block in blocks.items()}
+    return _version_out(shown, blocks)
+
+
 def _merge(name_findings: List[Dict[str, str]], findings: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Name findings first; a reference or list whose name did not resolve is not reported again as malformed."""
     unresolved = {f["path"] for f in name_findings}
@@ -623,7 +649,7 @@ async def list_template_versions(template_id: int, repo: ModuleConfigRepository 
 
 @module_config_templates.get("/{template_id}/versions/{version}", response_model=TemplateVersionOut)
 async def get_template_version(template_id: int, version: str, repo: ModuleConfigRepository = _repo,
-                               _=_template_read):
+                               files_repo: FieldFileRepository = _files_repo, _=_template_read):
     """`version` is a number or `latest`."""
     if version != "latest" and not version.isdigit():
         raise HTTPException(status_code=400, detail="version must be a number or 'latest'")
@@ -632,7 +658,7 @@ async def get_template_version(template_id: int, version: str, repo: ModuleConfi
     if found is None:
         raise HTTPException(status_code=404, detail="Template version not found")
     blocks, _ = await _version_blocks(repo, template, found)
-    return _version_out(found, blocks)
+    return await _shown_version(files_repo, found, blocks)
 
 
 @module_config_templates.post("/{template_id}/versions", response_model=TemplateVersionOut, status_code=201)
@@ -658,7 +684,7 @@ async def add_template_version(template_id: int, req: TemplateContent, repo: Mod
     for field in secret_fields:
         await files_repo.mark_secret("template", str(template_id), field)
     await files_repo.remove_except("template", str(template_id), _file_defaults(variables))
-    return _version_out(version, blocks)
+    return await _shown_version(files_repo, version, blocks)
 
 
 @module_config_templates.post("/{template_id}/duplicate", response_model=TemplateOut, status_code=201)

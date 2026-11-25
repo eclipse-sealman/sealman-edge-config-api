@@ -88,6 +88,12 @@ class FieldFileRepository(ABC):
     async def get_many(self, ids: Collection[str]) -> Dict[str, FieldFile]: ...
 
     @abstractmethod
+    async def remove_device_module_files(self, device_id: str) -> int:
+        """Deletes the files uploaded when applying a template to any module of the device (owner kind
+        `module`, owner id `<device>/<module>`). Returns how many."""
+        ...
+
+    @abstractmethod
     async def delete_orphans(self) -> int:
         """Deletes files whose owner is gone or whose owner's data no longer references them."""
         ...

@@ -14,7 +14,8 @@ class FieldFile(Base):
     default file of a file variable of a template (`template`, id of the template) or the file of a
     variable of a module's applied values (`module`, "<device>/<module>"). The owner's data holds only a
     reference object. The owner is addressed by kind and id without a foreign key, so rows left behind are
-    removed by `delete_orphans` (entity owners) or by the template and module routes.
+    removed by `delete_orphans` (entity owners), by the template and module routes, or with their device
+    (module owners).
     `content` is encrypted and deferred, so listing queries never read it.
     """
 
