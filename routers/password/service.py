@@ -3,7 +3,7 @@ import logging
 
 from constants import DEVICE_AUTHENTICATION_SECRET_KEY
 from db.repos.password_renewal_task import PasswordRenewalTaskRepository
-from exceptions import APIError, SEMSFirmwareError, UnmatchedDependency
+from exceptions import APIError, SEMSError, SEMSFirmwareError, UnmatchedDependency
 from helper import validate_and_extract_serial_number
 from routers.password.schemas import (
     DeviceSecretInformation,
@@ -54,6 +54,9 @@ async def get_password_info(
     except SEMSFirmwareError as error:
         info.error = str(error)
         return info
+    except SEMSError as error:
+        logger.warning("Password information request failed in SEMS (HTTP %s)", error.status_code)
+        raise SEMSError("SEMS password information request failed.", 502) from error
     if secret is not None:
         info.deviceTypeHasAuthSecret = True
         info.secretValueRenewAfterDays = secret["deviceTypeSecret"].get(
@@ -73,13 +76,17 @@ async def get_password_info(
 async def request_password(device: str, repository: PasswordRenewalTaskRepository):
     validate_and_extract_serial_number(device)
     async with repository.lock_device(device):
-        secret = await SmartEMS.get_device_secret(device, DEVICE_AUTHENTICATION_SECRET_KEY)
-        if secret is None:
-            raise UnmatchedDependency(
-                "Device Type does not have a device authentication secret", status_code=400
-            )
-        secret_id = secret["id"]
-        device_secret = await SmartEMS.show_device_secret(secret_id)
+        try:
+            secret = await SmartEMS.get_device_secret(device, DEVICE_AUTHENTICATION_SECRET_KEY)
+            if secret is None:
+                raise UnmatchedDependency(
+                    "Device Type does not have a device authentication secret", status_code=400
+                )
+            secret_id = secret["id"]
+            device_secret = await SmartEMS.show_device_secret(secret_id)
+        except SEMSError as error:
+            logger.warning("Password request failed in SEMS (HTTP %s)", error.status_code)
+            raise SEMSError("SEMS password request failed.", 502) from error
         if not secret.get("forceRenewal", False):
             await schedule_password_renewal(device, secret_id, repository)
         return DeviceSecretValue(
@@ -123,6 +130,8 @@ async def renew_password(device: str, repository: PasswordRenewalTaskRepository)
             await request_upstream_renewal(device)
         except Exception as error:
             logger.warning("Manual password renewal: %s", renewal_error_message(error))
+            if isinstance(error, SEMSError):
+                raise SEMSError("SEMS password renewal request failed.", 502) from error
             raise
         # Accepted (or already pending) is not confirmation of device-side rotation.
         await repository.cancel_scheduled_tasks_for_device(device)

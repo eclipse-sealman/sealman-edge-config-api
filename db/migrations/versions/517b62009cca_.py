@@ -1,4 +1,4 @@
-"""empty message
+"""Merge module-config template groups and password renewal branches.
 
 Revision ID: 517b62009cca
 Revises: b8d4f1a6c2e5, d8e2f4a6b0c1

@@ -72,6 +72,12 @@ same core service and keep their existing response fields; legacy renew still
 returns JSON `null`. Password responses, including errors, use `Cache-Control:
 no-store`. Clients must not persist revealed passwords.
 
+Sealman permission denials return HTTP 403. SEMS errors during password information,
+reveal or manual renewal requests return HTTP 502 with a sanitized, operation-specific
+`message`, so clients can offer retry instead of treating an upstream refusal as a
+missing Sealman permission. Scheduled workers retain the upstream status in their
+sanitized retry diagnostics.
+
 Revealing a password automatically schedules a one-time renewal at **23:59:59 UTC
 today before 23:00 UTC, or tomorrow at/after 23:00 UTC**. Before 23:00, an existing
 pending task is retained; at/after 23:00 it is canceled and replaced. When SEMS

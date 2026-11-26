@@ -255,11 +255,11 @@ if ENABLE_DOCS:
 
 # exception handlers
 @app.exception_handler(APIError)
-async def handle_api_error(_: Request, ex: APIError):
+async def handle_api_error(request: Request, ex: APIError):
     logger.error(f"APIError: [{ex}]")
     return JSONResponse(
         status_code=ex.status_code,
-        content={"message": f"{ex.message}"},
+        content={"message": str(ex) if is_password_path(request.url.path) else f"{ex.message}"},
     )
 
 

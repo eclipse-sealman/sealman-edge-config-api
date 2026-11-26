@@ -238,13 +238,23 @@ async def test_waiting_worker_rechecks_after_cancellation_or_reschedule(
         assert pending == (1 if operation == "reschedule" else 0)
 
 
-async def test_manual_failure_rolls_back_and_keeps_due_task(renewal_database, sems):
+@pytest.mark.parametrize("upstream_status", [None, 403, 503])
+async def test_manual_failure_rolls_back_and_keeps_due_task(renewal_database, sems, upstream_status):
+    from exceptions import SEMSError
+
     sessions, device = renewal_database
     task = await seed_due_task(sessions, device)
-    sems[2].side_effect = RuntimeError("synthetic upstream failure")
+    failure = (
+        RuntimeError("synthetic upstream failure") if upstream_status is None
+        else SEMSError("synthetic upstream failure", upstream_status)
+    )
+    sems[2].side_effect = failure
     async with sessions() as session:
-        with pytest.raises(RuntimeError, match="synthetic upstream failure"):
+        with pytest.raises(type(failure)) as exc:
             await renew_password(device, SqlAlchemyPasswordRenewalTaskRepository(session))
+        if upstream_status is not None:
+            assert exc.value.status_code == 502
+            assert exc.value.__cause__ is failure
     async with sessions() as session:
         saved = await session.get(PasswordRenewalTask, task.task_id)
         assert saved.status == PasswordRenewalTaskStatus.PENDING
@@ -435,17 +445,29 @@ async def test_password_routes_enforce_device_scoped_permissions(
 
 
 @pytest.mark.parametrize("prefix", ["password", "smartems/secret"])
-async def test_upstream_rejection_is_not_cached(client, db_session, sems, prefix):
+@pytest.mark.parametrize("method,action,failing_call,message", [
+    ("GET", "info", 0, "SEMS password information request failed."),
+    ("POST", "request", 0, "SEMS password request failed."),
+    ("POST", "request", 1, "SEMS password request failed."),
+    ("POST", "renew", 0, "SEMS password renewal request failed."),
+    ("POST", "renew", 2, "SEMS password renewal request failed."),
+])
+async def test_upstream_rejection_has_gateway_status_and_is_not_cached(
+    client, db_session, sems, prefix, method, action, failing_call, message,
+):
     from exceptions import SEMSError
 
     await db_session.execute(text(
         "INSERT INTO devices (device_id, type_id, device_data) VALUES ('eg-123456789', 'default', '{}')"
     ))
     await db_session.commit()
-    sems[2].side_effect = SEMSError("Password renewal request rejected", 403)
-    response = await client.post(f"/eg-123456789/{prefix}/renew")
-    assert response.status_code == 403
+    sems[failing_call].side_effect = SEMSError("SECRET-SHOULD-NOT-APPEAR", 403)
+    response = await client.request(method, f"/eg-123456789/{prefix}/{action}")
+    assert response.status_code == 502, response.text
+    assert response.json()["message"] == message
+    assert "SECRET-SHOULD-NOT-APPEAR" not in response.text
     assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
 
 
 @pytest.mark.parametrize("prefix", ["password", "smartems/secret"])
