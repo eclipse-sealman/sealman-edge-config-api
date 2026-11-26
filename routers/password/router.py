@@ -23,10 +23,7 @@ def is_password_path(path: str) -> bool:
     return (
         len(parts) >= 3
         and parts[-1] in {"info", "request", "renew"}
-        and (
-            parts[-2] == "password"
-            or (len(parts) >= 4 and parts[-3:-1] == ["smartems", "secret"])
-        )
+        and parts[-2] == "password"
     )
 
 

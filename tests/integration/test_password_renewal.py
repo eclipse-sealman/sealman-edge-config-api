@@ -389,14 +389,13 @@ async def test_worker_database_failure_does_not_skip_next_device_or_purge(
         assert await session.get(PasswordRenewalTask, expired_task_id) is None
 
 
-@pytest.mark.parametrize("prefix", ["password", "smartems/secret"])
-async def test_core_and_legacy_routes(client, db_session, sems, prefix):
+async def test_core_password_routes(client, db_session, sems):
     device = "eg-123456789"
     await db_session.execute(text(
         "INSERT INTO devices (device_id, type_id, device_data) VALUES (:device, 'default', '{}')"
     ), {"device": device})
     await db_session.commit()
-    base = f"/{device}/{prefix}"
+    base = f"/{device}/password"
     info = await client.get(f"{base}/info")
     assert info.status_code == 200, info.text
     assert info.json()["deviceTypeHasAuthSecret"] is True
@@ -408,7 +407,7 @@ async def test_core_and_legacy_routes(client, db_session, sems, prefix):
     assert status.json()["renewalTask"]["taskId"] == revealed.json()["renewalTask"]["taskId"]
     renewed = await client.post(f"{base}/renew")
     assert renewed.status_code == 200, renewed.text
-    assert renewed.json() == ({"requestAccepted": True} if prefix == "password" else None)
+    assert renewed.json() == {"requestAccepted": True}
     after = await client.get(f"{base}/info")
     assert after.json()["renewalTask"]["status"] == "Canceled"
     for response in (info, revealed, status, renewed, after):
@@ -416,7 +415,18 @@ async def test_core_and_legacy_routes(client, db_session, sems, prefix):
         assert response.headers["pragma"] == "no-cache"
 
 
-@pytest.mark.parametrize("prefix", ["password", "smartems/secret"])
+@pytest.mark.parametrize("method,action", [("GET", "info"), ("POST", "request"), ("POST", "renew")])
+async def test_legacy_password_routes_are_removed(client, sems, method, action):
+    from main import app
+
+    path = f"/eg-123456789/smartems/secret/{action}"
+    response = await client.request(method, path)
+    assert response.status_code == 404, response.text
+    assert f"/{{device}}/smartems/secret/{action}" not in app.openapi()["paths"]
+    for upstream in sems:
+        upstream.assert_not_awaited()
+
+
 @pytest.mark.parametrize("method,action,permission", [
     ("GET", "info", DevicePermission.READ),
     ("POST", "request", DevicePermission.PASSWORD_READ),
@@ -424,7 +434,7 @@ async def test_core_and_legacy_routes(client, db_session, sems, prefix):
 ])
 @pytest.mark.parametrize("scenario", ["allowed", "outside-scope", "missing-permission"])
 async def test_password_routes_enforce_device_scoped_permissions(
-    client, db_session, fake_jwt_user, sems, prefix, method, action, permission, scenario,
+    client, db_session, fake_jwt_user, sems, method, action, permission, scenario,
 ):
     fake_jwt_user["roles"] = []
     granted = permission if scenario != "missing-permission" else "device.network.write"
@@ -436,7 +446,7 @@ async def test_password_routes_enforce_device_scoped_permissions(
         devices={"eg-123456789": {"region": "EU"}, "eg-987654321": {"region": "US"}},
     )
     device = "eg-987654321" if scenario == "outside-scope" else "eg-123456789"
-    response = await client.request(method, f"/{device}/{prefix}/{action}")
+    response = await client.request(method, f"/{device}/password/{action}")
     assert response.status_code == (200 if scenario == "allowed" else 403), response.text
     assert response.headers["cache-control"] == "no-store"
     if scenario != "allowed":
@@ -444,7 +454,6 @@ async def test_password_routes_enforce_device_scoped_permissions(
             upstream.assert_not_awaited()
 
 
-@pytest.mark.parametrize("prefix", ["password", "smartems/secret"])
 @pytest.mark.parametrize("method,action,failing_call,message", [
     ("GET", "info", 0, "SEMS password information request failed."),
     ("POST", "request", 0, "SEMS password request failed."),
@@ -453,7 +462,7 @@ async def test_password_routes_enforce_device_scoped_permissions(
     ("POST", "renew", 2, "SEMS password renewal request failed."),
 ])
 async def test_upstream_rejection_has_gateway_status_and_is_not_cached(
-    client, db_session, sems, prefix, method, action, failing_call, message,
+    client, db_session, sems, method, action, failing_call, message,
 ):
     from exceptions import SEMSError
 
@@ -462,7 +471,7 @@ async def test_upstream_rejection_has_gateway_status_and_is_not_cached(
     ))
     await db_session.commit()
     sems[failing_call].side_effect = SEMSError("SECRET-SHOULD-NOT-APPEAR", 403)
-    response = await client.request(method, f"/eg-123456789/{prefix}/{action}")
+    response = await client.request(method, f"/eg-123456789/password/{action}")
     assert response.status_code == 502, response.text
     assert response.json()["message"] == message
     assert "SECRET-SHOULD-NOT-APPEAR" not in response.text
@@ -470,8 +479,7 @@ async def test_upstream_rejection_has_gateway_status_and_is_not_cached(
     assert response.headers["pragma"] == "no-cache"
 
 
-@pytest.mark.parametrize("prefix", ["password", "smartems/secret"])
-async def test_unexpected_password_error_is_sanitized_and_not_cached(client, db_session, sems, prefix):
+async def test_unexpected_password_error_is_sanitized_and_not_cached(client, db_session, sems):
     import httpx
     from main import app
 
@@ -484,7 +492,7 @@ async def test_unexpected_password_error_is_sanitized_and_not_cached(client, db_
         transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
         base_url="http://test",
     ) as errors_client:
-        response = await errors_client.post(f"/eg-123456789/{prefix}/renew")
+        response = await errors_client.post("/eg-123456789/password/renew")
     assert response.status_code == 500
     assert "SECRET-SHOULD-NOT-APPEAR" not in response.text
     assert response.headers["cache-control"] == "no-store"

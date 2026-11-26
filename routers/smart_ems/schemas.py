@@ -4,7 +4,6 @@ from pydantic import BaseModel, Field, RootModel
 from typing import Annotated, Any, List, Dict, Union, Literal ,Optional
 from common_schemas import IPv4SubnetStr
 from enum import Enum
-from routers.password.schemas import DeviceSecretInformation, DeviceSecretValue
 
 
 class DeviceTags(BaseModel):

@@ -1,1 +1,0 @@
-from routers.password.service import get_password_info as get_smart_ems_secret_info

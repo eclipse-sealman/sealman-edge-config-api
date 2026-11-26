@@ -67,10 +67,9 @@ It still uses SEMS for live secret metadata and renewal requests.
 | `POST /{device}/password/request` | `device.password.read` | `id`, `secretValue`, nullable `renewalTask` |
 | `POST /{device}/password/renew` | `device.password.write` | `{"requestAccepted": true}` |
 
-Legacy `/{device}/smartems/secret/{info,request,renew}` routes delegate to the
-same core service and keep their existing response fields; legacy renew still
-returns JSON `null`. Password responses, including errors, use `Cache-Control:
-no-store`. Clients must not persist revealed passwords.
+Password management is exposed only through the core routes above. Password
+responses, including errors, use `Cache-Control: no-store`. Clients must not
+persist revealed passwords.
 
 Sealman permission denials return HTTP 403. SEMS errors during password information,
 reveal or manual renewal requests return HTTP 502 with a sanitized, operation-specific

@@ -1,2 +1,0 @@
-from routers.password.service import request_password as post_smart_ems_device_secret_request
-from routers.password.service import schedule_password_renewal as _schedule_smart_ems_device_secret_renew
