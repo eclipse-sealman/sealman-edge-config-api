@@ -10,7 +10,7 @@ from smart_ems import generate_resp_from_device_info
 from routers.devices.routes.get_devices import populate_cache_from_iot_hub_query
 from constants import IOT_HUB_NAME, BOOTSTRAP_SEMS_TEMPLATE_NAME, AZURE_IOT_EDGE_ENABLED_VARIABLE
 from helper import encode_iothub_id, get_iothub_auth_headers
-from routers.general.routes.put_deployment_tag import put_deployment_tag
+from routers.platform_configuration.readiness import missing_required_variables
 
 logger = logging.getLogger("EdgeConfigAPI")
 
@@ -32,6 +32,15 @@ async def create_device(
     registration_id = (body.get("registrationId") or "").strip() if is_dps else ""
 
     # 1. PRE-CHECK
+    missing = missing_required_variables(
+        await template_repo.get_template_variables(),
+        (await functions_repo.get_functions()).azure_iot_edge_enabled,
+    )
+    if missing:
+        raise APIError(
+            f"The platform is not fully configured. Missing device settings: {', '.join(missing)}", 400
+        )
+
     if await repo.device_exists(device_id):
         raise APIError(f"Device {device_id} already exists", 409)
 
@@ -157,12 +166,6 @@ async def create_device(
                 "template": template_id,
             }
             await SmartEMS.create_device(payload)
-
-        try:
-            await put_deployment_tag(device_id, "base")
-            logger.info(f"Set deployment tag 'base' on device {device_id} in IoTHub")
-        except Exception as e:
-            logger.warning(f"Could not set deployment tag for device {device_id}: {e}")
 
         # 6. SUCCESS
         await populate_cache_from_iot_hub_query(repo)

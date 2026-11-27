@@ -149,7 +149,7 @@ async def test_related_writes_reject_before_side_effects(monkeypatch, operation)
     else:
         handler = import_module(f"routers.devices.routes.{operation}_device")
         name = f"{operation}_device"
-        args = ("..", {}, repo, AsyncMock()) if operation == "create" else ("..", repo)
+        args = ("..", {}, repo, AsyncMock(), AsyncMock()) if operation == "create" else ("..", repo)
     headers = MagicMock()
     monkeypatch.setattr(handler, "get_iothub_auth_headers", headers)
     with pytest.raises(APIError) as exc:

@@ -1,8 +1,16 @@
 import json
 import logging
+import re
 import secrets
 from typing import Any, Dict, List
-from constants import SEMS_URL, BOOTSTRAP_SEMS_TEMPLATE_NAME, AZURE_IOT_EDGE_ENABLED_VARIABLE
+from constants import (
+    SEMS_URL,
+    BOOTSTRAP_SEMS_TEMPLATE_NAME,
+    AZURE_IOT_EDGE_ENABLED_VARIABLE,
+    CONTAINER_REGISTRY_AUTHS_VARIABLE,
+    STATIC_COMPOSE_FILES_VARIABLE,
+    MAX_CONTAINER_REGISTRIES,
+)
 from exceptions import APIError
 from smart_ems import SmartEMS
 from async_requests import post_async
@@ -14,6 +22,29 @@ EDGE_ALLOWED_TYPES = [
     "Edge gateway",
     "Edge gateway with VPN Container Client"
 ]
+
+
+def validate_template_variable(name: str, value: str) -> None:
+    """Reject malformed JSON for the variables the twig renders verbatim."""
+    if name not in (CONTAINER_REGISTRY_AUTHS_VARIABLE, STATIC_COMPOSE_FILES_VARIABLE):
+        return
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        raise APIError(f"'{name}' must be a JSON object", 400)
+    if not isinstance(parsed, dict):
+        raise APIError(f"'{name}' must be a JSON object", 400)
+    # Keys are rendered unescaped by the twig, unlike the (SEMS-escaped) values.
+    if any(not key or re.search(r'["\\\x00-\x1f]', key) for key in parsed):
+        raise APIError(f"'{name}' contains an invalid name", 400)
+
+    if name == CONTAINER_REGISTRY_AUTHS_VARIABLE:
+        if len(parsed) > MAX_CONTAINER_REGISTRIES:
+            raise APIError(f"At most {MAX_CONTAINER_REGISTRIES} container registries are allowed", 400)
+        if not all(isinstance(v, dict) and isinstance(v.get("auth"), (str, type(None))) for v in parsed.values()):
+            raise APIError("Each container registry needs an 'auth' string or null", 400)
+    elif not all(isinstance(v, str) for v in parsed.values()):
+        raise APIError("Each compose stack must be a YAML string", 400)
 
 
 async def get_available_templates(selected_names: List[str]):

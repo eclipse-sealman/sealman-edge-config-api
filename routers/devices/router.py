@@ -7,11 +7,8 @@ from authorization.permission_types import Device
 from db.repos.device import DeviceRepository
 from db.repos.device_search import DeviceSearchRepository
 from db.repos.device_template import DeviceTemplateRepository
-<<<<<<< Updated upstream
 from db.repos.user import UserRepository
-=======
 from db.repos.platform_functions import PlatformFunctionsRepository
->>>>>>> Stashed changes
 from db.session import get_repository
 from exceptions import APIError
 from .routes.get_devices import get_devices, populate_cache_from_iot_hub_query

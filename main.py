@@ -35,7 +35,8 @@ from routers.smart_ems.password_renewal_task_processor import (
     process_password_renewal_tasks,
 )
 from smart_ems import init_smart_ems
-from bootstrap import bootstrap_sems, bootstrap_iothub_base_deployment
+from bootstrap import bootstrap_sems
+from bootstrap.template_defaults import seed_sems_connection_defaults
 from authorization.sync_permissions import sync_permissions_to_db
 from helper import AuditTrail
 
@@ -98,6 +99,7 @@ async def lifespan(_: FastAPI):
     await loop.run_in_executor(None, run_migrations)
 
     await sync_permissions_to_db()
+    await seed_sems_connection_defaults()
 
     jwks_refresh_task = None
 
@@ -116,7 +118,6 @@ async def lifespan(_: FastAPI):
 
     if BOOTSTRAP_ENABLED:
         await bootstrap_sems()
-        await bootstrap_iothub_base_deployment()
 
     sems_token_refresh = asyncio.create_task(init_smart_ems())
 
