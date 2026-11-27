@@ -6,12 +6,16 @@ re-apply) goes through `write_module_config`: the content is uploaded to the imm
 `iotedge-device-twin/{device}/{module}/{configId}`, the module twin's desired properties get
 only `configBlobUrl` + `configId` (the device contract is unchanged) and an audited revision is
 recorded. Configurations written by other means are picked up lazily by `sync_external`.
+
+A revision rendered from secret files stores their JSON pointers (`secret_paths`). Writers of a
+configuration supplied by a caller (raw editor, typed legacy endpoints, extension `twin_write`) go
+through `write_supplied_config`, which turns the masks of the current revision back into the files.
 """
 import hashlib
 import json
 import logging
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from async_requests import patch_async
 from blob_service import BlobContainerContext, blob_url
@@ -19,12 +23,14 @@ from constants import (
     BLOB_SAS_TOKEN_MODULE_CONF, IOT_HUB_NAME, MODULE_CONFIG_DEVICE_STORAGE_URL, MODULE_CONFIG_STORAGE_URL,
     PUBLIC_STORAGE_ACCOUNT_NAME,
 )
+from db.repos.field_file import FieldFileRepository
 from db.repos.module_config import ModuleConfigRepository
 from exceptions import IoTBackendAPIError, UploadError
 from helper import encode_iothub_id, get_iothub_auth_headers, validate_iothub_id
 from routers.module_config.routes.get_module_twin_config import (
     blob_name_from_desired, get_module_twin_desired, read_module_config_blob,
 )
+from routers.module_config.secrets import contains_mask, restore_secrets
 
 logger = logging.getLogger("EdgeConfigAPI")
 
@@ -37,6 +43,13 @@ def content_hash(content: Any) -> str:
 
 
 async def _upload_and_patch(device: str, module: str, content: Any) -> str:
+    config_id = await _upload(device, module, content)
+    await _patch_twin(device, module, config_id)
+    return config_id
+
+
+async def _upload(device: str, module: str, content: Any) -> str:
+    """Uploads the immutable blob under a new config id and returns the id."""
     if not PUBLIC_STORAGE_ACCOUNT_NAME:
         raise IoTBackendAPIError("Public storage account name is not set. Cannot upload file.", 500)
     if not BLOB_SAS_TOKEN_MODULE_CONF or not BLOB_SAS_TOKEN_MODULE_CONF.strip():
@@ -53,7 +66,12 @@ async def _upload_and_patch(device: str, module: str, content: Any) -> str:
             await container.get_blob_client(blob_path).upload_blob(json.dumps(content), overwrite=True)
     except Exception as exc:
         raise UploadError(f"could not upload data object to blob storage: {exc}", 400)
+    return config_id
 
+
+async def _patch_twin(device: str, module: str, config_id: str) -> None:
+    """Points the module twin's desired properties at the blob of `config_id`."""
+    blob_path = f"{device}/{module}/{config_id}"
     config_blob_url = blob_url(
         PUBLIC_STORAGE_ACCOUNT_NAME, CONTAINER, blob_path, BLOB_SAS_TOKEN_MODULE_CONF,
         account_url=MODULE_CONFIG_DEVICE_STORAGE_URL or MODULE_CONFIG_STORAGE_URL,
@@ -68,22 +86,37 @@ async def _upload_and_patch(device: str, module: str, content: Any) -> str:
         raise IoTBackendAPIError(
             f"could not update module twin of {module} on {device} on the Azure IoT Hub. "
             f"Config-Id: [{config_id}]. Error: {response.text}", response.status_code)
-    return config_id
+
+
+async def _with_repo(repo: Optional[ModuleConfigRepository], call):
+    if repo is not None:
+        return await call(repo)
+    from db import session as db_session
+    from db.registry import repo_registry
+    async with db_session.AsyncSessionLocal() as session:
+        return await call(repo_registry.get(ModuleConfigRepository)(session))
 
 
 async def _record(repo: Optional[ModuleConfigRepository], fields: Dict[str, Any]) -> Optional[Dict]:
     """Records a revision. Failing to record never undoes a successful device write: the
     revision is then picked up as `external` by the next `sync_external`."""
     try:
-        if repo is not None:
-            return await repo.add_revision(**fields)
-        from db import session as db_session
-        from db.registry import repo_registry
-        async with db_session.AsyncSessionLocal() as session:
-            return await repo_registry.get(ModuleConfigRepository)(session).add_revision(**fields)
+        return await _with_repo(repo, lambda r: r.add_revision(**fields))
     except Exception as exc:
         logger.error(f"Could not record module config revision for {fields['device_id']}/{fields['module_name']}: {exc}")
         return None
+
+
+async def _record_before_patch(repo: Optional[ModuleConfigRepository], fields: Dict[str, Any]) -> Dict:
+    """Records the revision of a configuration with secret paths before the twin points at it, so it is
+    never read without its secret paths (as an unrecorded or `external` revision). Failing to record
+    fails the write."""
+    try:
+        return await _with_repo(repo, lambda r: r.add_revision(**fields))
+    except Exception as exc:
+        logger.error(f"Could not record module config revision for {fields['device_id']}/{fields['module_name']}: {exc}")
+        raise IoTBackendAPIError(
+            "Could not record the module configuration revision; the configuration was not applied", 500)
 
 
 async def write_module_config(
@@ -98,13 +131,20 @@ async def write_module_config(
     values: Optional[Dict[str, Any]] = None,
     comment: Optional[str] = None,
     reapplied_from_id: Optional[int] = None,
+    secret_paths: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """Writes `content` to the device module and records the revision. Returns
-    `{"configId", "revision"}`; `revision` is None if it could not be recorded."""
+    `{"configId", "revision"}`. Without secret paths, `revision` is None if it could not be recorded.
+    With secret paths the revision is recorded before the twin is patched: a failed insert raises and
+    the twin is not patched; a failed twin patch raises and keeps the revision (the hub may have applied
+    the patch anyway, so the reads stay masked; a revision nothing points to leaks nothing)."""
     validate_iothub_id(device)
     validate_iothub_id(module)
-    config_id = await _upload_and_patch(device, module, content)
-    revision = await _record(repo, {
+    if secret_paths:
+        config_id = await _upload(device, module, content)
+    else:
+        config_id = await _upload_and_patch(device, module, content)
+    fields = {
         "device_id": device,
         "module_name": module,
         "config_id": config_id,
@@ -116,8 +156,53 @@ async def write_module_config(
         "actor": actor,
         "comment": comment,
         "reapplied_from_id": reapplied_from_id,
-    })
+        "secret_paths": secret_paths or [],
+    }
+    if not secret_paths:
+        return {"configId": config_id, "revision": await _record(repo, fields)}
+    revision = await _record_before_patch(repo, fields)
+    await _patch_twin(device, module, config_id)
     return {"configId": config_id, "revision": revision}
+
+
+async def write_supplied_config(
+    device: str,
+    module: str,
+    content: Any,
+    *,
+    source: str,
+    actor: Optional[str] = None,
+    repo: Optional[ModuleConfigRepository] = None,
+    files_repo: Optional[FieldFileRepository] = None,
+) -> Dict[str, Any]:
+    """`write_module_config` for a configuration supplied by a caller, usually one read back from here:
+    a mask of the current revision becomes the content of that file as it is now and stays a secret path.
+    Raises SecretRestoreError for any other mask or a file that is gone. Content without a mask is
+    written as it is."""
+    validate_iothub_id(device)
+    validate_iothub_id(module)
+    secret_paths: List[Dict[str, str]] = []
+    if contains_mask(content):
+        if repo is not None and files_repo is not None:
+            content, secret_paths = await _restore_masks(device, module, content, repo, files_repo)
+        else:
+            from db import session as db_session
+            from db.registry import repo_registry
+            async with db_session.AsyncSessionLocal() as session:
+                content, secret_paths = await _restore_masks(
+                    device, module, content, repo_registry.get(ModuleConfigRepository)(session),
+                    repo_registry.get(FieldFileRepository)(session))
+    return await write_module_config(device, module, content, source=source, actor=actor, repo=repo,
+                                     secret_paths=secret_paths)
+
+
+async def _restore_masks(device: str, module: str, content: Any, repo: ModuleConfigRepository,
+                         files_repo: FieldFileRepository):
+    desired = await get_module_twin_desired(device, module)
+    config_id = desired.get("configId")
+    revision = await repo.get_revision_by_config_id(device, module, str(config_id)) if config_id else None
+    previous = (revision or {}).get("secret_paths") or []
+    return await restore_secrets(content, previous, files_repo, by="mask")
 
 
 async def read_revision_content(device: str, module: str, blob_name: str) -> Optional[Any]:

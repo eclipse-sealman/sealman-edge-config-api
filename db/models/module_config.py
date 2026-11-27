@@ -51,6 +51,7 @@ class ModuleConfigTemplateVersion(Base):
     version = Column(Integer, nullable=False)
     body = Column(JSONB, nullable=False)
     variables = Column(JSONB, nullable=False, default=list)
+    slots = Column(JSONB, nullable=False, default=list, server_default="[]")
     comment = Column(Text)
     created_by = Column(Text)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
@@ -79,6 +80,8 @@ class ModuleConfigRevision(Base):
     actor = Column(Text)
     comment = Column(Text)
     reapplied_from_id = Column(Integer, ForeignKey("module_config_revisions.id", ondelete="SET NULL"))
+    # [{path, owner_kind, owner_id, field, name, sha256}]: JSON pointers whose value came from a secret file
+    secret_paths = Column(JSONB, nullable=False, default=list, server_default="[]")
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
 
     __table_args__ = (

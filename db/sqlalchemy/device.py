@@ -9,7 +9,7 @@ from db.models.device_type import DeviceType
 from db.models.endpoint import Endpoint
 from db.registry import register_repository
 from db.repos.device import DeviceRepository
-from db.merge import resolve_fields, validate_instance_data, patch_data, merge_type_fields, materialize_defaults
+from db.merge import resolve_fields, validate_instance_data, patch_data, merge_type_fields, materialize_defaults, reject_file_reference_changes
 from db.sqlalchemy.device_defaults import effective_type_fields
 from exceptions import APIError
 
@@ -192,6 +192,12 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
 
         return response
 
+    async def get_effective_fields(self, device_id: str) -> Optional[Dict[str, Any]]:
+        device = await self._get_device(device_id)
+        if not device:
+            return None
+        return await self._effective_fields_for(await self._get_device_type_or_raise(device.type_id))
+
     async def update_device_metadata(
         self,
         device_id: str,
@@ -213,6 +219,7 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         device = result.scalar_one_or_none()
         if device is None:
             return None
+        reject_file_reference_changes(device.device_data or {}, metadata, effective_fields)
         merged_data = patch_data(device.device_data or {}, metadata)
         validate_instance_data(merged_data, effective_fields)
 
@@ -273,6 +280,7 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         self, metadata: Dict[str, Any], type_id: str = "default"
     ) -> Dict[str, Any]:
         fields = await self._locked_type_fields(type_id)
+        reject_file_reference_changes({}, metadata, fields)
         return materialize_defaults(metadata, fields)
 
     async def create_device(

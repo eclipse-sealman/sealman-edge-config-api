@@ -11,11 +11,13 @@ _LIKE_ESCAPE = "!"
 # One row per (instance, field) with the value as the API resolves it (see db/merge.py
 # resolve_fields): the stored value, without read-time defaults. Fields that are
 # stored but not declared by the type are included too. `{fields}` is the jsonb field schema,
-# `{data}` the instance's jsonb data; both are evaluated per instance. A non-scalar stored value
-# (a list field's items) yields no text: it is not searchable.
+# `{data}` the instance's jsonb data; both are evaluated per instance. A file reference yields its
+# file name only. Any other non-scalar stored value (a list field's items) yields no text: it is not
+# searchable.
 _RESOLVED_FIELDS = """
     select k.key,
-           case when jsonb_typeof({data} -> k.key) in ('array', 'object') then null
+           case when jsonb_typeof({data} -> k.key -> '$file') = 'string' then {data} -> k.key ->> 'name'
+                when jsonb_typeof({data} -> k.key) in ('array', 'object') then null
                 else {data} ->> k.key end as value,
            {fields} -> k.key ->> 'label' as field_label
     from (

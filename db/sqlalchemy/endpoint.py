@@ -12,6 +12,7 @@ from db.merge import (
     patch_data,
     patch_fields,
     reject_non_changeable_updates,
+    reject_file_reference_changes,
     normalize_list_values,
     validate_instance_data,
     with_item_order,
@@ -42,9 +43,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         return et
 
     async def _get_endpoint(self, endpoint_id: str) -> Optional[Endpoint]:
-        result = await self._session.execute(
-            select(Endpoint).where(Endpoint.endpoint_id == endpoint_id)
-        )
+        result = await self._session.execute(select(Endpoint).where(Endpoint.endpoint_id == endpoint_id))
         return result.scalar_one_or_none()
 
     async def get_endpoint_types(self) -> List[Dict[str, Any]]:
@@ -208,6 +207,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         endpoint_data: Dict[str, Any],
     ) -> Dict[str, Any]:
         et = await self._get_endpoint_type_or_raise(type_id, lock=True, shared=True)
+        reject_file_reference_changes({}, endpoint_data or {}, et.fields or {})
         endpoint_data = materialize_defaults(endpoint_data or {}, et.fields or {})
         endpoint_data = normalize_list_values(endpoint_data, {}, et.fields or {})
         validate_instance_data(endpoint_data, et.fields or {})
@@ -250,6 +250,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             new_et = types[type_id]
             # Keep explicit clears out of initialization, including cells on retained rows.
             patch = endpoint_data or {}
+            reject_file_reference_changes(endpoint.endpoint_data or {}, patch, new_et.fields or {})
             merged_data = materialize_defaults(
                 patch_data(endpoint.endpoint_data or {}, patch), new_et.fields or {}
             )
@@ -269,6 +270,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             et = types[endpoint.type_id]
             patch = endpoint_data or {}
             reject_non_changeable_updates(endpoint.endpoint_data or {}, patch, et.fields or {})
+            reject_file_reference_changes(endpoint.endpoint_data or {}, patch, et.fields or {})
             merged_data = patch_data(endpoint.endpoint_data or {}, patch)
             merged_data = normalize_list_values(
                 merged_data, endpoint.endpoint_data or {}, et.fields or {}

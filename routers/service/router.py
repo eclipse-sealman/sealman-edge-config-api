@@ -4,6 +4,7 @@ from pydantic import ValidationError as PydanticValidationError
 from exceptions import APIError
 from authorization.abac_permission_check import ABACAnyPermissionCheck, ABACPermissionCheck, ABACResolvedDeviceCheck
 from authorization.permission_types import Device, Platform
+from db.repos.field_file import FieldFileRepository
 from db.repos.service import UNSET, ServiceRepository
 from db.repos.scan_ports import ScanPortsRepository
 from db.session import get_repository
@@ -165,12 +166,14 @@ async def delete_service_type(
     type_id: str,
     cascade: bool = False,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    files: FieldFileRepository = Depends(get_repository(FieldFileRepository)),
     _auth=_type_write,
 ) -> None:
     try:
         await repo.delete_service_type(type_id, cascade=cascade)
     except APIError as exc:
         _handle_api_error(exc)
+    await files.delete_orphans()
 
 
 @services.get(
@@ -240,6 +243,7 @@ async def update_service(
     service_id: str,
     body: ServiceUpdate,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    files: FieldFileRepository = Depends(get_repository(FieldFileRepository)),
     _auth=_service_write,
 ) -> ServiceResponse:
     try:
@@ -253,6 +257,8 @@ async def update_service(
         raise HTTPException(status_code=422, detail=str(exc))
     if result is None:
         raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found")
+    # A removed custom reference leaves its file without an owner.
+    await files.delete_orphans()
     return ServiceResponse.model_validate(result)
 
 
@@ -265,6 +271,8 @@ async def update_service(
 async def delete_service(
     service_id: str,
     repo: ServiceRepository = Depends(get_repository(ServiceRepository)),
+    files: FieldFileRepository = Depends(get_repository(FieldFileRepository)),
     _auth=_service_write,
 ) -> None:
     await repo.delete_service(service_id=service_id)
+    await files.delete_orphans()

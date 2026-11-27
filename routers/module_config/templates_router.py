@@ -2,9 +2,9 @@
 Module configuration templates (global library) and template-based configuration of device
 modules with an audited revision history.
 """
-from typing import Any, Dict, List, Literal, Optional, Type
+from typing import Any, Dict, List, Literal, Optional, Set, Type
 
-from fastapi import Depends, HTTPException, Query
+from fastapi import Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
@@ -13,6 +13,7 @@ from authorization.abac_permission_check import ABACDeviceListFilter, ABACPermis
 from authorization.permission_types import Device, ModuleConfig
 from db.repos.device import DeviceRepository
 from db.repos.endpoint import EndpointRepository
+from db.repos.field_file import FieldFileRepository
 from db.repos.module_config import ModuleConfigRepository, UnknownScope
 from db.repos.service import ServiceRepository
 from db.repos.user import UserRepository
@@ -20,7 +21,12 @@ from db.session import get_repository
 from db.sqlalchemy.module_config import module_matches
 from helper import validate_iothub_id
 from routers.base_api_router import BaseAPIRouter
+from routers.field_files.router import _OCTET_STREAM, _check_file_name, _download, _remove, _store
 from routers.module_config import blocks as block_loader, service, templating
+from routers.module_config.secrets import (
+    DefaultSource, RenderSource, SecretRestoreError, load_applied_files, load_render_files, load_variable_files,
+    mask_config, mask_pointers, module_owner, restore_secrets,
+)
 from routers.module_config.config_schemas.network_discover_config_v1 import NetworkDiscoverModuleConfigV1
 from routers.module_config.config_schemas.seal_module_opcua_client_config_v1 import OpcuaClientModuleConfigV1
 from routers.module_config.template_schemas import (
@@ -32,6 +38,7 @@ from routers.module_config.template_schemas import (
 _repo = Depends(get_repository(ModuleConfigRepository))
 _endpoint_repo = Depends(get_repository(EndpointRepository))
 _service_repo = Depends(get_repository(ServiceRepository))
+_files_repo = Depends(get_repository(FieldFileRepository))
 _template_read = Depends(ABACPermissionCheck(ModuleConfig.TEMPLATE_READ, device_path=None))
 _template_write = Depends(ABACPermissionCheck(ModuleConfig.TEMPLATE_WRITE, device_path=None))
 
@@ -44,6 +51,10 @@ def _variables(model: Any) -> List[Dict[str, Any]]:
     return [v.model_dump(exclude_none=True) for v in model.variables]
 
 
+def _slot_decls(model: Any) -> List[Dict[str, Any]]:
+    return [s.model_dump() for s in model.slots]
+
+
 def _findings_error(message: str, findings: List[Dict[str, str]]) -> JSONResponse:
     # The app-wide HTTPException handler stringifies `detail`; findings must stay structured for the UI.
     return JSONResponse(status_code=422, content={"message": message, "findings": findings})
@@ -53,7 +64,33 @@ def _version_out(version: Dict[str, Any], blocks: templating.BlockVersions) -> D
     """A stored version as people see it: references written by block name."""
     return {**version, "body": block_loader.show_names(version["body"], blocks),
             "references": templating.references(version["body"], blocks),
-            "inputs": templating.inputs(version["body"], version["variables"], blocks)}
+            "inputs": templating.inputs(version["body"], version["variables"], blocks, version.get("slots"))}
+
+
+async def _with_stored_defaults(files_repo: FieldFileRepository, owner_id: str,
+                                variables: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The declarations with the default of each file variable shown as the file stored for it now (a default
+    can be replaced without saving a version, and renders at once); a default whose file is gone is left out."""
+    out = []
+    for decl in variables:
+        if decl.get("type") != "file" or decl.get("default") is None:
+            out.append(decl)
+            continue
+        stored = await files_repo.get("template", owner_id, decl["name"])
+        rest = {k: v for k, v in decl.items() if k != "default"}
+        out.append({**rest, "default": stored.reference()} if stored else rest)
+    return out
+
+
+async def _shown_version(files_repo: FieldFileRepository, version: Dict[str, Any],
+                         blocks: Optional[templating.BlockVersions]) -> Dict[str, Any]:
+    """`_version_out` with the stored default files of the template's and its blocks' variables."""
+    shown = {**version, "variables": await _with_stored_defaults(
+        files_repo, str(version["template_id"]), version["variables"])}
+    if blocks is not None:
+        blocks = {block_id: {**block, "variables": await _with_stored_defaults(
+            files_repo, str(block_id), block.get("variables") or [])} for block_id, block in blocks.items()}
+    return _version_out(shown, blocks)
 
 
 def _merge(name_findings: List[Dict[str, str]], findings: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -67,17 +104,39 @@ def _lists(model: Any) -> Dict[str, List[Dict[str, Any]]]:
     return {key: [entry.model_dump() for entry in entries] for key, entries in model.lists.items()}
 
 
+async def _type_findings(slots: List[Dict[str, Any]], endpoint_repo: EndpointRepository,
+                         service_repo: ServiceRepository) -> List[Dict[str, str]]:
+    """Slot declarations that name an endpoint or service type that does not exist."""
+    endpoint_ids = {t["type_id"] for t in await endpoint_repo.get_endpoint_types()}
+    service_ids = {t["type_id"] for t in await service_repo.get_service_types()}
+    findings: List[Dict[str, str]] = []
+    for index, decl in enumerate(slots):
+        for type_id in decl.get("endpoint_types") or []:
+            if type_id not in endpoint_ids:
+                findings.append(templating.finding(f"/slots/{index}", "error", "unknown-endpoint-type",
+                                                   f"Endpoint type '{type_id}' does not exist (slot '{decl.get('name')}')"))
+        for type_id in decl.get("service_types") or []:
+            if type_id not in service_ids:
+                findings.append(templating.finding(f"/slots/{index}", "error", "unknown-service-type",
+                                                   f"Service type '{type_id}' does not exist (slot '{decl.get('name')}')"))
+    return findings
+
+
 async def _checked(
     repo: ModuleConfigRepository, body: Any, variables: List[Dict[str, Any]], kind: str, group_id: Optional[int],
-    self_id: Optional[int] = None, by_name: bool = True,
+    self_id: Optional[int] = None, by_name: bool = True, slots: Optional[List[Dict[str, Any]]] = None,
+    endpoint_repo: Optional[EndpointRepository] = None, service_repo: Optional[ServiceRepository] = None,
 ):
     """(stored body, blocks, findings) of a body: references written by name resolved (`by_name`, else the body
-    is already stored), lint for its kind plus, with a group, the checks of its block references. Blocks is None
-    without a group (references stay unresolved)."""
+    is already stored), lint for its kind (with the slot declarations) plus, with a group, the checks of its block
+    references. Blocks is None without a group (references stay unresolved). The type ids of the slot
+    declarations are checked when the repositories are given."""
     name_findings: List[Dict[str, str]] = []
     if by_name:
         body, name_findings = await block_loader.resolve_names(repo, body)
-    findings = _merge(name_findings, templating.lint(body, variables, kind))
+    findings = _merge(name_findings, templating.lint(body, variables, kind, slots))
+    if slots and endpoint_repo is not None and service_repo is not None:
+        findings += await _type_findings(slots, endpoint_repo, service_repo)
     if group_id is None:
         return body, None, findings
     blocks, ref_findings = await block_loader.load_blocks(repo, body, group_id, self_id)
@@ -132,35 +191,48 @@ async def _device_endpoints(endpoint_repo: EndpointRepository, device: str) -> D
 
 
 def _slots(body: Any, blocks: Optional[templating.BlockVersions],
-           lists: Optional[Dict[str, List[Dict[str, Any]]]]) -> List[Dict[str, Any]]:
-    """The endpoint slots of a body (see `templating.inputs`) plus those of the chosen list entries, keyed
-    `<list key>/<entry name>/<slot>`."""
-    slots = templating.inputs(body, [], blocks)["endpoints"]
+           lists: Optional[Dict[str, List[Dict[str, Any]]]],
+           slots: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """The endpoint slots of a body (see `templating.inputs`, `slots` are its declarations) plus those of the
+    chosen list entries, keyed `<list key>/<entry name>/<slot>`. Each carries the types it allows."""
+    slots = templating.inputs(body, [], blocks, slots)["endpoints"]
     for key, entries in (lists or {}).items():
         for entry in entries:
             block = (blocks or {}).get(entry["block_id"])
             if block:
                 prefix = templating.COPY_SEP.join((key, entry["name"], ""))
                 slots += [{**e, "key": prefix + e["key"]}
-                          for e in templating.inputs(block["body"], [], blocks)["endpoints"]]
+                          for e in templating.inputs(block["body"], [], blocks, block.get("slots"))["endpoints"]]
     return slots
 
 
 async def _chosen_endpoints(
     endpoint_repo: EndpointRepository, device: str, body: Any, chosen: Dict[str, str],
     blocks: Optional[templating.BlockVersions], lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    slots: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Optional[Dict[str, Any]]]:
     """Slot -> fields of the endpoint chosen for it (None if none was chosen). Slots of block copies are
     keyed `<copy>/<slot>`, those of list entries `<list key>/<entry name>/<slot>`. A chosen endpoint must
-    belong to the device."""
-    slots = [e["key"] for e in _slots(body, blocks, lists)]
+    belong to the device and be of a type the slot allows."""
+    entries = _slots(body, blocks, lists, slots)
+    slots = [e["key"] for e in entries]
     if not slots:
         return {}
     endpoints = await _device_endpoints(endpoint_repo, device)
     unknown = [slot for slot in slots if chosen.get(slot) and chosen[slot] not in endpoints]
     if unknown:
         raise HTTPException(status_code=422, detail=f"Endpoint chosen for '{unknown[0]}' is not on device '{device}'")
+    for entry in entries:
+        allowed = entry["endpoint_types"]
+        if chosen.get(entry["key"]) and allowed and endpoints[chosen[entry["key"]]]["type_id"] not in allowed:
+            labels = {t["type_id"]: t["label"] for t in await endpoint_repo.get_endpoint_types()}
+            raise HTTPException(status_code=422, detail=_type_text("Endpoint", entry["key"], allowed, labels))
     return {slot: endpoints[chosen[slot]]["fields"] if chosen.get(slot) else None for slot in slots}
+
+
+def _type_text(what: str, slot: str, allowed: List[str], labels: Dict[str, str]) -> str:
+    """422 text for a choice of a type the slot does not allow; a deleted type shows as its id."""
+    return f"{what} chosen for '{slot}' must be of type {', '.join(labels.get(t, t) for t in allowed)}"
 
 
 async def _service_mappings(service_repo: ServiceRepository) -> Dict[str, Dict[str, str]]:
@@ -170,10 +242,14 @@ async def _service_mappings(service_repo: ServiceRepository) -> Dict[str, Dict[s
 async def _chosen_services(
     service_repo: ServiceRepository, body: Any, endpoints: Dict[str, str], chosen: Dict[str, str],
     blocks: Optional[templating.BlockVersions], lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    slots: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Optional[Dict[str, Any]]]:
     """Slot -> fields of the service chosen for it (None if none was chosen), for every endpoint slot used by
-    a `${service[...]}` placeholder. A chosen service must be one of the endpoint chosen for that slot."""
-    slots = [e["key"] for e in _slots(body, blocks, lists) if e["service_fields"]]
+    a `${service[...]}` placeholder. A chosen service must be one of the endpoint chosen for that slot and of
+    a type the slot allows."""
+    used = [e for e in _slots(body, blocks, lists, slots) if e["service_fields"]]
+    slots = [e["key"] for e in used]
+    allowed = {e["key"]: e["service_types"] for e in used}
     if not slots:
         return {}
     mappings = await _service_mappings(service_repo)
@@ -185,7 +261,55 @@ async def _chosen_services(
         found = await service_repo.get_service(chosen[slot])
         if found is None or not endpoints.get(slot) or found["endpoint_id"] != endpoints[slot]:
             raise HTTPException(status_code=422, detail=f"Service chosen for '{slot}' is not on the chosen endpoint")
+        if allowed[slot] and found["type_id"] not in allowed[slot]:
+            labels = {t["type_id"]: t["label"] for t in await service_repo.get_service_types()}
+            raise HTTPException(status_code=422, detail=_type_text("Service", slot, allowed[slot], labels))
         out[slot] = templating.service_fields(found, mappings.get(found["type_id"], {}))
+    return out
+
+
+def _file_sources(
+    device_id: Optional[str], device_meta: Optional[Dict[str, Any]],
+    endpoints: Optional[Dict[str, Optional[Dict[str, Any]]]], chosen_endpoints: Optional[Dict[str, str]],
+    services: Optional[Dict[str, Optional[Dict[str, Any]]]], chosen_services: Dict[str, str],
+) -> List[RenderSource]:
+    """The entities whose files a render may use, each with its id: the device (only with a stored device,
+    never sample metadata), and the endpoint and service chosen for each slot."""
+    sources: List[RenderSource] = [("device", device_id, device_meta)] if device_id is not None else []
+    sources += [("endpoint", chosen_endpoints[slot], fields) for slot, fields in (endpoints or {}).items() if fields]
+    sources += [("service", chosen_services[slot], fields) for slot, fields in (services or {}).items() if fields]
+    return sources
+
+
+def _default_sources(template_id: Optional[int], variables: List[Dict[str, Any]],
+                    blocks: Optional[templating.BlockVersions]) -> List[DefaultSource]:
+    """The variable declarations whose default files a render may use, each with the id of the template or
+    block that owns them: the template being rendered (if it has an id) and the blocks it uses."""
+    sources: List[DefaultSource] = [(str(template_id), decl) for decl in variables] if template_id is not None else []
+    for block_id, block in (blocks or {}).items():
+        sources += [(str(block_id), decl) for decl in block.get("variables") or []]
+    return sources
+
+
+def _chosen_rows(
+    body: Any, endpoints: Dict[str, Optional[Dict[str, Any]]], chosen: Dict[str, Dict[str, str]],
+    blocks: Optional[templating.BlockVersions], lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> Dict[str, Dict[str, str]]:
+    """Slot -> {list field: row id} for the slots and fields the template reads rows of. A chosen id must
+    be a row of that field on the endpoint chosen for the slot; an endpoint without rows in the field is left
+    to the renderer."""
+    out: Dict[str, Dict[str, str]] = {}
+    for entry in _slots(body, blocks, lists):
+        slot = entry["key"]
+        for field in entry["row_fields"]:
+            row_id = (chosen.get(slot) or {}).get(field)
+            if not row_id:
+                continue
+            rows = templating.rows_of((endpoints.get(slot) or {}).get(field))
+            if rows and all(row.get("id") != row_id for row in rows):
+                raise HTTPException(status_code=422,
+                                    detail=f"Row chosen for '{slot}' in '{field}' is not on the chosen endpoint")
+            out.setdefault(slot, {})[field] = row_id
     return out
 
 
@@ -213,6 +337,78 @@ async def _template_or_404(repo: ModuleConfigRepository, template_id: int) -> Di
     if template is None:
         raise HTTPException(status_code=404, detail="Template not found")
     return template
+
+
+def _file_variables(variables: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [v for v in variables if v.get("type") == "file"]
+
+
+async def _check_defaults(files_repo: Optional[FieldFileRepository], template_id: Optional[int],
+                          variables: List[Dict[str, Any]]):
+    """(variables, findings, secret fields): the default of a file variable is always the file stored for that
+    variable of this template, whatever reference was sent (another tab may have uploaded a newer one), so a
+    saved version never points at another owner's file. Without a stored file a default is refused. A declared
+    `secret` makes a stored file secret (`secret fields`, to be applied after the save is accepted); a file
+    never becomes public by a save. A new template has no files yet."""
+    findings: List[Dict[str, str]] = []
+    checked, secret_fields = [], []
+    for index, decl in enumerate(variables):
+        if decl.get("type") != "file" or decl.get("default") is None:
+            checked.append(decl)
+            continue
+        stored = await files_repo.get("template", str(template_id), decl["name"]) if template_id is not None else None
+        if stored is None:
+            message = ("A default file can be added after the template is saved" if template_id is None else
+                       f"The default of '{decl['name']}' must be a file uploaded for this variable (upload it, then save)")
+            findings.append(templating.finding(f"/variables/{index}", "error", "bad-default", message))
+            continue
+        if decl.get("secret") and not stored.secret:
+            secret_fields.append(decl["name"])
+        checked.append({**decl, "default": stored.reference()})
+    return checked, findings, secret_fields
+
+
+def _file_keys(found: Dict[str, Any], lists: Dict[str, List[Dict[str, Any]]]) -> Set[str]:
+    """Keys of the file variables of a rendering (`found` from `templating.inputs`): the body's and its copies',
+    and those of the entries chosen for its lists (`<list>/<entry>/<key in the entry's block>`)."""
+    keys = {v["key"] for v in found["variables"] if v.get("type") == "file"}
+    for item in found["lists"]:
+        entry_inputs = {block["block_id"]: block["inputs"] for block in item["blocks"]}
+        for entry in lists.get(item["key"]) or []:
+            block_inputs = entry_inputs.get(entry.get("block_id"))
+            if block_inputs is not None:
+                prefix = f"{item['key']}{templating.COPY_SEP}{entry['name']}"
+                keys |= {f"{prefix}{templating.COPY_SEP}{key}" for key in _file_keys(block_inputs, {})}
+    return keys
+
+
+def _file_declaration(found: Dict[str, Any], key: str) -> Optional[Dict[str, Any]]:
+    """The declaration of the file variable `key` of a template (`found` from `templating.inputs`), None if there
+    is none. A key inside a list entry (`<list>/<entry name>/<key>`) names no block, as entries are chosen when
+    applying: it is secret if it is secret in any block the list allows."""
+    for decl in found["variables"]:
+        if decl["key"] == key:
+            return decl if decl.get("type") == "file" else None
+    for item in found["lists"]:
+        start = item["key"] + templating.COPY_SEP
+        entry, _, rest = key[len(start):].partition(templating.COPY_SEP) if key.startswith(start) else ("", "", "")
+        if not templating.ENTRY_NAME_RE.fullmatch(entry):
+            continue
+        decls = [d for block in item["blocks"] for d in block["inputs"]["variables"]
+                 if d["key"] == rest and d.get("type") == "file"]
+        if decls:
+            return {**decls[0], "secret": any(d.get("secret") for d in decls)}
+    return None
+
+
+def _file_defaults(variables: List[Dict[str, Any]]) -> List[str]:
+    """Names of the file variables that have a default (only those keep a stored file)."""
+    return [v["name"] for v in _file_variables(variables) if v.get("default") is not None]
+
+
+def _refuse_archived(template: Dict[str, Any]) -> None:
+    if template["archived"]:
+        raise HTTPException(status_code=409, detail="The template is archived")
 
 
 # ------------------------------------------------------------------ groups
@@ -319,12 +515,15 @@ async def list_templates(
 
 
 @module_config_templates.post("/lint", response_model=LintResponse)
-async def lint_template(req: LintRequest, repo: ModuleConfigRepository = _repo, _=_template_read):
+async def lint_template(req: LintRequest, repo: ModuleConfigRepository = _repo,
+                        endpoint_repo: EndpointRepository = _endpoint_repo, service_repo: ServiceRepository = _service_repo,
+                        _=_template_read):
     """Checks an unsaved template or block; with `group_id` also its block references."""
-    body, blocks, findings = await _checked(repo, req.body, _variables(req), req.kind, req.group_id)
+    body, blocks, findings = await _checked(repo, req.body, _variables(req), req.kind, req.group_id,
+                                            slots=_slot_decls(req), endpoint_repo=endpoint_repo, service_repo=service_repo)
     return {"ok": not templating.has_errors(findings), "findings": findings,
             "references": templating.references(body, blocks),
-            "inputs": templating.inputs(body, _variables(req), blocks)}
+            "inputs": templating.inputs(body, _variables(req), blocks, _slot_decls(req))}
 
 
 @module_config_templates.post("/preview", response_model=RenderResponse)
@@ -336,10 +535,14 @@ async def preview_template(
     user_repo: UserRepository = Depends(get_repository(UserRepository)),
     endpoint_repo: EndpointRepository = _endpoint_repo,
     service_repo: ServiceRepository = _service_repo,
+    files_repo: FieldFileRepository = _files_repo,
     _=_template_read,
 ):
     """Renders an unsaved template with sample values and either sample device metadata (`device`) or the
-    metadata of a real example device (`device_id`, which must be in the caller's scope and in the template group's)."""
+    metadata of a real example device (`device_id`, which must be in the caller's scope and in the template group's).
+    File variables render the default files of `template_id` (the template being edited) and of the blocks used."""
+    if req.template_id is not None:
+        await _template_or_404(repo, req.template_id)  # visible as for get_template
     device_meta = req.device
     if req.device_id is not None:
         if req.group_id is None:
@@ -362,25 +565,41 @@ async def preview_template(
     entry_findings = templating.check_entries(body, lists, blocks)
     if templating.has_errors(entry_findings):
         return _findings_error("The list entries have errors", entry_findings)
-    endpoints, services = None, None
+    endpoints, services, rows = None, None, None
     if req.device_id is not None and req.endpoints is not None:
-        endpoints = await _chosen_endpoints(endpoint_repo, req.device_id, body, req.endpoints, blocks, lists)
-        services = await _chosen_services(service_repo, body, req.endpoints, req.services, blocks, lists)
+        endpoints = await _chosen_endpoints(endpoint_repo, req.device_id, body, req.endpoints, blocks, lists,
+                                          _slot_decls(req))
+        services = await _chosen_services(service_repo, body, req.endpoints, req.services, blocks, lists,
+                                          _slot_decls(req))
+        rows = _chosen_rows(body, endpoints, req.rows, blocks, lists)
+    secrets: List[Dict[str, str]] = []
+    # sample metadata comes from the request: it may not pull in stored files (they render as missing-file)
+    files = await load_render_files(files_repo, _file_sources(req.device_id, device_meta, endpoints, req.endpoints,
+                                                             services, req.services))
+    default_files = await load_variable_files(files_repo, _default_sources(req.template_id, _variables(req), blocks))
     config, findings = templating.render(body, _variables(req), req.values, device_meta, endpoints, blocks, req.kind,
-                                         lists, services)
+                                         lists, services, rows, files=files, secrets=secrets,
+                                         default_files=default_files, template_id=req.template_id)
     findings = _merge(name_findings, ref_findings + findings)
-    return {"ok": config is not None and not templating.has_errors(findings), "config": config, "findings": findings}
+    return {"ok": config is not None and not templating.has_errors(findings), "config": mask_config(config, secrets),
+            "findings": findings}
 
 
 @module_config_templates.post("", response_model=TemplateOut, status_code=201)
-async def create_template(req: TemplateCreate, repo: ModuleConfigRepository = _repo, auth=_template_write):
+async def create_template(req: TemplateCreate, repo: ModuleConfigRepository = _repo,
+                          endpoint_repo: EndpointRepository = _endpoint_repo, service_repo: ServiceRepository = _service_repo,
+                          auth=_template_write):
     await _group_or_404(repo, req.group_id)
-    body, _, findings = await _checked(repo, req.body, _variables(req), req.kind, req.group_id)
+    body, _, findings = await _checked(repo, req.body, _variables(req), req.kind, req.group_id,
+                                       slots=_slot_decls(req), endpoint_repo=endpoint_repo, service_repo=service_repo)
+    variables, default_findings, _ = await _check_defaults(None, None, _variables(req))
+    reported = {f["path"] for f in findings if f["level"] == "error"}
+    findings += [f for f in default_findings if f["path"] not in reported]
     if templating.has_errors(findings):
         return _findings_error("The template has errors", findings)
     created = await repo.create_template(
         name=req.name, description=req.description, group_id=req.group_id,
-        body=body, variables=_variables(req), comment=req.comment,
+        body=body, variables=variables, slots=_slot_decls(req), comment=req.comment,
         created_by=auth["user_name"], kind=req.kind,
     )
     if created is None:
@@ -430,7 +649,7 @@ async def list_template_versions(template_id: int, repo: ModuleConfigRepository 
 
 @module_config_templates.get("/{template_id}/versions/{version}", response_model=TemplateVersionOut)
 async def get_template_version(template_id: int, version: str, repo: ModuleConfigRepository = _repo,
-                               _=_template_read):
+                               files_repo: FieldFileRepository = _files_repo, _=_template_read):
     """`version` is a number or `latest`."""
     if version != "latest" and not version.isdigit():
         raise HTTPException(status_code=400, detail="version must be a number or 'latest'")
@@ -439,29 +658,38 @@ async def get_template_version(template_id: int, version: str, repo: ModuleConfi
     if found is None:
         raise HTTPException(status_code=404, detail="Template version not found")
     blocks, _ = await _version_blocks(repo, template, found)
-    return _version_out(found, blocks)
+    return await _shown_version(files_repo, found, blocks)
 
 
 @module_config_templates.post("/{template_id}/versions", response_model=TemplateVersionOut, status_code=201)
 async def add_template_version(template_id: int, req: TemplateContent, repo: ModuleConfigRepository = _repo,
-                               auth=_template_write):
-    """Saves an edit as the next immutable version."""
+                               endpoint_repo: EndpointRepository = _endpoint_repo,
+                               service_repo: ServiceRepository = _service_repo,
+                               files_repo: FieldFileRepository = _files_repo, auth=_template_write):
+    """Saves an edit as the next immutable version. Default files of variables the version no longer declares
+    as files are removed."""
     template = await _template_or_404(repo, template_id)
-    if template["archived"]:
-        raise HTTPException(status_code=409, detail="The template is archived")
+    _refuse_archived(template)
     body, blocks, findings = await _checked(repo, req.body, _variables(req), template["kind"], template["group_id"],
-                                            template_id)
+                                            template_id, slots=_slot_decls(req), endpoint_repo=endpoint_repo,
+                                            service_repo=service_repo)
+    variables, default_findings, secret_fields = await _check_defaults(files_repo, template_id, _variables(req))
+    findings += default_findings
     if templating.has_errors(findings):
         return _findings_error("The template has errors", findings)
     version = await repo.add_version(
-        template_id, body=body, variables=_variables(req), comment=req.comment, created_by=auth["user_name"],
+        template_id, body=body, variables=variables, slots=_slot_decls(req), comment=req.comment,
+        created_by=auth["user_name"],
     )
-    return _version_out(version, blocks)
+    for field in secret_fields:
+        await files_repo.mark_secret("template", str(template_id), field)
+    await files_repo.remove_except("template", str(template_id), _file_defaults(variables))
+    return await _shown_version(files_repo, version, blocks)
 
 
 @module_config_templates.post("/{template_id}/duplicate", response_model=TemplateOut, status_code=201)
 async def duplicate_template(template_id: int, req: TemplateDuplicate, repo: ModuleConfigRepository = _repo,
-                             auth=_template_write):
+                             files_repo: FieldFileRepository = _files_repo, auth=_template_write):
     """"Save as": copies a version into a new template (version 1) that records where it came from."""
     source = await _template_or_404(repo, template_id)
     version = await repo.get_version(template_id, req.version)
@@ -470,20 +698,78 @@ async def duplicate_template(template_id: int, req: TemplateDuplicate, repo: Mod
     group_id = req.group_id if req.group_id is not None else source["group_id"]
     await _group_or_404(repo, group_id)
     await _refuse_group_move(repo, source, group_id)
-    _, _, findings = await _checked(repo, version["body"], version["variables"], source["kind"], group_id, by_name=False)
+    _, _, findings = await _checked(repo, version["body"], version["variables"], source["kind"], group_id, by_name=False,
+                                   slots=version.get("slots"))
     if templating.has_errors(findings):
         return _findings_error("The copy has errors", findings)
     created = await repo.create_template(
         name=req.name,
         description=req.description if req.description is not None else source["description"],
-        group_id=group_id, body=version["body"], variables=version["variables"],
+        group_id=group_id, body=version["body"], variables=version["variables"], slots=version.get("slots"),
         comment=f"Duplicated from {source['name']} #{version['version']}", created_by=auth["user_name"],
         derived_from_template_id=template_id, derived_from_version=version["version"],
         kind=source["kind"],
     )
     if created is None:
         raise HTTPException(status_code=409, detail=f"A template named '{req.name}' already exists")
+    wanted = _file_defaults(version["variables"])
+    copies = await files_repo.copy_owner("template", str(template_id), str(created["id"]), fields=wanted) if wanted else {}
+    if wanted:
+        # the copy's defaults point at the copied files, a default whose file is gone is dropped
+        variables = []
+        for decl in version["variables"]:
+            copy = copies.get(decl["name"]) if decl.get("type") == "file" else None
+            rest = {k: v for k, v in decl.items() if k != "default"}
+            variables.append({**rest, "default": copy.reference()} if copy and decl.get("default") else rest)
+        await repo.set_version_variables(created["id"], 1, variables)
+        created = await repo.get_template(created["id"])
     return created
+
+
+# ------------------------------------------------------------------ default files of file variables
+# Owner kind `template`, owner id the template's id (a block is a template of kind `block`), field the variable.
+# The reference goes into the variable's `default` with the next saved version.
+
+
+def _variable_name(variable: str) -> str:
+    if not templating.valid_variable_name(variable):
+        raise HTTPException(status_code=422, detail=f"'{variable}' is not a valid variable name")
+    return variable
+
+
+@module_config_templates.put("/{template_id}/files/{variable}", openapi_extra=_OCTET_STREAM,
+                             summary="Upload the default file of a file variable")
+async def upload_template_file(
+    template_id: int, variable: str, request: Request,
+    name: str = Query(min_length=1, max_length=255, description="File name"),
+    secret: bool = Query(False, description="a secret file is never shown or downloadable"),
+    repo: ModuleConfigRepository = _repo, files_repo: FieldFileRepository = _files_repo, auth=_template_write,
+):
+    _variable_name(variable)
+    _refuse_archived(await _template_or_404(repo, template_id))
+    _check_file_name(name)
+    return await _store("template", str(template_id), variable, name, request, secret, "variable", auth, files_repo)
+
+
+@module_config_templates.get("/{template_id}/files/{variable}", summary="Download the default file of a file variable")
+async def download_template_file(
+    template_id: int, variable: str, repo: ModuleConfigRepository = _repo,
+    files_repo: FieldFileRepository = _files_repo, _=_template_read,
+):
+    _variable_name(variable)
+    await _template_or_404(repo, template_id)
+    return await _download("template", str(template_id), variable, files_repo)
+
+
+@module_config_templates.delete("/{template_id}/files/{variable}", status_code=204,
+                                summary="Remove the default file of a file variable")
+async def remove_template_file(
+    template_id: int, variable: str, repo: ModuleConfigRepository = _repo,
+    files_repo: FieldFileRepository = _files_repo, _=_template_write,
+):
+    _variable_name(variable)
+    _refuse_archived(await _template_or_404(repo, template_id))
+    return await _remove("template", str(template_id), variable, files_repo)
 
 
 # ------------------------------------------------------------------ device modules
@@ -491,7 +777,7 @@ async def duplicate_template(template_id: int, req: TemplateDuplicate, repo: Mod
 
 async def _render_for_device(
     device: str, module: str, req: RenderRequest, repo: ModuleConfigRepository, device_repo: DeviceRepository,
-    endpoint_repo: EndpointRepository, service_repo: ServiceRepository,
+    endpoint_repo: EndpointRepository, service_repo: ServiceRepository, files_repo: FieldFileRepository,
 ):
     validate_iothub_id(device)
     validate_iothub_id(module)
@@ -512,15 +798,27 @@ async def _render_for_device(
     lists = _lists(req)
     entry_findings = templating.check_entries(version["body"], lists, blocks)
     if templating.has_errors(entry_findings):
-        return template, version, None, ref_findings + entry_findings
-    endpoints = await _chosen_endpoints(endpoint_repo, device, version["body"], req.endpoints, blocks, lists)
-    services = await _chosen_services(service_repo, version["body"], req.endpoints, req.services, blocks, lists)
+        return template, version, None, ref_findings + entry_findings, []
+    endpoints = await _chosen_endpoints(endpoint_repo, device, version["body"], req.endpoints, blocks, lists,
+                                      version.get("slots"))
+    services = await _chosen_services(service_repo, version["body"], req.endpoints, req.services, blocks, lists,
+                                      version.get("slots"))
+    rows = _chosen_rows(version["body"], endpoints, req.rows, blocks, lists)
+    secrets: List[Dict[str, str]] = []
+    files = await load_render_files(files_repo, _file_sources(device, device_meta, endpoints, req.endpoints,
+                                                             services, req.services))
+    default_files = await load_variable_files(files_repo,
+                                              _default_sources(template["id"], version["variables"], blocks))
+    found = templating.inputs(version["body"], version["variables"], blocks, version.get("slots"))
+    applied_files = await load_applied_files(files_repo, device, module, req.values, _file_keys(found, lists))
     config, findings = templating.render(version["body"], version["variables"], req.values, device_meta, endpoints,
-                                         blocks, lists=lists, services=services)
+                                         blocks, lists=lists, services=services, rows=rows, files=files,
+                                         secrets=secrets, default_files=default_files, template_id=template["id"],
+                                         applied_files=applied_files)
     findings = ref_findings + findings
     if not templating.has_errors(findings):
         findings += _schema_findings(module, config)
-    return template, version, config, findings
+    return template, version, config, findings, secrets
 
 
 @module_config_devices.get("/{device}/modules/{module}/config/templates", response_model=List[TemplateOut])
@@ -534,8 +832,61 @@ async def list_templates_for_module(
     module and its scopes (if any) match the device."""
     validate_iothub_id(device)
     validate_iothub_id(module)
+    return await _templates_for_module(repo, device_repo, device, module)
+
+
+async def _templates_for_module(repo: ModuleConfigRepository, device_repo: DeviceRepository, device: str,
+                                module: str) -> List[Dict[str, Any]]:
     device_meta = await device_repo.get_device_meta_raw(device)
     return [t for t in await repo.list_templates(module=module, kind="template") if available_for_device(t, device_meta)]
+
+
+# ------------------------------------------------------------------ files uploaded when applying
+# Owner kind `module`, owner id `<device>/<module>`, field the variable key (`<copy>/<name>` in a block copy).
+# The apply request sends the reference as the variable's value; the file is rendered for this device and module.
+
+
+@module_config_devices.put("/{device}/modules/{module}/config/files", openapi_extra=_OCTET_STREAM,
+                           summary="Upload another file for a file variable when applying a template")
+async def upload_module_file(
+    device: str, module: str, request: Request,
+    variable: str = Query(min_length=1, max_length=512, description="Variable key, `<copy>/<name>` in a block copy"),
+    template_id: int = Query(description="The template being applied"),
+    name: str = Query(min_length=1, max_length=255, description="File name"),
+    repo: ModuleConfigRepository = _repo,
+    device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    files_repo: FieldFileRepository = _files_repo,
+    auth=Depends(ABACPermissionCheck(Device.MODULE_CONFIG_APPLY)),
+):
+    """`secret` is that of the variable's declaration in the template's latest version. Nothing is read back."""
+    validate_iothub_id(device)
+    validate_iothub_id(module)
+    template = next((t for t in await _templates_for_module(repo, device_repo, device, module)
+                     if t["id"] == template_id), None)
+    version = await repo.get_version(template_id) if template is not None else None
+    if version is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    blocks, _ = await _version_blocks(repo, template, version)
+    decl = _file_declaration(templating.inputs(version["body"], version["variables"], blocks, version.get("slots")),
+                             variable)
+    if decl is None:
+        raise HTTPException(status_code=422, detail=f"'{variable}' is not a file variable of this template")
+    _check_file_name(name)
+    return await _store("module", module_owner(device, module), variable, name, request, bool(decl.get("secret")),
+                        "variable", auth, files_repo)
+
+
+@module_config_devices.delete("/{device}/modules/{module}/config/files", status_code=204,
+                              summary="Remove the file uploaded for a file variable when applying")
+async def remove_module_file(
+    device: str, module: str,
+    variable: str = Query(min_length=1, max_length=512, description="Variable key"),
+    files_repo: FieldFileRepository = _files_repo,
+    _=Depends(ABACPermissionCheck(Device.MODULE_CONFIG_APPLY)),
+):
+    validate_iothub_id(device)
+    validate_iothub_id(module)
+    return await _remove("module", module_owner(device, module), variable, files_repo)
 
 
 @module_config_devices.get("/{device}/config/endpoints", response_model=List[DeviceEndpointOption])
@@ -581,14 +932,15 @@ async def render_module_config(
     device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
     endpoint_repo: EndpointRepository = _endpoint_repo,
     service_repo: ServiceRepository = _service_repo,
+    files_repo: FieldFileRepository = _files_repo,
     _=Depends(ABACPermissionCheck(Device.READ)),
 ):
-    """Dry run: renders the template for this device and returns the config and findings."""
-    _, version, config, findings = await _render_for_device(device, module, req, repo, device_repo, endpoint_repo,
-                                                            service_repo)
+    """Dry run: renders the template for this device and returns the config (secret files masked) and findings."""
+    _, version, config, findings, secrets = await _render_for_device(device, module, req, repo, device_repo,
+                                                                     endpoint_repo, service_repo, files_repo)
     return {
         "ok": config is not None and not templating.has_errors(findings),
-        "template_id": req.template_id, "version": version["version"], "config": config, "findings": findings,
+        "template_id": req.template_id, "version": version["version"], "config": mask_config(config, secrets), "findings": findings,
     }
 
 
@@ -599,13 +951,22 @@ async def apply_module_config(
     device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
     endpoint_repo: EndpointRepository = _endpoint_repo,
     service_repo: ServiceRepository = _service_repo,
+    files_repo: FieldFileRepository = _files_repo,
     auth=Depends(ABACPermissionCheck(Device.MODULE_CONFIG_APPLY)),
 ):
     """Renders the template for this device and, if there are no errors, writes it to the module."""
-    template, version, config, findings = await _render_for_device(device, module, req, repo, device_repo, endpoint_repo,
-                                                                   service_repo)
+    template, version, config, findings, secrets = await _render_for_device(device, module, req, repo, device_repo,
+                                                                            endpoint_repo, service_repo, files_repo)
     if template["archived"]:
         raise HTTPException(status_code=409, detail="The template is archived")
+    if config is not None and not templating.has_errors(findings):
+        # a mask written into the template or a value would reach the device as the key
+        secret_pointers = {s["path"] for s in secrets}
+        findings = findings + [
+            {"path": pointer, "level": "error", "code": "secret-placeholder",
+             "message": "This value is a secret placeholder and cannot be applied"}
+            for pointer in mask_pointers(config) if pointer not in secret_pointers
+        ]
     if config is None or templating.has_errors(findings):
         return _findings_error("The configuration has errors", findings)
     values = {k: v for k, v in req.values.items() if not k.startswith("$")}
@@ -615,9 +976,11 @@ async def apply_module_config(
         values["$lists"] = _lists(req)
     if req.services:
         values["$services"] = req.services
+    if req.rows:
+        values["$rows"] = req.rows
     result = await service.write_module_config(
         device, module, config, source="template", actor=auth["user_name"], repo=repo,
-        template_id=template["id"], values=values, comment=req.comment,
+        template_id=template["id"], values=values, comment=req.comment, secret_paths=secrets,
     )
     revision = result["revision"]
     if revision:
@@ -660,6 +1023,8 @@ async def get_module_config_revision(
     if revision is None:
         raise HTTPException(status_code=404, detail="Revision not found")
     content = await service.read_revision_content(device, module, revision["blob_name"])
+    if content is not None and revision["secret_paths"]:
+        content = mask_config(content, revision["secret_paths"])
     [named] = await _with_template_names(repo, [revision], None)
     named.pop("current")
     return {**named, "content": content, "content_available": content is not None and revision["blob_name"] != "current"}
@@ -673,8 +1038,10 @@ async def reapply_module_config_revision(
     auth_context: dict = Depends(validate_jwt),
     user_repo: UserRepository = Depends(get_repository(UserRepository)),
     device_repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
+    files_repo: FieldFileRepository = _files_repo,
 ):
-    """Rollback: writes the exact content of an earlier revision again as a new revision.
+    """Rollback: writes the exact content of an earlier revision again as a new revision, except that its
+    secret paths get the content of the file as it is now (refused if that file has been removed or cannot be read).
     A template revision needs `device.module_config.apply`, anything else the raw write action."""
     validate_iothub_id(device)
     validate_iothub_id(module)
@@ -688,10 +1055,16 @@ async def reapply_module_config_revision(
     content = await service.read_revision_content(device, module, revision["blob_name"])
     if content is None:
         raise HTTPException(status_code=410, detail="The revision's content is no longer available")
+    secret_paths = revision["secret_paths"]
+    if secret_paths:
+        try:
+            content, secret_paths = await restore_secrets(content, secret_paths, files_repo, by="path")
+        except SecretRestoreError as exc:
+            raise HTTPException(409, str(exc))
     result = await service.write_module_config(
         device, module, content, source="reapply", actor=auth["user_name"], repo=repo,
         template_id=revision["template_id"],
         values=revision["values"], comment=req.comment or f"Re-applied revision {revision_id}",
-        reapplied_from_id=revision_id,
+        reapplied_from_id=revision_id, secret_paths=secret_paths,
     )
     return {"configId": result["configId"], "revision": result["revision"] and {**result["revision"], "current": True}}

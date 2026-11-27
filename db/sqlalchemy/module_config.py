@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,6 +66,7 @@ def _version_dict(row: ModuleConfigTemplateVersion) -> Dict[str, Any]:
         "version": row.version,
         "body": row.body,
         "variables": list(row.variables or []),
+        "slots": list(row.slots or []),
         "comment": row.comment,
         "created_by": row.created_by,
         "created_at": row.created_at,
@@ -191,7 +192,7 @@ class SQLAlchemyModuleConfigRepository(ModuleConfigRepository):
 
     async def create_template(
         self, *, name, description, group_id, body, variables, comment, created_by,
-        derived_from_template_id=None, derived_from_version=None, kind="template",
+        derived_from_template_id=None, derived_from_version=None, kind="template", slots=None,
     ) -> Optional[Dict]:
         template = ModuleConfigTemplate(
             name=name, description=description, kind=kind, group_id=group_id, created_by=created_by,
@@ -202,6 +203,7 @@ class SQLAlchemyModuleConfigRepository(ModuleConfigRepository):
             await self._session.flush()
             self._session.add(ModuleConfigTemplateVersion(
                 template_id=template.id, version=1, body=body, variables=variables,
+                slots=slots or [],
                 comment=comment, created_by=created_by,
             ))
             await self._session.commit()
@@ -230,7 +232,7 @@ class SQLAlchemyModuleConfigRepository(ModuleConfigRepository):
             raise ValueError("name taken")
         return await self.get_template(template_id)
 
-    async def add_version(self, template_id, *, body, variables, comment, created_by) -> Optional[Dict]:
+    async def add_version(self, template_id, *, body, variables, comment, created_by, slots=None) -> Optional[Dict]:
         # Locks the template row so concurrent saves get consecutive versions.
         template = (await self._session.execute(
             select(ModuleConfigTemplate).where(ModuleConfigTemplate.id == template_id).with_for_update()
@@ -244,6 +246,7 @@ class SQLAlchemyModuleConfigRepository(ModuleConfigRepository):
         number = (current or 0) + 1
         row = ModuleConfigTemplateVersion(
             template_id=template_id, version=number, body=body, variables=variables,
+            slots=slots or [],
             comment=comment, created_by=created_by,
         )
         self._session.add(row)
@@ -251,6 +254,15 @@ class SQLAlchemyModuleConfigRepository(ModuleConfigRepository):
         await self._session.commit()
         await self._session.refresh(row)
         return _version_dict(row)
+
+    async def set_version_variables(self, template_id, version, variables) -> None:
+        await self._session.execute(
+            update(ModuleConfigTemplateVersion)
+            .where(ModuleConfigTemplateVersion.template_id == template_id,
+                   ModuleConfigTemplateVersion.version == version)
+            .values(variables=variables)
+        )
+        await self._session.commit()
 
     async def list_versions(self, template_id: int) -> List[Dict]:
         rows = (await self._session.execute(
@@ -286,6 +298,15 @@ class SQLAlchemyModuleConfigRepository(ModuleConfigRepository):
             existing = await self.get_revision_by_config_id(fields["device_id"], fields["module_name"], fields["config_id"])
             if existing is None:
                 raise
+            if existing["source"] == "external" and fields.get("secret_paths"):
+                # recorded as external meanwhile (lazy sync): this write knows where its secrets are
+                stored = await self._session.get(ModuleConfigRevision, existing["id"])
+                for key, value in fields.items():
+                    if key not in ("device_id", "module_name", "config_id"):
+                        setattr(stored, key, value)
+                await self._session.commit()
+                await self._session.refresh(stored)
+                return _revision_dict(stored)
             return existing
         await self._session.refresh(row)
         return _revision_dict(row)

@@ -10,7 +10,7 @@ from db.registry import register_repository
 from db.repos.service import UNSET, ServiceRepository, _Unset
 from db.merge import (
     BlueprintResolver, materialize_defaults, newly_defaulted_fields,
-    patch_data, patch_fields, validate_instance_data,
+    patch_data, patch_fields, reject_file_reference_changes, validate_instance_data,
 )
 from db.sqlalchemy.asset_defaults import backfill_asset_defaults, validate_fields
 from db.type_roles import SERVICE_ROLE_TYPES, drop_roles_of_missing_fields, validate_type_mapping
@@ -38,9 +38,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         return service_type
 
     async def _get_service(self, service_id: str) -> Optional[Service]:
-        result = await self._session.execute(
-            select(Service).where(Service.service_id == service_id)
-        )
+        result = await self._session.execute(select(Service).where(Service.service_id == service_id))
         return result.scalar_one_or_none()
 
     def _serialize_type(self, entity_type: Any) -> Dict[str, Any]:
@@ -221,6 +219,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         service_data: Dict[str, Any],
     ) -> Dict[str, Any]:
         service_type = await self._get_service_type_or_raise(type_id, lock=True, shared=True)
+        reject_file_reference_changes({}, service_data or {}, service_type.fields or {})
         service_data = materialize_defaults(service_data or {}, service_type.fields or {})
         validate_instance_data(service_data, service_type.fields or {})
         service = Service(
@@ -247,6 +246,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         service = result.scalar_one_or_none()
         if service is None:
             return None
+        reject_file_reference_changes(service.service_data or {}, service_data, service_type.fields or {})
         merged_data = patch_data(service.service_data or {}, service_data)
         validate_instance_data(merged_data, service_type.fields or {})
         await self._session.execute(

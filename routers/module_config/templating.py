@@ -10,6 +10,9 @@ A template is a JSON object whose string values may contain placeholders:
                        a field of an endpoint of the device, chosen per slot when the template is
                        rendered for a device (``${endpoint.x}`` is the slot ``endpoint``). ``ip`` and
                        ``name`` also resolve through the endpoint type's field roles.
+- ``${endpoint.field.sub}`` / ``${endpoint[slot].field.sub}``
+                       the ``sub`` entry of one row of the endpoint's list field ``field``; the row is
+                       chosen per device when the template is rendered.
 - ``${service[slot].field}``
                        a field of the service chosen (per device) for endpoint slot ``slot``; the body
                        must also use that endpoint slot. ``port`` also resolves through the service
@@ -35,9 +38,12 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-VARIABLE_TYPES = ("string", "text", "number", "integer", "boolean", "enum")
+from field_validation import holds_file_ref, is_file_ref
+
+VARIABLE_TYPES = ("string", "text", "number", "integer", "boolean", "enum", "file")
 RESERVED_KEYS = ("$secret",)
 REF_KEY = "$ref"
 REF_RE = re.compile(r"\d+")
@@ -53,6 +59,7 @@ _WHOLE_RE = re.compile(r"\$\{([^{}]*)\}")
 _VARIABLE_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _DEVICE_PATH_RE = re.compile(r"device(\.[A-Za-z0-9_\-]+)+")
 _ENDPOINT_RE = re.compile(r"endpoint(?:\[([A-Za-z_][A-Za-z0-9_]*)\])?\.([A-Za-z0-9_\-]+)")
+_ROW_RE = re.compile(r"endpoint(?:\[([A-Za-z_][A-Za-z0-9_]*)\])?\.([A-Za-z0-9_\-]+)\.([A-Za-z0-9_\-]+)")
 _SERVICE_RE = re.compile(r"service(?:\[([A-Za-z_][A-Za-z0-9_]*)\])?\.([A-Za-z0-9_\-]+)")
 
 
@@ -144,6 +151,12 @@ def _endpoint_ref(ref: str) -> Optional[Tuple[str, str]]:
     return (match.group(1) or DEFAULT_SLOT, match.group(2)) if match else None
 
 
+def _row_ref(ref: str) -> Optional[Tuple[str, str, str]]:
+    """(slot, field, sub) for a list-row placeholder, else None."""
+    match = _ROW_RE.fullmatch(ref)
+    return (match.group(1) or DEFAULT_SLOT, match.group(2), match.group(3)) if match else None
+
+
 def _service_ref(ref: str) -> Optional[Tuple[str, str]]:
     """(endpoint slot, field) for a service placeholder, else None."""
     match = _SERVICE_RE.fullmatch(ref)
@@ -152,7 +165,7 @@ def _service_ref(ref: str) -> Optional[Tuple[str, str]]:
 
 def _valid_reference(ref: str) -> bool:
     return bool(_VARIABLE_NAME_RE.fullmatch(ref) or _DEVICE_PATH_RE.fullmatch(ref) or _ENDPOINT_RE.fullmatch(ref)
-                or _SERVICE_RE.fullmatch(ref))
+                or _ROW_RE.fullmatch(ref) or _SERVICE_RE.fullmatch(ref))
 
 
 def _service_uses(body: Any) -> Dict[str, set]:
@@ -167,6 +180,18 @@ def _service_uses(body: Any) -> Dict[str, set]:
     return slots
 
 
+def _row_uses(body: Any) -> Dict[str, Dict[str, set]]:
+    """{slot: {list field: sub names}} of the row placeholders used directly in a body (not in its blocks)."""
+    slots: Dict[str, Dict[str, set]] = {}
+    for kind, _, text in _walk_strings(body):
+        if kind == "value":
+            for ref in _placeholders(text):
+                row = _row_ref(ref)
+                if row:
+                    slots.setdefault(row[0], {}).setdefault(row[1], set()).add(row[2])
+    return slots
+
+
 def _uses(body: Any) -> Tuple[set, set, Dict[str, set]]:
     """(variable names, device paths, {slot: field names}) used directly in a body (not in its blocks)."""
     variables, device, slots = set(), set(), {}
@@ -177,7 +202,7 @@ def _uses(body: Any) -> Tuple[set, set, Dict[str, set]]:
             endpoint = _endpoint_ref(ref)
             if endpoint:
                 slots.setdefault(endpoint[0], set()).add(endpoint[1])
-            elif _service_ref(ref):
+            elif _service_ref(ref) or _row_ref(ref):
                 continue
             elif ref.startswith(DEVICE_PREFIX) and _DEVICE_PATH_RE.fullmatch(ref):
                 device.add(ref[len(DEVICE_PREFIX):])
@@ -286,25 +311,32 @@ def copies(body: Any, blocks: BlockVersions, prefix: str = "", _base: Tuple[Any,
     return out
 
 
-def inputs(body: Any, variables: List[Dict[str, Any]], blocks: Optional[BlockVersions]) -> Dict[str, Any]:
+def inputs(body: Any, variables: List[Dict[str, Any]], blocks: Optional[BlockVersions],
+           slots: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Everything a rendering needs: variables and endpoint slots of the body and of every block copy
-    (keyed `<copy>/<name>`), the device fields used anywhere, and the copies."""
+    (keyed `<copy>/<name>`), the device fields used anywhere, and the copies. Each endpoint slot carries the
+    endpoint and service types its body (or block) declares for it (empty: any type)."""
     all_copies = copies(body, blocks or {})
-    bodies = [(None, body, variables)]
+    bodies = [(None, body, variables, slots)]
     for copy in all_copies:
         block = (blocks or {}).get(copy["block_id"])
         if block:
-            bodies.append((copy["key"], block.get("body"), block.get("variables") or []))
+            bodies.append((copy["key"], block.get("body"), block.get("variables") or [], block.get("slots")))
     out_vars, out_endpoints, device = [], [], set()
-    for copy_key, copy_body, copy_vars in bodies:
+    for copy_key, copy_body, copy_vars, copy_slots in bodies:
+        declared = {d.get("name"): d for d in copy_slots or [] if isinstance(d, dict)}
         _, used_device, slots = _uses(copy_body)
         services = _service_uses(copy_body)
+        rows = _row_uses(copy_body)
         device |= used_device
         out_vars += [{**decl, "key": _key(copy_key or "", decl.get("name")), "copy": copy_key}
                      for decl in copy_vars if isinstance(decl.get("name"), str)]
         out_endpoints += [{"key": _key(copy_key or "", slot), "copy": copy_key, "slot": slot,
-                           "fields": sorted(slots.get(slot, ())), "service_fields": sorted(services.get(slot, ()))}
-                          for slot in sorted(set(slots) | set(services))]
+                           "endpoint_types": list(declared.get(slot, {}).get("endpoint_types") or []),
+                           "service_types": list(declared.get(slot, {}).get("service_types") or []),
+                           "fields": sorted(slots.get(slot, ())), "service_fields": sorted(services.get(slot, ())),
+                           "row_fields": {f: sorted(subs) for f, subs in sorted(rows.get(slot, {}).items())}}
+                          for slot in sorted(set(slots) | set(services) | set(rows))]
     out_lists = []
     for item in lists(body):
         entry_blocks = []
@@ -312,7 +344,7 @@ def inputs(body: Any, variables: List[Dict[str, Any]], blocks: Optional[BlockVer
             block = (blocks or {}).get(block_id)
             entry_blocks.append({
                 "block_id": block_id, "name": block.get("name") if block else None,
-                "inputs": inputs(block.get("body"), block.get("variables") or [], blocks) if block
+                "inputs": inputs(block.get("body"), block.get("variables") or [], blocks, block.get("slots")) if block
                 else {"variables": [], "endpoints": [], "device": [], "copies": [], "lists": []}})
         out_lists.append({"key": item["key"], "label": item["key"].replace(COPY_SEP, " · "),
                           "item_label": item["item_label"], "path": item["path"], "blocks": entry_blocks})
@@ -323,7 +355,7 @@ def inputs(body: Any, variables: List[Dict[str, Any]], blocks: Optional[BlockVer
 def references(body: Any, blocks: Optional[BlockVersions] = None) -> Dict[str, List[str]]:
     """Variable, device field and endpoint references used in a template body and its block copies.
     `endpoints` lists the endpoint slots (one endpoint is chosen per slot), `endpoint_fields` the
-    `slot.field` pairs; both keyed `<copy>/<slot>` inside copies."""
+    `slot.field` pairs (and `slot.field.sub` for list rows); both keyed `<copy>/<slot>` inside copies."""
     found = inputs(body, [], blocks)
     variables = set(_uses(body)[0])
     for copy in found["copies"]:
@@ -332,7 +364,13 @@ def references(body: Any, blocks: Optional[BlockVersions] = None) -> Dict[str, L
             variables |= {_key(copy["key"], name) for name in _uses(block.get("body"))[0]}
     return {"variables": sorted(variables), "device": found["device"],
             "endpoints": sorted(e["key"] for e in found["endpoints"]),
-            "endpoint_fields": sorted(f"{e['key']}.{f}" for e in found["endpoints"] for f in e["fields"])}
+            "endpoint_fields": sorted([f"{e['key']}.{f}" for e in found["endpoints"] for f in e["fields"]]
+                                      + [f"{e['key']}.{f}.{sub}" for e in found["endpoints"]
+                                         for f, subs in e["row_fields"].items() for sub in subs])}
+
+
+def valid_variable_name(name: str) -> bool:
+    return bool(_VARIABLE_NAME_RE.fullmatch(name))
 
 
 def coerce(value: Any, decl: Dict[str, Any]) -> Any:
@@ -381,10 +419,15 @@ def coerce(value: Any, decl: Dict[str, Any]) -> Any:
             if isinstance(value, str) and str(option) == value:
                 return option
         raise ValueError(f"must be one of {', '.join(map(str, options))}")
+    if var_type == "file":
+        if is_file_ref(value):
+            return value
+        raise ValueError("expected an uploaded file")
     raise ValueError(f"unknown type '{var_type}'")
 
 
-def lint(body: Any, variables: List[Dict[str, Any]], kind: str = "template") -> List[Dict[str, str]]:
+def lint(body: Any, variables: List[Dict[str, Any]], kind: str = "template",
+         slots: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, str]]:
     """Static checks of a template or block (no values, no device). A template body must be an object,
     a block body an object or an array."""
     findings: List[Dict[str, str]] = []
@@ -418,9 +461,34 @@ def lint(body: Any, variables: List[Dict[str, Any]], kind: str = "template") -> 
         if var_type == "enum" and not decl.get("options"):
             findings.append(finding(path, "error", "enum-without-options", f"Enum variable '{name}' needs options"))
             continue
+        if var_type == "file" and decl.get("options"):
+            findings.append(finding(path, "error", "file-variable-options", f"File variable '{name}' takes no options"))
+        if var_type != "file" and decl.get("secret"):
+            findings.append(finding(path, "error", "secret-without-file",
+                                    f"Variable '{name}' is not a file, only file variables can be secret"))
+        if var_type != "file" and decl.get("default") is not None:
+            findings.append(finding(path, "error", "default-without-file",
+                                    f"Variable '{name}' is not a file, only file variables have a default"))
+        elif var_type == "file" and decl.get("default") is not None and not is_file_ref(decl["default"]):
+            findings.append(finding(path, "error", "bad-default",
+                                    f"The default of '{name}' must be an uploaded file"))
 
     used = set()
-    endpoint_slots = _uses(body)[2]
+    endpoint_slots = set(_uses(body)[2]) | set(_row_uses(body))
+    service_slots = set(_service_uses(body))
+    seen_slots = set()
+    for index, decl in enumerate(slots or []):
+        path, name = f"/slots/{index}", decl.get("name")
+        if name in seen_slots:
+            findings.append(finding(path, "error", "duplicate-slot", f"Slot '{name}' is declared twice"))
+            continue
+        seen_slots.add(name)
+        if name not in endpoint_slots | service_slots:
+            findings.append(finding(path, "error", "unknown-slot", f"Slot '{name}' is not used in the body"))
+        elif decl.get("service_types") and name not in service_slots:
+            findings.append(finding(path, "error", "service-types-without-service",
+                                    f"Slot '{name}' restricts service types but the body has no service placeholder "
+                                    f"of that slot"))
     for kind, path, text in _walk_strings(body):
         if kind == "ref":
             continue
@@ -450,7 +518,7 @@ def lint(body: Any, variables: List[Dict[str, Any]], kind: str = "template") -> 
         for ref in _placeholders(text):
             if not _valid_reference(ref):
                 findings.append(finding(pointer(path), "error", "bad-placeholder", f"'${{{ref}}}' is not a valid placeholder"))
-            elif ref.startswith(DEVICE_PREFIX) or _endpoint_ref(ref):
+            elif ref.startswith(DEVICE_PREFIX) or _endpoint_ref(ref) or _row_ref(ref):
                 continue
             elif _service_ref(ref):
                 slot = _service_ref(ref)[0]
@@ -488,13 +556,51 @@ def _scoped(entries: Optional[Dict[str, Any]], prefix: str) -> Optional[Dict[str
             if k.startswith(start) and COPY_SEP not in k[len(start):]}
 
 
+def rows_of(value: Any) -> List[Dict[str, Any]]:
+    """The row objects of a list field's value; empty for anything that is not a list."""
+    return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
+
+
+@dataclass(frozen=True)
+class RenderFile:
+    """A decrypted file a field value can reference; `secret` is the flag of the stored file. `text` is None
+    for a stored file that cannot be decrypted."""
+    text: Optional[str]
+    secret: bool
+    name: str
+    sha256: str
+    owner_kind: str
+    owner_id: str
+    field: str
+
+
+# (owner id, variable name) -> the default file of a file variable. The owner is the template or block that
+# declares the variable (owner kind `template`); a declaration's own `$file` id never selects the file.
+DefaultFiles = Dict[Tuple[str, str], RenderFile]
+
+# variable key (`name`, `<copy>/<name>`) -> the file uploaded for that variable when applying (owner kind `module`,
+# the device and module rendered for). It renders for a supplied file reference, whatever `$file` id that carries.
+AppliedFiles = Dict[str, RenderFile]
+
+
 class _Renderer:
     def __init__(self, variables: List[Dict[str, Any]], values: Dict[str, Any], device: Optional[Dict[str, Any]],
                  endpoints: Optional[Dict[str, Optional[Dict[str, Any]]]], blocks: Optional[BlockVersions] = None,
                  prefix: str = "", stack: Tuple[int, ...] = (),
                  lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
-                 services: Optional[Dict[str, Optional[Dict[str, Any]]]] = None):
+                 services: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
+                 rows: Optional[Dict[str, Dict[str, str]]] = None,
+                 files: Optional[Dict[str, RenderFile]] = None, secrets: Optional[List[Dict[str, str]]] = None,
+                 default_files: Optional[DefaultFiles] = None, owner: Optional[str] = None,
+                 applied_files: Optional[AppliedFiles] = None):
         self.findings: List[Dict[str, str]] = []
+        self.files = files or {}
+        self.default_files = default_files or {}
+        self.applied_files = applied_files or {}
+        self.variable_files: Dict[str, Optional[RenderFile]] = {}  # variable name -> its file, None if unavailable
+        self.secrets = secrets if secrets is not None else []
+        self.all_rows = rows
+        self.rows = _scoped(rows, prefix) or {}
         self.all_services = services
         self.services = _scoped(services, prefix)
         self.lists = lists or {}
@@ -521,6 +627,12 @@ class _Renderer:
                 except ValueError as exc:
                     self.findings.append(finding(path, "error", "bad-value", f"'{name}': {exc}"))
                     self.scope[name] = OMIT
+                else:
+                    if decl.get("type") == "file":
+                        self.variable_files[name] = self.applied_files.get(_key(prefix, name))
+            elif decl.get("type") == "file" and decl.get("default") is not None:
+                self.scope[name] = decl["default"]
+                self.variable_files[name] = self.default_files.get((owner, name))
             elif decl.get("required", True):
                 self.findings.append(finding(path, "error", "missing-variable",
                                              f"'{decl.get('label') or name}' is required"))
@@ -541,10 +653,42 @@ class _Renderer:
                                          f"Block {ref} includes itself"))
             return OMIT
         child = _Renderer(block.get("variables") or [], self.all_values, self.device, self.all_endpoints,
-                          self.blocks, _key(self.prefix, name), self.stack + (ref,), services=self.all_services)
+                          self.blocks, _key(self.prefix, name), self.stack + (ref,), services=self.all_services,
+                          rows=self.all_rows, files=self.files, secrets=self.secrets,
+                          default_files=self.default_files, owner=str(ref), applied_files=self.applied_files)
         rendered = child.node(block.get("body"), path)
         self.findings.extend(child.findings)
         return rendered
+
+    def _resolve_row(self, ref: str, row_ref: Tuple[str, str, str], path: Tuple[Any, ...]) -> Any:
+        slot, field, sub = row_ref
+        if self.endpoints is None:  # no device context (template preview): keep the placeholder
+            return "${" + ref + "}"
+        endpoint = self.endpoints.get(slot)
+        if endpoint is None:
+            self.findings.append(finding(pointer(path), "error", "missing-endpoint",
+                                         f"Choose an endpoint for '{slot}'"))
+            return OMIT
+        rows = rows_of(endpoint.get(field))
+        if not rows:
+            self.findings.append(finding(pointer(path), "error", "missing-endpoint-field",
+                                         f"'{ref}': the chosen endpoint has no rows in '{field}'"))
+            return OMIT
+        chosen = (self.rows.get(slot) or {}).get(field)
+        if chosen is not None:
+            matching = [row for row in rows if row.get("id") == chosen]
+            row = matching[0] if matching else None
+        else:
+            row = rows[0] if len(rows) == 1 else None
+        if row is None:
+            self.findings.append(finding(pointer(path), "error", "missing-row",
+                                         f"Choose a row of '{field}' for '{slot}'"))
+            return OMIT
+        if row.get(sub) is None:
+            self.findings.append(finding(pointer(path), "error", "missing-row-field",
+                                         f"'{ref}': the chosen row has no '{sub}'"))
+            return OMIT
+        return row[sub]
 
     def _resolve(self, ref: str, path: Tuple[Any, ...]) -> Any:
         service_ref = _service_ref(ref)
@@ -562,6 +706,9 @@ class _Renderer:
                                              f"'{ref}': the chosen service has no '{field}'"))
                 return OMIT
             return service[field]
+        row_ref = _row_ref(ref)
+        if row_ref:
+            return self._resolve_row(ref, row_ref, path)
         endpoint_ref = _endpoint_ref(ref)
         if endpoint_ref:
             slot, field = endpoint_ref
@@ -592,16 +739,56 @@ class _Renderer:
             return node
         return self.scope.get(ref, OMIT)
 
+    def _not_whole(self, ref: str, path: Tuple[Any, ...]) -> Any:
+        self.findings.append(finding(pointer(path), "error", "file-not-whole-value",
+                                     f"'${{{ref}}}' holds a file and must be the whole value of a field, not part of a text"))
+        return OMIT
+
+    def _file_of(self, ref: str, reference: Dict[str, Any]) -> Optional[RenderFile]:
+        """The file a whole-value placeholder `ref` renders, `reference` being what it resolved to. `_resolve`
+        takes a variable from `scope`, whose names are declared variable names; an entity placeholder
+        (`device.`, `endpoint.`, `service.`) always has a '.', so it is never in `scope`. A variable renders
+        the file chosen for it in `__init__` (default or applied file), an entity field the file loaded for
+        that entity by its id."""
+        if ref in self.scope:
+            return self.variable_files.get(ref)
+        return self.files.get(reference["$file"])
+
+    def _file_text(self, ref: str, reference: Dict[str, Any], path: Tuple[Any, ...]) -> Any:
+        file = self._file_of(ref, reference)
+        if file is None:
+            self.findings.append(finding(pointer(path), "error", "missing-file", "The file is not available"))
+            return OMIT
+        if file.text is None:
+            self.findings.append(finding(pointer(path), "error", "unreadable-file",
+                                         f"'${{{ref}}}': the file cannot be read"))
+            return OMIT
+        if file.secret:
+            self.secrets.append({"path": pointer(path), "owner_kind": file.owner_kind, "owner_id": file.owner_id,
+                                 "field": file.field, "name": file.name, "sha256": file.sha256})
+        return file.text
+
     def _string(self, text: str, path: Tuple[Any, ...]) -> Any:
         whole = _WHOLE_RE.fullmatch(text)
         if whole and _valid_reference(whole.group(1)):
-            return self._resolve(whole.group(1), path)
+            value = self._resolve(whole.group(1), path)
+            if is_file_ref(value):
+                return self._file_text(whole.group(1), value, path)
+            if holds_file_ref(value):
+                return self._not_whole(whole.group(1), path)
+            return value
 
         def replace(match: re.Match) -> str:
             if match.group(0) == "$${":
                 return "${"
             ref = match.group(1)
-            return _text(self._resolve(ref, path)) if _valid_reference(ref) else match.group(0)
+            if not _valid_reference(ref):
+                return match.group(0)
+            value = self._resolve(ref, path)
+            if holds_file_ref(value):
+                self._not_whole(ref, path)
+                return ""
+            return _text(value)
 
         return _TOKEN_RE.sub(replace, text)
 
@@ -626,8 +813,18 @@ class _Renderer:
                     out[key] = rendered
             return out
         if isinstance(node, list):
-            rendered_items = (self.node(v, path + (i,), names) for i, v in enumerate(node))
-            return [item for item in rendered_items if item is not OMIT]
+            out_items = []
+            for i, v in enumerate(node):
+                mark = len(self.secrets)
+                item = self.node(v, path + (i,), names)
+                if item is OMIT:
+                    continue
+                if len(out_items) != i:  # earlier items were dropped: the item moves up
+                    old, new = pointer(path + (i,)), pointer(path + (len(out_items),))
+                    for entry in self.secrets[mark:]:
+                        entry["path"] = new + entry["path"][len(old):]
+                out_items.append(item)
+            return out_items
         if isinstance(node, str):
             return self._string(node, path)
         return node
@@ -643,6 +840,12 @@ def render(
     kind: str = "template",
     lists: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     services: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
+    rows: Optional[Dict[str, Dict[str, str]]] = None,
+    files: Optional[Dict[str, RenderFile]] = None,
+    secrets: Optional[List[Dict[str, str]]] = None,
+    default_files: Optional[DefaultFiles] = None,
+    template_id: Optional[int] = None,
+    applied_files: Optional[AppliedFiles] = None,
 ) -> Tuple[Optional[Any], List[Dict[str, str]]]:
     """Renders a template. Returns (config, findings); config is None if the template itself is invalid.
     `endpoints` maps each endpoint slot to the chosen endpoint's flat fields (see `endpoint_fields`);
@@ -651,12 +854,24 @@ def render(
     versions; None leaves references as they are. `kind` "block" also renders an array body. `lists` maps
     each list to its entries `[{"name", "block_id"}]` (see `check_entries`); a list without entries renders `{}`.
     `services` maps endpoint slots (keyed like `endpoints`) to the chosen service's flat fields (see
-    `service_fields`); None leaves service placeholders as they are."""
+    `service_fields`); None leaves service placeholders as they are. `rows` maps endpoint slots (keyed like
+    `endpoints`) to `{list field: chosen row id}`; a list field with a single row needs no choice.
+    A placeholder that is the whole value and resolves to a file reference renders the file's text; part of a
+    longer text it is a finding. Which file depends on the placeholder, never on the reference's `$file` id
+    alone: an entity field (`device.`, `endpoint.`, `service.`) renders the file of `files` (file id ->
+    decrypted file, loaded only for that entity and field). A file variable uses the per-declaration maps:
+    without a value it takes its declaration's `default` and renders the file of `default_files` for the
+    declaring owner (`template_id` for the body's variables, the block id inside a copy) and that variable
+    name; with a file reference as value it renders `applied_files[<variable key>]`, whatever id the value
+    carries. Without that file it is a missing file. For each secret file rendered, `secrets` (if given) gets
+    `{"path", "owner_kind", "owner_id", "field", "name", "sha256"}` with the JSON pointer in the config."""
     findings = lint(body, variables, kind)
     if has_errors(findings):
         return None, findings
     values = values or {}
-    renderer = _Renderer(variables, values, device, endpoints, blocks, lists=lists, services=services)
+    renderer = _Renderer(variables, values, device, endpoints, blocks, lists=lists, services=services, rows=rows,
+                         files=files, secrets=secrets, default_files=default_files,
+                         owner=str(template_id) if template_id is not None else None, applied_files=applied_files)
     config = renderer.node(body)
     copy_keys = {c["key"] for c in copies(body, blocks)} if blocks is not None else set()
     for list_key, _, node_kind, _ in _direct_names(body):  # list entries render like copies

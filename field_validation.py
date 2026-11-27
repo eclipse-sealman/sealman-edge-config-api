@@ -2,6 +2,19 @@ import re
 from typing import Any, Dict
 
 
+def is_file_ref(value: Any) -> bool:
+    """True for the reference object stored as the value of a file field."""
+    return isinstance(value, dict) and isinstance(value.get("$file"), str)
+
+
+def holds_file_ref(value: Any) -> bool:
+    """True for a file reference and for a dict or list that contains one at any depth."""
+    if is_file_ref(value):
+        return True
+    items = value.values() if isinstance(value, dict) else value if isinstance(value, list) else ()
+    return any(holds_file_ref(v) for v in items)
+
+
 def validate_value(field_name: str, value: Any, field_def: Dict[str, Any]) -> None:
     """Validate `value` against a FieldDefinition (as a plain dict) for type, validation, and options.
 
@@ -11,6 +24,10 @@ def validate_value(field_name: str, value: Any, field_def: Dict[str, Any]) -> No
     """
     field_type = field_def.get("type")
 
+    if field_type == "file":
+        if not is_file_ref(value):
+            raise ValueError(f"'{field_name}' must be an uploaded file")
+        return
     if field_type == "boolean":
         if not isinstance(value, bool):
             raise ValueError(f"'{field_name}' must be a boolean")

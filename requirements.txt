@@ -6,6 +6,7 @@ python-dotenv==1.2.2
 PyYAML==6.0.3
 uvicorn==0.42.0
 PyJWT[crypto]==2.12.1
+cryptography==50.0.2
 python-multipart==0.0.22
 azure-storage-blob==12.28.0
 azure-data-tables==12.7.0

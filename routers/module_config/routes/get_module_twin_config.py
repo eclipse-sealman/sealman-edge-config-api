@@ -10,6 +10,7 @@ from exceptions import IoTBackendAPIError
 from blob_service import BlobContainerContext, blob_url
 from azure.core.exceptions import ResourceNotFoundError
 from helper import encode_iothub_id, get_iothub_auth_headers
+from routers.module_config.secrets import mask_config
 
 
 def blob_name_from_desired(device, module, desired):
@@ -45,14 +46,21 @@ async def get_module_twin_desired(device, module):
     return response.json().get("properties", {}).get("desired", {})
 
 
-async def get_module_twin_config(device, module):
+async def get_module_twin_config(device, module, repo):
     """
-        Returns the current configuration from the module-twin.
+        Returns the current configuration from the module-twin, the secret paths of the revision of
+        the current `configId` masked (`repo`: the revision repository).
     """
     desired = await get_module_twin_desired(device, module)
     pointer = desired.get("configBlobUrl")
     filename = blob_name_from_desired(device, module, desired)
-    return await read_module_config_blob(device, module, filename, missing_ok=not pointer)
+    content = await read_module_config_blob(device, module, filename, missing_ok=not pointer)
+    config_id = desired.get("configId")
+    if content is None or not config_id:
+        return content
+    revision = await repo.get_revision_by_config_id(device, module, str(config_id))
+    secret_paths = revision.get("secret_paths") if revision else None
+    return mask_config(content, secret_paths) if secret_paths else content
 
 
 async def read_module_config_blob(device, module, filename, missing_ok=False):

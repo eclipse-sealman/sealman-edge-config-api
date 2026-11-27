@@ -37,6 +37,11 @@ class DeviceRepository(ABC):
         pass
 
     @abstractmethod
+    async def get_effective_fields(self, device_id: str) -> Optional[Dict[str, Any]]:
+        """Field definitions that apply to the device (default type overlaid by its own), or None."""
+        pass
+
+    @abstractmethod
     async def update_device_metadata(
         self,
         device_id: str,

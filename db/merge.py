@@ -2,7 +2,7 @@ from typing import Any, Dict, Optional, Protocol, runtime_checkable
 from uuid import uuid4
 
 from exceptions import ValidationError
-from field_validation import validate_value
+from field_validation import holds_file_ref, is_file_ref, validate_value
 
 
 @runtime_checkable
@@ -197,7 +197,31 @@ def reject_non_changeable_updates(
             raise ValidationError(f"'{field_key}' is not changeable once set", 422)
 
 
+def reject_file_reference_changes(
+    current_data: Dict[str, Any],
+    data_patch: Dict[str, Any],
+    type_fields: Dict[str, Any],
+) -> None:
+    """Raises ValidationError if the patch sets, changes or clears a file reference. Those are
+    changed only by uploading or removing a file. A value holding a reference anywhere inside it
+    (nested, or in a list row) is refused unless it equals the stored value. Clearing a reference
+    under a key that is not (or no longer) a file field of the type is allowed, so a leftover
+    custom value can be dropped.
+    """
+    for key, new_value in data_patch.items():
+        current_value = current_data.get(key)
+        if new_value == current_value:
+            continue
+        if not holds_file_ref(new_value):
+            if not is_file_ref(current_value):
+                continue
+            if new_value is None and (type_fields.get(key) or {}).get("type") != "file":
+                continue
+        raise ValidationError(f"'{key}' can only be changed by uploading or removing a file", 422)
+
+
 _LIST_KEPT_ON_TYPE_CHANGE = ("label", "description", "required", "show_in_list")
+_FILE_KEPT_ON_TYPE_CHANGE = ("label", "description", "show_in_list")
 
 
 def with_item_order(fields: Dict[str, Any]) -> Dict[str, Any]:
@@ -245,6 +269,10 @@ def patch_fields(
             result.pop(field_key, None)
         else:
             existing = dict(result.get(field_key, {}))
+            new_type = field_patch.get("type")
+            if new_type is not None and new_type != existing.get("type") and "file" in (new_type, existing.get("type")):
+                # File fields share almost no keys with other types: keep only what is common.
+                existing = {k: v for k, v in existing.items() if k in _FILE_KEPT_ON_TYPE_CHANGE}
             if "list" in (existing.get("type"), field_patch.get("type")) or field_patch.get("item_fields") is not None:
                 result[field_key] = _patch_list_field(existing, field_patch)
                 continue

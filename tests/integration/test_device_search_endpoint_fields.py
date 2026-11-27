@@ -72,3 +72,30 @@ class TestEndpointFieldSearch:
         assert response.json()["values"] == ["SN-123456", "SN-999"]
         response = await client.get("/devices/search/suggestions?type=endpoint&field=ip&q=SN-")
         assert response.json()["values"] == ["SN-123456"]
+
+
+async def test_a_file_is_found_by_its_name_only(client, db_session):
+    from sqlalchemy import update
+    from db.models.device import Device
+    from db.models.endpoint import Endpoint
+
+    await AbacFixtures(db_session).setup(devices={"sf-file": {}})
+    ref = {"$file": "4f1c2e9a-file-id", "name": "plc-client.crt", "kind": "certificate", "not_after": None,
+           "uploaded_at": "2026-01-01T00:00:00Z"}
+    type_id = await seed_endpoint_type(db_session, fields={"cert": {"label": "Cert", "type": "file"}})
+    endpoint_id = await seed_endpoint(db_session, "sf-file", type_id)
+    # stored directly: only an upload may set a reference
+    await db_session.execute(update(Endpoint).where(Endpoint.endpoint_id == endpoint_id)
+                             .values(endpoint_data={"cert": ref}))
+    device_data = dict((await db_session.get(Device, "sf-file")).device_data)
+    await db_session.execute(update(Device).where(Device.device_id == "sf-file")
+                             .values(device_data={**device_data, "cert": ref}))
+    await db_session.commit()
+
+    for kind in ("endpoint", "metadata"):
+        found = await client.post("/devices/search", json={"filters": [{"type": kind, "value": "plc-client"}]})
+        assert found.status_code == 200, found.text
+        assert [item["device_id"] for item in found.json()["items"]] == ["sf-file"], kind
+        for other in ("4f1c2e9a", "certificate"):
+            response = await client.post("/devices/search", json={"filters": [{"type": kind, "value": other}]})
+            assert response.json()["items"] == [], (kind, other)

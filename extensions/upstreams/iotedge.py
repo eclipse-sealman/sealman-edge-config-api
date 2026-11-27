@@ -13,6 +13,7 @@ from constants import IOT_HUB_NAME
 from exceptions import APIError, IoTBackendAPIError
 from helper import encode_iothub_id, get_iothub_auth_headers, validate_iothub_id
 from routers.module_config import service as module_config_service
+from routers.module_config.secrets import SecretRestoreError
 
 from .. import body_validation
 
@@ -81,12 +82,16 @@ async def _twin_write(
     device_id: str, module_name: str, desired: Optional[dict], source: str = "extension", actor: Optional[str] = None,
 ) -> dict:
     """Writes `desired` as the module config through the platform's single write path
-    (blob indirection + `configBlobUrl`/`configId` twin pointer + audited revision)."""
+    (blob indirection + `configBlobUrl`/`configId` twin pointer + audited revision); a mask of the
+    current revision is written as that secret file's current content."""
     validate_iothub_id(device_id)
     validate_iothub_id(module_name)
-    result = await module_config_service.write_module_config(
-        device_id, module_name, desired or {}, source=source, actor=actor,
-    )
+    try:
+        result = await module_config_service.write_supplied_config(
+            device_id, module_name, desired or {}, source=source, actor=actor,
+        )
+    except SecretRestoreError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     # configBlobUrl embeds the SAS token and must not reach the caller.
     return {"configId": result["configId"]}
 

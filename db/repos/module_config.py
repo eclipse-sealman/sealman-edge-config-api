@@ -51,7 +51,7 @@ class ModuleConfigRepository(ABC):
         self, *, name: str, description: Optional[str], group_id: int,
         body: Any, variables: List[Dict], comment: Optional[str], created_by: Optional[str],
         derived_from_template_id: Optional[int] = None, derived_from_version: Optional[int] = None,
-        kind: str = "template",
+        kind: str = "template", slots: Optional[List[Dict]] = None,
     ) -> Optional[Dict]:
         """Creates the template with version 1. Returns None if the name is taken."""
 
@@ -65,8 +65,14 @@ class ModuleConfigRepository(ABC):
     @abstractmethod
     async def add_version(
         self, template_id: int, *, body: Dict, variables: List[Dict], comment: Optional[str], created_by: Optional[str],
+        slots: Optional[List[Dict]] = None,
     ) -> Optional[Dict]:
         """Adds the next version. Returns None if the template does not exist."""
+
+    @abstractmethod
+    async def set_version_variables(self, template_id: int, version: int, variables: List[Dict]) -> None:
+        """Rewrites the variable declarations of a version. Only for the copy made by "save as", right after
+        it was created, to point the default files at the copied files."""
 
     @abstractmethod
     async def list_versions(self, template_id: int) -> List[Dict]: ...
@@ -77,7 +83,11 @@ class ModuleConfigRepository(ABC):
 
     # revisions
     @abstractmethod
-    async def add_revision(self, **fields: Any) -> Dict: ...
+    async def add_revision(self, **fields: Any) -> Dict:
+        """`fields` are the revision's columns; `secret_paths` (the JSON pointers whose value came from a
+        secret file, with owner, field, name and sha256) defaults to []. If the config id is already
+        recorded, returns that revision; an `external` one is first updated with `fields` when they carry
+        secret paths."""
 
     @abstractmethod
     async def list_revisions(self, device_id: str, module_name: str, limit: int = 100) -> List[Dict]: ...

@@ -4,12 +4,14 @@ Everything is rolled back with the test transaction (see conftest.py)."""
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import db.session  # noqa: F401  - imports db/sqlalchemy/*, which registers the repositories
 from db.registry import repo_registry
 from db.repos.endpoint import EndpointRepository
 from db.repos.service import ServiceRepository
+from db.sqlalchemy.endpoint import Endpoint
 
 
 def unique_label(prefix: str = "t") -> str:
@@ -38,9 +40,15 @@ async def seed_endpoint_type(
 async def seed_endpoint(
     session: AsyncSession, device_id: str, type_id: str, data: Optional[Dict[str, Any]] = None
 ) -> str:
-    created = await _endpoint_repo(session).create_endpoint(
-        device_id=device_id, type_id=type_id, endpoint_data=data or {}
-    )
+    """List rows may carry explicit ids (the repository would generate its own): the data is then stored as given."""
+    data = data or {}
+    plain = {k: [{i: v for i, v in row.items() if i != "id"} for row in v] if isinstance(v, list) else v
+             for k, v in data.items()}
+    created = await _endpoint_repo(session).create_endpoint(device_id=device_id, type_id=type_id, endpoint_data=plain)
+    if plain != data:
+        await session.execute(update(Endpoint).where(Endpoint.endpoint_id == created["endpoint_id"])
+                              .values(endpoint_data=data))
+        await session.commit()
     return created["endpoint_id"]
 
 

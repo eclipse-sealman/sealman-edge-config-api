@@ -157,3 +157,49 @@ class TestEndpointTypeRoleValidation:
             json={"fields": {"addr": None}, "mapping": {"addr": "ip"}},
         )
         assert response.status_code == 422, response.text
+
+
+class TestFileFieldDefinition:
+    async def test_file_field_definition_rules(self, client):
+        for field in ({"type": "file", "label": "Cert"}, {"type": "file", "label": "Key", "secret": True}):
+            body = await _create(client, fields={"f": field})
+            assert body["fields"]["f"]["secret"] is bool(field.get("secret"))
+
+        file_field = {"type": "file", "label": "Cert"}
+        invalid = [
+            {**file_field, "required": True},
+            {**file_field, "default": "x"},
+            {**file_field, "options": ["a"]},
+            {**file_field, "validation": {"min_length": 1}},
+            {**file_field, "ui": "input"},
+            {**file_field, "changeable": False},
+            {**STRING_FIELD, "secret": True},
+            {"type": "list", "label": "L", "item_fields": {"f": file_field}},
+        ]
+        for field in invalid:
+            response = await client.post("/endpoint-types", json={"label": _label(), "fields": {"f": field}})
+            assert response.status_code == 400, (field, response.text)
+
+        for path in ("service-types", "device-types"):
+            body = {"label": _label(), "fields": {"f": file_field}}
+            if path == "device-types":
+                body["type_id"] = f"dt-{uuid4().hex[:8]}"
+            response = await client.post(f"/{path}", json=body)
+            assert response.status_code == 201, (path, response.text)
+
+    async def test_changing_the_type_to_or_from_file_resets_the_definition(self, client):
+        select_field = {"type": "string", "label": "Mode", "ui": "select", "options": ["a", "b"],
+                        "default": "a", "required": True}
+        created = await _create(client, fields={"f": select_field})
+        url = f"/endpoint-types/{created['type_id']}"
+
+        to_file = await client.patch(url, json={"fields": {"f": {"type": "file", "secret": True}}})
+        assert to_file.status_code == 200, to_file.text
+        stored = to_file.json()["fields"]["f"]
+        assert stored["type"] == "file" and stored["secret"] is True and stored["label"] == "Mode"
+        assert stored["ui"] is None and stored["options"] is None
+        assert stored["default"] is None and not stored["required"]
+
+        back = await client.patch(url, json={"fields": {"f": {"type": "string"}}})
+        assert back.status_code == 200, back.text
+        assert not back.json()["fields"]["f"]["secret"]

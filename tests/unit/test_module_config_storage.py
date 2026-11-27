@@ -1,3 +1,4 @@
+import base64
 import json
 from importlib import import_module
 from types import SimpleNamespace
@@ -10,6 +11,19 @@ from blob_service import BlobContainerContext, blob_url
 from exceptions import IoTBackendAPIError
 
 reader = import_module("routers.module_config.routes.get_module_twin_config")
+binary_reader = import_module("routers.module_config.routes.get_module_twin_config_binary")
+
+
+class _Revisions:
+    """Fake revision repository: one revision (or None) for any config id."""
+
+    def __init__(self, revision=None):
+        self.revision = revision
+        self.asked = []
+
+    async def get_revision_by_config_id(self, device, module, config_id):
+        self.asked.append(config_id)
+        return self.revision
 
 
 def test_blob_url_preserves_cloud_default_and_encodes_identifiers():
@@ -81,14 +95,14 @@ async def test_reads_twin_referenced_blob_not_stale_current(storage, filename):
         "configId": "a" * 32,
         "configBlobUrl": f"http://blob:10000/local/iotedge-device-twin/dev/mod/{filename}?sig=hidden",
     }
-    assert await reader.get_module_twin_config("dev", "mod") == {"schemaVersion": "1.0", "clients": {}}
+    assert await reader.get_module_twin_config("dev", "mod", _Revisions()) == {"schemaVersion": "1.0", "clients": {}}
     assert storage["path"] == f"dev/mod/{filename}"
 
 
 @pytest.mark.asyncio
 async def test_unconfigured_module_retains_legacy_missing_current_behavior(storage):
     storage["missing"] = True
-    assert await reader.get_module_twin_config("dev", "mod") is None
+    assert await reader.get_module_twin_config("dev", "mod", _Revisions()) is None
 
 
 @pytest.mark.asyncio
@@ -96,7 +110,7 @@ async def test_missing_referenced_blob_is_explicit_error(storage):
     storage["desired"] = {"configBlobUrl": "http://blob:10000/local/iotedge-device-twin/dev/mod/current?sig=x"}
     storage["missing"] = True
     with pytest.raises(IoTBackendAPIError) as error:
-        await reader.get_module_twin_config("dev", "mod")
+        await reader.get_module_twin_config("dev", "mod", _Revisions())
     assert error.value.status_code == 404
 
 
@@ -110,7 +124,7 @@ async def test_missing_referenced_blob_is_explicit_error(storage):
 async def test_rejects_foreign_or_mismatched_blob_pointer_without_storage_io(storage, pointer):
     storage["desired"] = {"configId": "a" * 32, "configBlobUrl": pointer}
     with pytest.raises(IoTBackendAPIError) as error:
-        await reader.get_module_twin_config("dev", "mod")
+        await reader.get_module_twin_config("dev", "mod", _Revisions())
     assert error.value.status_code == 409
     assert storage["path"] is None
 
@@ -140,3 +154,40 @@ async def test_reported_returns_everything_but_iot_hub_metadata(monkeypatch):
     with pytest.raises(IoTBackendAPIError) as exc:
         await reported_reader.get_module_twin_reported("dev", "mod")
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_binary_masks_a_config_with_secret_paths(monkeypatch):
+    config_id = "c" * 32
+    data = json.dumps({"k": "KEY PEM", "x": 1}).encode()
+
+    class Blob:
+        async def download_blob(self):
+            return SimpleNamespace(readall=AsyncMock(return_value=data))
+
+        async def get_blob_properties(self):
+            return None
+
+    class Container:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def list_blobs(self, name_starts_with):
+            yield SimpleNamespace(name=f"{name_starts_with}{config_id}")
+
+        def get_blob_client(self, name):
+            return Blob()
+
+    monkeypatch.setattr(binary_reader, "BlobContainerContext", lambda *args, **kwargs: Container())
+    secret = {"path": "/k", "owner_kind": "endpoint", "owner_id": "e", "field": "key", "name": "client.key",
+              "sha256": "ab" * 32}
+    revisions = _Revisions({"secret_paths": [secret]})
+    masked = await binary_reader.get_module_twin_config_binary("dev", "mod", revisions)
+    assert json.loads(base64.b64decode(masked["data"])) == {"k": "<secret: client.key #abababab>", "x": 1}
+    assert revisions.asked == [config_id]
+
+    plain = await binary_reader.get_module_twin_config_binary("dev", "mod", _Revisions())
+    assert base64.b64decode(plain["data"]) == data

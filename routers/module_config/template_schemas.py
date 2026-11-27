@@ -20,6 +20,8 @@ _ENDPOINTS_DESCRIPTION = "endpoint slot -> endpoint_id of the device, for ${endp
 _SERVICES_DESCRIPTION = ("endpoint slot (keyed like `endpoints`) -> service_id of the endpoint chosen for that slot, "
                          "for ${service[slot].*}")
 
+_ROWS_DESCRIPTION = "endpoint slot (keyed like `endpoints`) -> {list field: id of the chosen row}"
+
 
 _LISTS_DESCRIPTION = "list key (as in inputs.lists) -> its entries, in order; each entry renders its block under its name"
 
@@ -31,11 +33,20 @@ class ListEntry(BaseModel):
 
 class VariableDecl(BaseModel):
     name: str = Field(..., max_length=64)
-    type: Literal["string", "text", "number", "integer", "boolean", "enum"] = "string"
+    type: Literal["string", "text", "number", "integer", "boolean", "enum", "file"] = "string"
     required: bool = True
     options: Optional[List[JsonScalar]] = None
+    secret: Optional[bool] = Field(None, description="file variables only: the file is never shown or downloaded")
+    default: Optional[Dict[str, Any]] = Field(None, description="file variables only: reference of the default file")
     label: Optional[str] = Field(None, max_length=128)
     description: Optional[str] = Field(None, max_length=1024)
+
+
+class SlotDecl(BaseModel):
+    """Which endpoint and service types may be chosen for an endpoint slot (empty list: any type)."""
+    name: str = Field(..., max_length=64)
+    endpoint_types: List[str] = []
+    service_types: List[str] = []
 
 
 class Finding(BaseModel):
@@ -48,6 +59,7 @@ class Finding(BaseModel):
 class TemplateContent(BaseModel):
     body: Body
     variables: List[VariableDecl] = []
+    slots: List[SlotDecl] = []
     comment: Optional[str] = Field(None, max_length=1024)
 
 
@@ -127,6 +139,7 @@ class TemplateVersionOut(BaseModel):
     version: int
     body: Body
     variables: List[VariableDecl]
+    slots: List[SlotDecl] = []
     comment: Optional[str] = None
     created_by: Optional[str] = None
     created_at: datetime
@@ -145,6 +158,7 @@ class TemplateVersionSummary(BaseModel):
 class LintRequest(BaseModel):
     body: Body
     variables: List[VariableDecl] = []
+    slots: List[SlotDecl] = []
     kind: Kind = "template"
     group_id: Optional[int] = Field(
         None, description="group the template belongs to: its blocks are loaded and checked; omitted, block "
@@ -152,6 +166,8 @@ class LintRequest(BaseModel):
 
 
 class PreviewRequest(LintRequest):
+    template_id: Optional[int] = Field(
+        None, description="the saved template being edited: its file variables render its default files")
     values: Dict[str, Any] = {}
     device: Optional[Dict[str, Any]] = Field(None, description="sample device metadata for ${device.*}")
     device_id: Optional[str] = Field(
@@ -161,6 +177,7 @@ class PreviewRequest(LintRequest):
         None, description="with `device_id`: " + _ENDPOINTS_DESCRIPTION + "; omitted, endpoint placeholders stay as they are")
     lists: Dict[str, List[ListEntry]] = Field({}, description=_LISTS_DESCRIPTION)
     services: Dict[str, str] = Field({}, description="with `device_id` and `endpoints`: " + _SERVICES_DESCRIPTION)
+    rows: Dict[str, Dict[str, str]] = Field({}, description="with `device_id` and `endpoints`: " + _ROWS_DESCRIPTION)
 
 
 class ExampleDevice(BaseModel):
@@ -181,6 +198,7 @@ class RenderRequest(BaseModel):
     endpoints: Dict[str, str] = Field({}, description=_ENDPOINTS_DESCRIPTION)
     lists: Dict[str, List[ListEntry]] = Field({}, description=_LISTS_DESCRIPTION)
     services: Dict[str, str] = Field({}, description=_SERVICES_DESCRIPTION)
+    rows: Dict[str, Dict[str, str]] = Field({}, description=_ROWS_DESCRIPTION)
 
 
 class ApplyRequest(RenderRequest):
