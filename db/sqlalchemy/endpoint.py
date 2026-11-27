@@ -177,6 +177,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             select(Endpoint, EndpointType)
             .join(EndpointType, Endpoint.type_id == EndpointType.type_id)
             .where(Endpoint.device_id == device_id)
+            .order_by(Endpoint.created_at, Endpoint.endpoint_id)
         )
         if type_id is not None:
             stmt = stmt.where(Endpoint.type_id == type_id)

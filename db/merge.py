@@ -111,6 +111,8 @@ def validate_instance_data(
         if field_def.get("type") == "list":
             _validate_list(field_key, value, field_def)
             continue
+        if value == "" and not field_def.get("required"):
+            continue  # an optional field may be explicitly empty, whatever its pattern/length rules
         try:
             validate_value(field_key, value, field_def)
         except ValueError as exc:
