@@ -31,22 +31,40 @@ async def _send(client, method, path, body):
 
 
 async def _set_network_scan(client, enabled: bool):
-    response = await client.put("/platform/functions", json={"network_scan_enabled": enabled})
+    response = await client.put("/platform/functions", json={"network_scan_enabled": enabled, "azure_iot_edge_enabled": True})
     assert response.status_code == 200, response.text
-    assert response.json() == {"network_scan_enabled": enabled}
+    assert response.json() == {"network_scan_enabled": enabled, "azure_iot_edge_enabled": True}
 
 
 class TestSettings:
-    async def test_network_scan_enabled_by_default(self, client):
+    async def test_functions_enabled_by_default(self, client):
         response = await client.get("/platform/functions")
         assert response.status_code == 200
-        assert response.json() == {"network_scan_enabled": True}
+        assert response.json() == {"network_scan_enabled": True, "azure_iot_edge_enabled": True}
 
     async def test_toggle_is_persisted(self, client):
         await _set_network_scan(client, False)
-        assert (await client.get("/platform/functions")).json() == {"network_scan_enabled": False}
+        assert (await client.get("/platform/functions")).json()["network_scan_enabled"] is False
         await _set_network_scan(client, True)
-        assert (await client.get("/platform/functions")).json() == {"network_scan_enabled": True}
+        assert (await client.get("/platform/functions")).json()["network_scan_enabled"] is True
+
+    async def test_azure_toggle_is_pushed_to_sems_only_on_change(self, client, monkeypatch):
+        import routers.platform_configuration.router as platform_router
+
+        pushed = []
+
+        async def _fake_set_variable(name, value):
+            pushed.append((name, value))
+
+        monkeypatch.setattr(platform_router.SmartEMS, "set_variable_for_all_devices", _fake_set_variable)
+        body = {"network_scan_enabled": True, "azure_iot_edge_enabled": False}
+
+        assert (await client.put("/platform/functions", json=body)).json() == body
+        assert (await client.put("/platform/functions", json=body)).status_code == 200
+        assert (await client.get("/platform/functions")).json() == body
+        await client.put("/platform/functions", json={**body, "azure_iot_edge_enabled": True})
+
+        assert pushed == [("azure_iot_edge_enabled", "false"), ("azure_iot_edge_enabled", "true")]
 
     async def test_rejects_invalid_body(self, client):
         assert (await client.put("/platform/functions", json={})).status_code == 400
@@ -109,5 +127,5 @@ class TestPermissions:
         assert (await client.get("/platform/functions")).status_code == 200
 
     async def test_write_requires_platform_config_write(self, client):
-        response = await client.put("/platform/functions", json={"network_scan_enabled": False})
+        response = await client.put("/platform/functions", json={"network_scan_enabled": False, "azure_iot_edge_enabled": True})
         assert response.status_code == 403

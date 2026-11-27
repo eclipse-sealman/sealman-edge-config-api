@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-ARG VERSION
+ARG VERSION=0.0.0
 ENV VERSION=${VERSION}
 
 # Install dependencies first (better layer caching, no pip cache in image)

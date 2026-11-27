@@ -4,12 +4,13 @@ from smart_ems import SmartEMS
 from exceptions import APIError, IoTBackendAPIError
 from db.repos.device import DeviceRepository
 from db.repos.device_template import DeviceTemplateRepository
+from db.repos.platform_functions import PlatformFunctionsRepository
 import asyncio
 from smart_ems import generate_resp_from_device_info
 from routers.devices.routes.get_devices import populate_cache_from_iot_hub_query
-from constants import IOT_HUB_NAME, BOOTSTRAP_SEMS_TEMPLATE_NAME
+from constants import IOT_HUB_NAME, BOOTSTRAP_SEMS_TEMPLATE_NAME, AZURE_IOT_EDGE_ENABLED_VARIABLE
 from helper import encode_iothub_id, get_iothub_auth_headers
-from routers.general.routes.put_deployment_tag import put_deployment_tag
+from routers.platform_configuration.readiness import missing_required_variables
 
 logger = logging.getLogger("EdgeConfigAPI")
 
@@ -20,22 +21,34 @@ async def create_device(
     body: dict,
     repo: DeviceRepository,
     template_repo: DeviceTemplateRepository,
+    functions_repo: PlatformFunctionsRepository,
 ):
     encoded_device = encode_iothub_id(device_id)
     auth_type = body.get("authType")
+    is_dps = auth_type == "tpm"
     metadata = body.get("meta", {})
     type_id = body.get("type_id") or "default"
-    registration_id_generated = body.get("registration_id_generated", "").strip()
-    if not registration_id_generated:
-        # Frontend should always send this, but fall back to device_id as safe default
-        logger.warning(
-            f"registration_id_generated not provided for device {device_id}, defaulting to device_id"
-        )
-        registration_id_generated = device_id
+    # Only TPM/DPS devices may carry a registration ID.
+    registration_id = (body.get("registrationId") or "").strip() if is_dps else ""
 
     # 1. PRE-CHECK
+    missing = missing_required_variables(
+        await template_repo.get_template_variables(),
+        (await functions_repo.get_functions()).azure_iot_edge_enabled,
+    )
+    if missing:
+        raise APIError(
+            f"The platform is not fully configured. Missing device settings: {', '.join(missing)}", 400
+        )
+
     if await repo.device_exists(device_id):
         raise APIError(f"Device {device_id} already exists", 409)
+
+    sems_device = await SmartEMS.get_device_by_serial(device_id, require_template=False)
+    if is_dps and not registration_id and not (sems_device and sems_device.get("registrationId")):
+        raise APIError(
+            "No registration ID entered and device is not already provisioned", 400
+        )
 
     created_in_db = False
     created_in_iothub = False
@@ -68,27 +81,33 @@ async def create_device(
             raise IoTBackendAPIError(resp.text, resp.status_code)
         created_in_iothub = True
 
-        # 4. GET CONNECTION STRING FROM IoTHub
-        responses = {}
-        await asyncio.gather(get_async(url, responses, headers=headers))
-        resp = responses[url]
+        # 4. GET CONNECTION STRING FROM IoTHub (manual provisioning only)
+        connection_string = None
+        if not is_dps:
+            responses = {}
+            await asyncio.gather(get_async(url, responses, headers=headers))
+            resp = responses[url]
 
-        if resp.status_code != 200:
-            raise IoTBackendAPIError(resp.text, resp.status_code)
+            if resp.status_code != 200:
+                raise IoTBackendAPIError(resp.text, resp.status_code)
 
-        iothub_device = resp.json()
-        primary_key = iothub_device["authentication"]["symmetricKey"]["primaryKey"]
-        connection_string = f"HostName={IOT_HUB_NAME};DeviceId={device_id};SharedAccessKey={primary_key}"
+            iothub_device = resp.json()
+            primary_key = iothub_device["authentication"]["symmetricKey"]["primaryKey"]
+            connection_string = f"HostName={IOT_HUB_NAME};DeviceId={device_id};SharedAccessKey={primary_key}"
 
         # 5. REGISTER IN SEMS
-        sems_device = await SmartEMS.get_device_by_serial(device_id, require_template=False)
-
         # Start with infrastructure constants from env.
         variables_to_set = dict(await template_repo.get_template_variables())
         # Add per-device variables (user input + derived).
-        variables_to_set["registration_id_generated"] = registration_id_generated
-        # Ensure device_connection_string is always set from IoTHub key material.
-        variables_to_set["device_connection_string"] = connection_string
+        # The template renders the azure block only for "manual" or "dps".
+        variables_to_set["azure_provisioning"] = "dps" if is_dps else "manual"
+        # The IoT Hub device is created either way; this only controls whether the azure block is rendered.
+        azure_enabled = (await functions_repo.get_functions()).azure_iot_edge_enabled
+        variables_to_set[AZURE_IOT_EDGE_ENABLED_VARIABLE] = "true" if azure_enabled else "false"
+        if is_dps:
+            variables_to_set.pop("device_connection_string", None)
+        else:
+            variables_to_set["device_connection_string"] = connection_string
 
         # Remove empty values before sending to SEMS.
         variables_to_set = {k: str(v) for k, v in variables_to_set.items() if v}
@@ -113,7 +132,7 @@ async def create_device(
                     existing_value = var.get("variableValue")
                     break
 
-            if existing_value and existing_value != connection_string:
+            if not is_dps and existing_value and existing_value != connection_string:
                 raise APIError("SEMS device already has different connection string", 400)
 
             # Merge required values into existing variable list by name.
@@ -123,6 +142,8 @@ async def create_device(
                 {"name": name, "variableValue": value}
                 for name, value in merged_variables.items()
             ]
+            if registration_id:
+                clean_body["registrationId"] = registration_id
             await SmartEMS.edit_device(sems_device["id"], clean_body)
 
         else:
@@ -131,7 +152,7 @@ async def create_device(
                 "serialNumber": device_id,
                 "imei": body.get("imei"),
                 "model": body.get("model"),
-                "registrationId": body.get("registrationId"),
+                "registrationId": registration_id or None,
                 "endorsementKey": body.get("endorsementKey"),
                 "hardwareVersion": body.get("hardwareVersion"),
                 "description": body.get("description", ""),
@@ -145,12 +166,6 @@ async def create_device(
                 "template": template_id,
             }
             await SmartEMS.create_device(payload)
-
-        try:
-            await put_deployment_tag(device_id, "base")
-            logger.info(f"Set deployment tag 'base' on device {device_id} in IoTHub")
-        except Exception as e:
-            logger.warning(f"Could not set deployment tag for device {device_id}: {e}")
 
         # 6. SUCCESS
         await populate_cache_from_iot_hub_query(repo)

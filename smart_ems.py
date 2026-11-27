@@ -4,10 +4,22 @@ import asyncio
 import re
 import datetime
 import yaml
-from constants import SEMS_URL, SEMS_USER, SEMS_PW, FIRMWARE_VERSION_PATTERN
+from constants import SEMS_URL, SEMS_USER, SEMS_PW, FIRMWARE_VERSION_PATTERN, JSON_OBJECT_TEMPLATE_VARIABLES
 from async_requests import post_async, get_async, delete_async
 from exceptions import SEMSError, SEMSFirmwareError
 from helper import validate_and_extract_serial_number
+
+
+def _with_variable_types(body: dict) -> dict:
+    """SEMS resets the type of variables sent without one to string, which breaks jsonObject variables."""
+    variables = body.get("variables")
+    if not variables:
+        return body
+    typed = [
+        {**var, "variableType": "jsonObject"} if var.get("name") in JSON_OBJECT_TEMPLATE_VARIABLES else var
+        for var in variables
+    ]
+    return {**body, "variables": typed}
 
 SEMS_ERROR_MESSAGE = "Error during SmartEMS communication"
 DEVICE_NOT_FOUND_MESSAGE = "Device not found"
@@ -453,6 +465,7 @@ class SmartEMS:
     async def edit_device(cls, edge_gateway_id: str, body: dict):
         resp = {}
         uri = f"{SEMS_URL}/web/api/device/{edge_gateway_id}"
+        body = _with_variable_types(body)
         await asyncio.gather(
             post_async(
                 uri, resp, _json=body, headers={"Authorization": f"Bearer {cls._token}"}
@@ -473,6 +486,7 @@ class SmartEMS:
         resp = {}
     
         uri = f"{SEMS_URL}/web/api/device/create"
+        payload = _with_variable_types(payload)
     
         await asyncio.gather(
             post_async(
@@ -830,6 +844,8 @@ class SmartEMS:
             "name": name,
             "variableValue": value,
         }
+        if name in JSON_OBJECT_TEMPLATE_VARIABLES:
+            body["variableType"] = "jsonObject"
 
         resp = {}
         await asyncio.gather(

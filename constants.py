@@ -99,9 +99,16 @@ BOOTSTRAP_SEMS_TEMPLATE_NAME = os.getenv(
     "BOOTSTRAP_SEMS_TEMPLATE_NAME", "sealman-template"
 )
 BOOTSTRAP_SEMS_DEVICE_TYPE = os.getenv("BOOTSTRAP_SEMS_DEVICE_TYPE", "Edge gateway")
+# SEMS device variable read by the bootstrap twig; "false" drops the azure block from the rendered config.
+AZURE_IOT_EDGE_ENABLED_VARIABLE = "azure_iot_edge_enabled"
+# SEMS device variables holding JSON objects; sent with SEMS variable type jsonObject so the twig receives them as arrays.
+CONTAINER_REGISTRY_AUTHS_VARIABLE = "container_registry_auths"
+STATIC_COMPOSE_FILES_VARIABLE = "static_compose_files"
+JSON_OBJECT_TEMPLATE_VARIABLES = frozenset({CONTAINER_REGISTRY_AUTHS_VARIABLE, STATIC_COMPOSE_FILES_VARIABLE})
+MAX_CONTAINER_REGISTRIES = 4
 BOOTSTRAP_SEMS_HEALTH_TIMEOUT = int(os.getenv("BOOTSTRAP_SEMS_HEALTH_TIMEOUT", "120"))
 
-# IoTHub Bootstrap — idempotent creation of the base automatic deployment
+# Identity of the base deployment manifest kept in the platform DB (not created in the IoT Hub)
 BOOTSTRAP_IOTHUB_DEPLOYMENT_NAME = os.getenv(
     "BOOTSTRAP_IOTHUB_DEPLOYMENT_NAME", "seal-base-deployment"
 )

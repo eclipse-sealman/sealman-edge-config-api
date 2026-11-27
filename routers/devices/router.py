@@ -9,6 +9,7 @@ from db.repos.device_search import DeviceSearchRepository
 from db.repos.device_template import DeviceTemplateRepository
 from db.repos.field_file import FieldFileRepository
 from db.repos.user import UserRepository
+from db.repos.platform_functions import PlatformFunctionsRepository
 from db.session import get_repository
 from exceptions import APIError
 from .routes.get_devices import get_devices, populate_cache_from_iot_hub_query
@@ -167,10 +168,11 @@ async def create_device_route(
     request: Request,
     repo: DeviceRepository = Depends(get_repository(DeviceRepository)),
     template_repo: DeviceTemplateRepository = Depends(get_repository(DeviceTemplateRepository)),
+    functions_repo: PlatformFunctionsRepository = Depends(get_repository(PlatformFunctionsRepository)),
     _=Depends(ABACDeviceCreateCheck(Device.CREATE)),
 ):
     body = await request.json()
-    return await create_device(device_id, body, repo, template_repo)
+    return await create_device(device_id, body, repo, template_repo, functions_repo)
 
 
 @devices.delete("/{device_id}")

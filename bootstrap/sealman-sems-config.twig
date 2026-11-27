@@ -1,11 +1,25 @@
 {
+    {% if azure_provisioning is defined and azure_provisioning in ['manual', 'dps'] and azure_iot_edge_enabled|default('true') != 'false' %}
     "azure": {
         "config": {
             "hostname": "eg-{{serialNumber}}",
+            {% if azure_provisioning == 'manual' %}
             "provisioning": {
                 "source":"manual",
                 "connection_string":"{{device_connection_string}}"
             },
+            {% else %}
+            "provisioning": {
+                "source": "dps",
+                "global_endpoint": "https://global.azure-devices-provisioning.net",
+                "id_scope": "{{ iotedge_dps_id_scope | default('00000000') }}",
+                "dynamic_reprovisioning": false,
+                "attestation": {
+                    "method": "tpm",
+                    "registration_id": "{{registrationId}}"
+                }
+            },
+            {% endif %}
             "agent": {
                 "name": "edgeAgent",
                 "type": "docker",
@@ -21,6 +35,7 @@
         },
         "validated": "1"
     },
+    {% endif %}
     "config_format_version": "1.0",
     "serial": {
         "serial0": {
@@ -542,14 +557,21 @@
     "docker": {
         "dockerdns": [],
         "params": {},        
+        {# static_compose_files and container_registry_auths are jsonObject variables; SEMS has already JSON-escaped their string values #}
         "compose_files": {
-            "seal-app-connection-check": "version: \"3.8\"\n\nservices:\n  backend:\n    image: {{ container_registry_address | default('docker.io') }}/seal-app-connection-check-backend:1.0.1\n    container_name: seal-app-conn-check-api\n    restart: unless-stopped\n    ports:\n      - \"9091:9091\"\n    networks:\n      - \"local-network\"\n    environment:\n      - FLASK_APP=main.py\n      - FLASK_RUN_HOST=0.0.0.0\n      - FLASK_RUN_PORT=9091\n    volumes:\n      - /run/mgmtd:/run/mgmtd\n    tty: true\n    stdin_open: true\n\n  frontend:\n    image: {{ container_registry_address | default('docker.io') }}/seal-app-connection-check-frontend:1.0.1\n    container_name: seal-app-conn-check-ui\n    ports:\n      - \"9090:9090\"\n    networks:\n      - \"local-network\"\n    restart: unless-stopped\n\nnetworks:\n  local-network:\n    driver: \"bridge\""
-			},
+            {% for stack, content in static_compose_files|default({}) %}
+            {% if not loop.first %},{% endif %}
+            "{{ stack }}": "{{ content }}"
+            {% endfor %}
+        },
         "compose_docker_config": {
             "auths": {
-                "{{ container_registry_address | default('docker.io') }}": {
-                    "auth": {% if container_registry_credentials_encoded is defined and container_registry_credentials_encoded %}"{{ container_registry_credentials_encoded }}"{% else %}null{% endif %}
+                {% for registry, entry in container_registry_auths|default({}) %}
+                {% if not loop.first %},{% endif %}
+                "{{ registry }}": {
+                    "auth": {% if entry.auth is defined and entry.auth %}"{{ entry.auth }}"{% else %}null{% endif %}
                 }
+                {% endfor %}
             }
         }
     },
