@@ -1,7 +1,7 @@
 """add slot declarations to module config template versions
 
 Revision ID: d5e7a9c1b3f2
-Revises: b8d4f1a6c2e5
+Revises: e3a7c9d1f502
 Create Date: 2026-11-24
 
 Each version may declare, per endpoint slot, the endpoint and service types allowed for it.
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision: str = "d5e7a9c1b3f2"
-down_revision: Union[str, None] = "b8d4f1a6c2e5"
+down_revision: Union[str, None] = "e3a7c9d1f502"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

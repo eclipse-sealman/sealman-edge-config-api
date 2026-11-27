@@ -9,7 +9,7 @@ from db.repos.service import UNSET, ServiceRepository
 from db.repos.scan_ports import ScanPortsRepository
 from db.session import get_repository
 from db.merge import patch_fields
-from routers.schemas import FieldDefinition
+from routers.schemas import FieldDefinition, dump_field_patch
 from routers.service.schemas import (
     ServiceTypeResponse,
     ServiceCreate,
@@ -117,7 +117,7 @@ async def update_service_type(
 ) -> ServiceTypeResponse:
     field_patch = (
         {
-            k: v.model_dump(exclude_none=True) if v is not None else None
+            k: dump_field_patch(v)
             for k, v in body.fields.items()
         }
         if body.fields is not None
@@ -130,7 +130,7 @@ async def update_service_type(
                 raise HTTPException(
                     status_code=404, detail=f"ServiceType '{type_id}' not found"
                 )
-            merged_fields = patch_fields(current["fields"], field_patch)
+            merged_fields = patch_fields(current["fields"], field_patch, clear_defaults=True)
             for field_key, field_dict in merged_fields.items():
                 try:
                     FieldDefinition.model_validate(field_dict)

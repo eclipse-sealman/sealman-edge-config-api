@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import TIMESTAMP, Column, ForeignKey, Index, Integer, String, Text, func, Enum
+from sqlalchemy import TIMESTAMP, Column, ForeignKey, Index, Integer, String, Text, func, Enum, text
 from db.base import Base
 
 class PasswordRenewalTaskStatus(str, enum.Enum):
@@ -17,6 +17,7 @@ class PasswordRenewalTask(Base):
     device_id = Column(Text, ForeignKey("devices.device_id"), nullable=False)
     secret_id = Column(Integer, nullable=False)
     scheduled_time = Column(TIMESTAMP(timezone=True), nullable=False)
+    next_attempt_at = Column(TIMESTAMP(timezone=True), nullable=True)
     status = Column(
         Enum(
             PasswordRenewalTaskStatus,
@@ -32,6 +33,11 @@ class PasswordRenewalTask(Base):
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     __table_args__ = (
+        Index(
+            "uq_password_renewal_tasks_pending_device", "device_id", unique=True,
+            postgresql_where=text("status = 'Pending'"),
+            sqlite_where=text("status = 'Pending'"),
+        ),
         Index("ix_password_renewal_tasks_device_status", "device_id", "status"),
         Index("ix_password_renewal_tasks_status_scheduled_time", "status", "scheduled_time"),
         Index("ix_password_renewal_tasks_created_at", "created_at"),

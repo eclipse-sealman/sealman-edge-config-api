@@ -53,7 +53,33 @@ def materialize_defaults(
         for key, definition in type_fields.items()
         if definition.get("default") is not None
     }
-    return {**defaults, **instance_data}
+    result = {**defaults, **instance_data}
+    for key, definition in type_fields.items():
+        value = result.get(key)
+        if definition.get("type") == "list" and isinstance(value, list):
+            result[key] = [
+                materialize_defaults(item, definition.get("item_fields") or {})
+                if isinstance(item, dict) else item
+                for item in value
+            ]
+    return result
+
+
+def newly_defaulted_fields(
+    previous: Dict[str, Any], current: Dict[str, Any]
+) -> Dict[str, Any]:
+    result = {}
+    for key, definition in current.items():
+        old = previous.get(key) or {}
+        if definition.get("type") == "list":
+            columns = newly_defaulted_fields(
+                old.get("item_fields") or {}, definition.get("item_fields") or {}
+            )
+            if columns:
+                result[key] = {**definition, "item_fields": columns}
+        elif definition.get("default") is not None and old.get("default") is None:
+            result[key] = definition
+    return result
 
 
 def merge_type_fields(
@@ -137,7 +163,10 @@ def normalize_list_values(
         for item in items:
             item_id = item.get("id")
             if item_id is None:
-                item = {**item, "id": str(uuid4())}
+                item = {
+                    **materialize_defaults(item, field_def.get("item_fields") or {}),
+                    "id": str(uuid4()),
+                }
             elif not isinstance(item_id, str) or item_id not in known_ids:
                 raise ValidationError(f"'{field_key}' has an item with an unknown id", 422)
             elif item_id in seen:
@@ -290,6 +319,7 @@ class BlueprintResolver:
             data_field: resolve_fields(
                 getattr(entity, data_field) or {},
                 entity_type.fields or {},
+                apply_defaults=False,
             ),
             # The values actually stored, without type defaults substituted (internal use, e.g.
             # discovery; not part of the API responses).
