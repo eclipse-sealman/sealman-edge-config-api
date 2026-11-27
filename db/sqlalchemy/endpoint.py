@@ -7,6 +7,8 @@ from db.registry import register_repository
 from db.repos.endpoint import EndpointRepository
 from db.merge import (
     BlueprintResolver,
+    materialize_defaults,
+    newly_defaulted_fields,
     patch_data,
     patch_fields,
     reject_non_changeable_updates,
@@ -15,6 +17,7 @@ from db.merge import (
     with_item_order,
 )
 from db.type_roles import ENDPOINT_ROLE_TYPES, drop_roles_of_missing_fields, validate_type_mapping
+from db.sqlalchemy.asset_defaults import backfill_asset_defaults, validate_fields
 from exceptions import APIError
 
 
@@ -26,10 +29,13 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
     def __init__(self, session: AsyncSession):
         self._session = session
 
-    async def _get_endpoint_type_or_raise(self, type_id: str) -> EndpointType:
-        result = await self._session.execute(
-            select(EndpointType).where(EndpointType.type_id == type_id)
-        )
+    async def _get_endpoint_type_or_raise(
+        self, type_id: str, *, lock: bool = False, shared: bool = False
+    ) -> EndpointType:
+        stmt = select(EndpointType).where(EndpointType.type_id == type_id)
+        if lock:
+            stmt = stmt.with_for_update(read=shared).execution_options(populate_existing=True)
+        result = await self._session.execute(stmt)
         et = result.scalar_one_or_none()
         if et is None:
             raise APIError(f"EndpointType '{type_id}' not found", 404)
@@ -98,7 +104,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         fields: Optional[Dict[str, Any]] = None,
         mapping: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
-        et = await self._get_endpoint_type_or_raise(type_id)
+        et = await self._get_endpoint_type_or_raise(type_id, lock=True)
         values: Dict[str, Any] = {}
         if label is not None:
             await self._raise_if_label_taken(label, exclude_type_id=type_id)
@@ -107,7 +113,8 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             values["description"] = description
         if fields is not None or mapping is not None:
             merged_fields = (
-                patch_fields(et.fields or {}, fields) if fields is not None else dict(et.fields or {})
+                patch_fields(et.fields or {}, fields, clear_defaults=True)
+                if fields is not None else dict(et.fields or {})
             )
             # A sent mapping replaces the stored one as a whole. Otherwise the stored roles stay,
             # except those whose field this patch removed.
@@ -118,16 +125,25 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             )
             validate_type_mapping(merged_fields, new_mapping, ENDPOINT_ROLE_TYPES)
             if fields is not None:
+                validate_fields(merged_fields)
                 values["fields"] = merged_fields
             values["mapping"] = new_mapping
         if values:
             try:
+                if fields is not None:
+                    await backfill_asset_defaults(
+                        self._session, Endpoint,
+                        {type_id: newly_defaulted_fields(et.fields or {}, merged_fields)},
+                    )
                 await self._session.execute(
                     update(EndpointType)
                     .where(EndpointType.type_id == type_id)
                     .values(**values)
                 )
                 await self._session.commit()
+            except APIError:
+                await self._session.rollback()
+                raise
             except IntegrityError:
                 await self._session.rollback()
                 raise APIError(f"EndpointType label '{label}' already exists", 409)
@@ -135,7 +151,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         return self._serialize_type(et)
 
     async def delete_endpoint_type(self, type_id: str, cascade: bool = False) -> None:
-        await self._get_endpoint_type_or_raise(type_id)
+        await self._get_endpoint_type_or_raise(type_id, lock=True)
         if cascade:
             # Services cascade via their own FK to endpoints (ondelete=CASCADE).
             await self._session.execute(
@@ -190,8 +206,9 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         type_id: str,
         endpoint_data: Dict[str, Any],
     ) -> Dict[str, Any]:
-        et = await self._get_endpoint_type_or_raise(type_id)
-        endpoint_data = normalize_list_values(endpoint_data or {}, {}, et.fields or {})
+        et = await self._get_endpoint_type_or_raise(type_id, lock=True, shared=True)
+        endpoint_data = materialize_defaults(endpoint_data or {}, et.fields or {})
+        endpoint_data = normalize_list_values(endpoint_data, {}, et.fields or {})
         validate_instance_data(endpoint_data, et.fields or {})
         endpoint = Endpoint(device_id=device_id, type_id=type_id, endpoint_data=endpoint_data)
         self._session.add(endpoint)
@@ -208,6 +225,20 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
         endpoint = await self._get_endpoint(endpoint_id)
         if endpoint is None:
             return None
+        previous_type_id = endpoint.type_id
+        types = {
+            key: await self._get_endpoint_type_or_raise(key, lock=True, shared=True)
+            for key in sorted({previous_type_id, type_id or previous_type_id})
+        }
+        result = await self._session.execute(
+            select(Endpoint).where(Endpoint.endpoint_id == endpoint_id)
+            .with_for_update().execution_options(populate_existing=True)
+        )
+        endpoint = result.scalar_one_or_none()
+        if endpoint is None:
+            return None
+        if endpoint.type_id != previous_type_id:
+            raise APIError("Endpoint type changed concurrently; retry the update", 409)
 
         if type_id is not None and type_id != endpoint.type_id:
             # Retyping keeps all existing data: the patch is merged onto the stored endpoint_data
@@ -215,8 +246,15 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
             # Keys the new type defines become its field values; the rest stay visible as Custom
             # Fields (resolve_fields returns them with field=None). `changeable` isn't enforced
             # on retype, as before.
-            new_et = await self._get_endpoint_type_or_raise(type_id)
-            merged_data = patch_data(endpoint.endpoint_data or {}, endpoint_data or {})
+            new_et = types[type_id]
+            # Keep explicit clears out of initialization, including cells on retained rows.
+            patch = endpoint_data or {}
+            merged_data = materialize_defaults(
+                patch_data(endpoint.endpoint_data or {}, patch), new_et.fields or {}
+            )
+            for key, value in patch.items():
+                if value is None:
+                    merged_data.pop(key, None)
             merged_data = normalize_list_values(
                 merged_data, endpoint.endpoint_data or {}, new_et.fields or {}
             )
@@ -227,7 +265,7 @@ class SqlAlchemyEndpointRepository(BlueprintResolver, EndpointRepository):
                 .values(type_id=type_id, endpoint_data=merged_data)
             )
         else:
-            et = await self._get_endpoint_type_or_raise(endpoint.type_id)
+            et = types[endpoint.type_id]
             patch = endpoint_data or {}
             reject_non_changeable_updates(endpoint.endpoint_data or {}, patch, et.fields or {})
             merged_data = patch_data(endpoint.endpoint_data or {}, patch)

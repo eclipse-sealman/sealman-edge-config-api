@@ -8,7 +8,11 @@ from db.models.endpoint import Endpoint
 from db.models.service import Service, ServiceType
 from db.registry import register_repository
 from db.repos.service import UNSET, ServiceRepository, _Unset
-from db.merge import BlueprintResolver, patch_data, patch_fields, validate_instance_data
+from db.merge import (
+    BlueprintResolver, materialize_defaults, newly_defaulted_fields,
+    patch_data, patch_fields, validate_instance_data,
+)
+from db.sqlalchemy.asset_defaults import backfill_asset_defaults, validate_fields
 from db.type_roles import SERVICE_ROLE_TYPES, drop_roles_of_missing_fields, validate_type_mapping
 from exceptions import APIError
 
@@ -21,10 +25,13 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
     def __init__(self, session: AsyncSession):
         self._session = session
 
-    async def _get_service_type_or_raise(self, type_id: str) -> ServiceType:
-        result = await self._session.execute(
-            select(ServiceType).where(ServiceType.type_id == type_id)
-        )
+    async def _get_service_type_or_raise(
+        self, type_id: str, *, lock: bool = False, shared: bool = False
+    ) -> ServiceType:
+        stmt = select(ServiceType).where(ServiceType.type_id == type_id)
+        if lock:
+            stmt = stmt.with_for_update(read=shared).execution_options(populate_existing=True)
+        result = await self._session.execute(stmt)
         service_type = result.scalar_one_or_none()
         if service_type is None:
             raise APIError(f"ServiceType '{type_id}' not found", 404)
@@ -100,7 +107,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         browser_kind: Union[str, None, _Unset] = UNSET,
         mapping: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
-        st = await self._get_service_type_or_raise(type_id)
+        st = await self._get_service_type_or_raise(type_id, lock=True)
         values: Dict[str, Any] = {}
         if label is not None:
             await self._raise_if_label_taken(label, exclude_type_id=type_id)
@@ -109,7 +116,8 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
             values["description"] = description
         if fields is not None or mapping is not None:
             merged_fields = (
-                patch_fields(st.fields or {}, fields) if fields is not None else dict(st.fields or {})
+                patch_fields(st.fields or {}, fields, clear_defaults=True)
+                if fields is not None else dict(st.fields or {})
             )
             # A sent mapping replaces the stored one as a whole. Otherwise the stored roles stay,
             # except those whose field this patch removed.
@@ -120,6 +128,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
             )
             validate_type_mapping(merged_fields, new_mapping, SERVICE_ROLE_TYPES)
             if fields is not None:
+                validate_fields(merged_fields)
                 values["fields"] = merged_fields
             values["mapping"] = new_mapping
         # None clears it back to "no browse action"; UNSET (not sent) leaves it unchanged.
@@ -127,12 +136,20 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
             values["browser_kind"] = browser_kind
         if values:
             try:
+                if fields is not None:
+                    await backfill_asset_defaults(
+                        self._session, Service,
+                        {type_id: newly_defaulted_fields(st.fields or {}, merged_fields)},
+                    )
                 await self._session.execute(
                     update(ServiceType)
                     .where(ServiceType.type_id == type_id)
                     .values(**values)
                 )
                 await self._session.commit()
+            except APIError:
+                await self._session.rollback()
+                raise
             except IntegrityError:
                 await self._session.rollback()
                 raise APIError(f"ServiceType label '{label}' already exists", 409)
@@ -140,7 +157,7 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         return self._serialize_type(st)
 
     async def delete_service_type(self, type_id: str, cascade: bool = False) -> None:
-        await self._get_service_type_or_raise(type_id)
+        await self._get_service_type_or_raise(type_id, lock=True)
         if cascade:
             await self._session.execute(
                 delete(Service).where(Service.type_id == type_id)
@@ -202,8 +219,9 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         type_id: str,
         service_data: Dict[str, Any],
     ) -> Dict[str, Any]:
-        service_type = await self._get_service_type_or_raise(type_id)
-        validate_instance_data(service_data or {}, service_type.fields or {})
+        service_type = await self._get_service_type_or_raise(type_id, lock=True, shared=True)
+        service_data = materialize_defaults(service_data or {}, service_type.fields or {})
+        validate_instance_data(service_data, service_type.fields or {})
         service = Service(
             endpoint_id=endpoint_id, type_id=type_id, service_data=service_data or {}
         )
@@ -220,7 +238,14 @@ class SqlAlchemyServiceRepository(BlueprintResolver, ServiceRepository):
         service = await self._get_service(service_id)
         if service is None:
             return None
-        service_type = await self._get_service_type_or_raise(service.type_id)
+        service_type = await self._get_service_type_or_raise(service.type_id, lock=True, shared=True)
+        result = await self._session.execute(
+            select(Service).where(Service.service_id == service_id)
+            .with_for_update().execution_options(populate_existing=True)
+        )
+        service = result.scalar_one_or_none()
+        if service is None:
+            return None
         merged_data = patch_data(service.service_data or {}, service_data)
         validate_instance_data(merged_data, service_type.fields or {})
         await self._session.execute(

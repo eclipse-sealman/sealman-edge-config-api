@@ -149,21 +149,6 @@ class NatConfig(BaseModel):
             return []
         return self.nat_rules    
 
-class DeviceSecretInformation(BaseModel):
-    deviceTypeHasAuthSecret: bool
-    forceRenewal: bool = False
-    secretValueRenewAfterDays: int = 0
-    error: str | None = None
-    id: int | None = None
-    secretCreatedAt: datetime | None = None
-    secretUpdatedAt: datetime | None = None
-
-
-class DeviceSecretValue(BaseModel):
-    id: int
-    secretValue: str
-
-
 class DefinedVariable(BaseModel):
     name: str
     variableValue: str

@@ -269,9 +269,9 @@ class TestNonIPv4IpValue:
 
 
 class TestDiscoveryUsesStoredValuesOnly:
-    """User decision I1: a type's field default is a scan suggestion only, never the live value."""
+    """Discovery uses persisted identity; explicit clearing still leaves only a suggestion."""
 
-    async def test_endpoint_without_stored_ip_ignores_type_default_ip(self, client, db_session):
+    async def test_endpoint_default_ip_is_persisted_and_clear_removes_identity(self, client, db_session):
         await AbacFixtures(db_session).setup(devices={DEVICE: {}})
         type_id = await _endpoint_type(
             client,
@@ -282,6 +282,14 @@ class TestDiscoveryUsesStoredValuesOnly:
 
         entries = await _overview(client, _scan([_host("10.30.0.10")], [], network="10.30.0.0"))
 
+        configured = next(e for e in entries if e.get("endpoint_id") == endpoint_id)
+        assert configured["status"] == "online"
+        assert configured["ip"] == "10.30.0.10"
+        cleared = await client.patch(
+            f"/endpoints/{endpoint_id}", json={"endpoint_data": {"addr": None}}
+        )
+        assert cleared.status_code == 200, cleared.text
+        entries = await _overview(client, _scan([_host("10.30.0.10")], [], network="10.30.0.0"))
         configured = next(e for e in entries if e.get("endpoint_id") == endpoint_id)
         assert configured["status"] == "unknown"
         assert "ip" not in configured
@@ -301,8 +309,8 @@ class TestDiscoveryUsesStoredValuesOnly:
             {"addr": {**STRING_FIELD, "default": "10.30.0.11"}, "serial": STRING_FIELD},
             {"addr": "ip"},
         )
-        first = await _endpoint(client, type_id, {"serial": "SN-1"})
-        second = await _endpoint(client, type_id, {"serial": "SN-2"})
+        first = await _endpoint(client, type_id, {"serial": "SN-1", "addr": None})
+        second = await _endpoint(client, type_id, {"serial": "SN-2", "addr": None})
 
         entries = await _overview(client, _scan([], [], network="10.30.0.0"))
 
@@ -326,7 +334,7 @@ class TestDiscoveryUsesStoredValuesOnly:
         last_known = (await client.get(f"/{DEVICE}/network/last-known")).json()["endpoints"]
         assert {e["endpoint_id"] for e in last_known} >= {first, second}
 
-    async def test_service_without_stored_port_ignores_type_default_port(self, client, db_session):
+    async def test_service_default_port_is_persisted_and_clear_removes_identity(self, client, db_session):
         await AbacFixtures(db_session).setup(devices={DEVICE: {}})
         endpoint_type = await _endpoint_type(client, {"addr": STRING_FIELD}, {"addr": "ip"})
         service_type = await _service_type(
@@ -339,6 +347,17 @@ class TestDiscoveryUsesStoredValuesOnly:
             client, _scan([_host("10.30.0.30", {4840: "online"})], [4840], network="10.30.0.0")
         )
 
+        ports = _by_ip(entries, "10.30.0.30")["ports"]
+        configured = next(p for p in ports if p.get("service_id") == service_id)
+        assert configured["status"] == "online"
+        assert configured["port"] == 4840
+        cleared = await client.patch(
+            f"/services/{service_id}", json={"service_data": {"p": None}}
+        )
+        assert cleared.status_code == 200, cleared.text
+        entries = await _overview(
+            client, _scan([_host("10.30.0.30", {4840: "online"})], [4840], network="10.30.0.0")
+        )
         ports = _by_ip(entries, "10.30.0.30")["ports"]
         configured = next(p for p in ports if p.get("service_id") == service_id)
         assert configured["status"] == "unknown"

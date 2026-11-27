@@ -241,10 +241,12 @@ class FieldDefinitionUpdate(BaseModel):
 
 
 def dump_field_patch(field: Optional[FieldDefinitionUpdate]) -> Optional[Dict[str, Any]]:
-    """`model_dump(exclude_none=True)`, except that `item_fields` sub-keys sent as null stay None."""
+    """Keep explicit default removal and sub-field deletion in a partial definition."""
     if field is None:
         return None
     dumped = field.model_dump(exclude_none=True)
+    if "default" in field.model_fields_set and field.default is None:
+        dumped["default"] = None
     if field.item_fields is not None:
         dumped["item_fields"] = {
             key: sub.model_dump(exclude_none=True) if sub is not None else None
